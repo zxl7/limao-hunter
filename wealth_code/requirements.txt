@@ -1,0 +1,8 @@
+# Runtime dependencies for the wealth_code pipeline.
+# Keep this file synchronized with the isolated production venv.
+akshare
+pandas
+numpy
+requests
+PyYAML
+pytest

@@ -1,0 +1,7 @@
+{
+  "feishu_webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_WITH_YOUR_HOOK",
+  "feishu_webhook_test": "https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_WITH_YOUR_HOOK",
+  "feishu_webhook_prod": "https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_WITH_YOUR_HOOK",
+  "webhook_default_key": "feishu_webhook",
+  "_comment": "占位模板：真实 webhook 放本地 config/settings.json（已被 .gitignore 屏蔽，不提交）。复制本文件为 settings.json 并填入你的 webhook 即可本地运行。"
+}

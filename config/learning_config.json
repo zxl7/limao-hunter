@@ -1,0 +1,38 @@
+{
+  "schema": "learning_config_v1",
+  "updated": "2026-09-01T09:06:38+08:00",
+  "note": "auto_apply 临时置 True：2026-09-08 用户拍板「允许优化」授权 R1 base_range 下移 0.3 单次回写，跑完即恢复 False（09-08 17:56）",
+  "auto_apply": false,
+  "max_adjust_step": 0.3,
+  "window_days": 5,
+  "rules": {
+    "R1_range_low": {
+      "enabled": true,
+      "hit_rate_threshold": 40,
+      "suggest": "base_range 下移 0.3（预期系统性偏乐观）",
+      "target": "expectation_rules.json.base_range",
+      "step": 0.3
+    },
+    "R2_cand_low": {
+      "enabled": true,
+      "hit_rate_threshold": 40,
+      "suggest": "relay score 门槛上调 2 分",
+      "target": "relay_score_config.json.score_gate",
+      "step": 2
+    },
+    "R3_sentiment_bias": {
+      "enabled": true,
+      "abs_diff_threshold": 1.0,
+      "suggest": "AI 情绪预判存在系统性偏差（见 diff 方向）",
+      "target": "ai_judge",
+      "step": null
+    },
+    "R4_range_high": {
+      "enabled": true,
+      "hit_rate_threshold": 80,
+      "suggest": "max_range_width 收紧 0.3（区间过宽无信息量）",
+      "target": "expectation_rules.json.max_range_width",
+      "step": 0.3
+    }
+  }
+}

@@ -1,0 +1,234 @@
+{
+  "schema": "auction_expectation_rules_v1",
+  "updated": "2026-08-17",
+  "note": "竞价预期双维度规则引擎参数（短线表现 × 板块情况）。所有阈值集中于此，改参数不动代码；引擎读本文件后全任务生效。",
+  "base_range": [
+    -0.3,
+    2.2
+  ],
+  "max_range_width": 2.0,
+  "range_note": "预测区间宽度钳制（2026-08-17 用户定）：敞口 ≤2 个百分点（原 base 0~2.5 + 相位/形态/溢价叠加后达 3.7~4.8 点过宽）。引擎最终以 lo 为锚 hi=min(hi, lo+max_range_width)；同时钳制涨停阈值 hi ≤ 9.9%（主板10cm）/ 19.9%（20cm）。改此值全局生效，不动引擎代码。",
+  "form_classify": {
+    "one_word": {
+      "max_fbt": "0926",
+      "max_hs": 3.0,
+      "use_oneWord_flag": true
+    },
+    "fast_board": {
+      "max_fbt": "0935"
+    },
+    "shrink_vol": {
+      "max_hs": 5.0
+    },
+    "blow_vol": {
+      "min_hs": 15.0
+    },
+    "blow_vol_zbc": {
+      "min_hs": 12.0,
+      "min_zbc": 1
+    },
+    "zbc_king": {
+      "min_zbc": 5
+    }
+  },
+  "form_adjust": {
+    "一字板": {
+      "gap": [
+        0.0,
+        0.0
+      ],
+      "amount_delta": 0.0,
+      "conf_delta": 0.0,
+      "hint": "一字封死·无参与机会(不可交易)",
+      "non_tradeable": true
+    },
+    "缩量板": {
+      "gap": [
+        0.3,
+        0.5
+      ],
+      "amount_delta": -0.005,
+      "conf_delta": 0.08,
+      "hint": "缩量惜售·溢价"
+    },
+    "快速板": {
+      "gap": [
+        0.2,
+        0.3
+      ],
+      "amount_delta": 0.0,
+      "conf_delta": 0.05,
+      "hint": "早盘共识·溢价"
+    },
+    "温和放量": {
+      "gap": [
+        0.0,
+        0.0
+      ],
+      "amount_delta": 0.0,
+      "conf_delta": 0.0,
+      "hint": "健康换手·红开即达标"
+    },
+    "放量板": {
+      "gap": [
+        -0.3,
+        -0.5
+      ],
+      "amount_delta": 0.005,
+      "conf_delta": -0.05,
+      "hint": "放量换手·中性"
+    },
+    "炸板回封": {
+      "gap": [
+        -0.5,
+        -1.0
+      ],
+      "amount_delta": 0.005,
+      "conf_delta": -0.1,
+      "hint": "炸板回封·次日红开即偏强"
+    },
+    "放量烂板": {
+      "gap": [
+        -1.5,
+        -2.0
+      ],
+      "amount_delta": 0.01,
+      "conf_delta": -0.15,
+      "hint": "放量派发·次日红开即超预期·辨真假"
+    },
+    "zbc_king_extra": {
+      "gap": -1.0,
+      "conf_delta": -0.1
+    }
+  },
+  "tier_position": {
+    "dragon": {
+      "hint": "板块龙"
+    },
+    "capacity": {
+      "hint": "容量核心"
+    },
+    "follower": {
+      "hint": "跟风/补涨"
+    }
+  },
+  "sector_sentiment": {
+    "strong": {
+      "hint": "板块强"
+    },
+    "mid": {
+      "hint": "板块中"
+    },
+    "weak": {
+      "hint": "板块弱"
+    },
+    "phase_map": {
+      "boom": "strong",
+      "re-entry-candidate": "strong",
+      "stable": "mid",
+      "cooling": "weak",
+      "": "mid"
+    }
+  },
+  "sector_adjust": {
+    "dragon_strong": {
+      "gap": 0.0,
+      "conf_delta": 0.03
+    },
+    "dragon_mid": {
+      "gap": 0.0,
+      "conf_delta": 0.0
+    },
+    "dragon_weak": {
+      "gap": -0.5,
+      "conf_delta": -0.05
+    },
+    "capacity_strong": {
+      "gap": 0.0,
+      "conf_delta": 0.02
+    },
+    "capacity_mid": {
+      "gap": 0.0,
+      "conf_delta": 0.0
+    },
+    "capacity_weak": {
+      "gap": -0.5,
+      "conf_delta": -0.05
+    },
+    "follower_strong": {
+      "gap": -0.5,
+      "conf_delta": -0.05
+    },
+    "follower_mid": {
+      "gap": -1.0,
+      "conf_delta": -0.08
+    },
+    "follower_weak": {
+      "gap": -1.5,
+      "conf_delta": -0.12
+    }
+  },
+  "leadership_premium": {
+    "note": "大溢价的唯一来源：龙头带领性(is_sector_dragon) + 容量梯队(is_capacity_core/cap_score>=60)。正常票小高开，仅真龙头+容量+加速期(亢奋/修复)才达5%+。",
+    "dragon_capacity": {
+      "gap": [
+        1.0,
+        2.5
+      ],
+      "conf_delta": 0.08,
+      "need_env": true,
+      "hint": "真龙头+容量梯队跟上·加速溢价"
+    },
+    "dragon_only": {
+      "gap": [
+        0.5,
+        1.2
+      ],
+      "conf_delta": 0.03,
+      "need_env": false,
+      "hint": "真龙头·容量未跟上·溢价有限"
+    },
+    "capacity_only": {
+      "gap": [
+        0.3,
+        1.0
+      ],
+      "conf_delta": 0.02,
+      "need_env": false,
+      "hint": "容量核心·非龙一"
+    },
+    "follower": {
+      "gap": [
+        -1.0,
+        -1.5
+      ],
+      "conf_delta": -0.05,
+      "need_env": false,
+      "hint": "跟风/补涨·压缩下沿"
+    },
+    "env_gate": {
+      "亢奋": 1.0,
+      "修复": 0.7,
+      "分歧": 0.3,
+      "冰点": 0.0
+    }
+  },
+  "auction_boom": {
+    "ratio_of_prev_vol": 0.15,
+    "min_yi": 0.2,
+    "hs_ratio_ref": 0.25,
+    "label": "🔺爆量高开",
+    "note": "竞价额≥昨量15%且涨幅≥预期上沿 → 爆量高开（抢筹/资金承接强）；仅涨幅达标 → 高开·量不足"
+  },
+  "gap_labels": {
+    "super": "🔺超预期",
+    "expect": "✅符合预期",
+    "reject": "⬇低于预期",
+    "caution": "⚠️高开过猛·观察"
+  },
+  "output": {
+    "show_form_tag": true,
+    "show_boom_line": true,
+    "show_confidence": true
+  }
+}

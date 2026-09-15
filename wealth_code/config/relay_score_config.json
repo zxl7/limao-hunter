@@ -1,0 +1,95 @@
+{
+  "schema": "relay_score_config_v1",
+  "desc": "明日接力候选权重评分系统 · 可配置参数（2026-08-17 设计·待回测调优）",
+  "version": "0.1.0",
+  "weights": {
+    "leadership": 0.25,
+    "capacity": 0.20,
+    "sector_momentum": 0.15,
+    "ladder_position": 0.20,
+    "capital_flow": 0.20
+  },
+  "env_multiplier": {
+    "risk_on": 1.15,
+    "neutral": 1.0,
+    "risk_off": 0.7
+  },
+  "env_adjust": {
+    "sentiment_high_bonus": 5.0,
+    "sentiment_high_min": 8.0,
+    "sentiment_low_penalty": -10.0,
+    "sentiment_low_max": 3.0
+  },
+  "leadership": {
+    "is_dragon": 40.0,
+    "boards_ge4": 25.0,
+    "boards_eq3": 15.0,
+    "lead_score_cap": 20.0,
+    "follower_penalty": -15.0,
+    "fbt": {
+      "desc": "封板时间因子（2026-08-25 用户「小周期载体·逆环境主动走强」思路接入）：早封=主动走强（反推板块的机械证据之一），尾盘弱封=被动/分歧。分钟=HHMM 数值",
+      "before_0930": 8.0,
+      "before_1000": 12.0,
+      "before_1130": 6.0,
+      "before_1400": 0.0,
+      "after_1400": -8.0
+    }
+  },
+  "capacity": {
+    "cje_yi_ge30": 40.0,
+    "cje_yi_ge15": 30.0,
+    "cje_yi_ge8": 20.0,
+    "cje_yi_ge5": 10.0,
+    "mktcap_lo": 30.0,
+    "mktcap_hi": 200.0,
+    "mktcap_bonus": 25.0,
+    "hs_lo": 8.0,
+    "hs_hi": 25.0,
+    "hs_bonus": 20.0,
+    "hs_shrink_penalty": -10.0,
+    "seal_amt_min": 0.5,
+    "seal_amt_bonus": 15.0
+  },
+  "sector_momentum": {
+    "zt_count_ge5": 40.0,
+    "zt_count_ge3": 25.0,
+    "zt_count_ge2": 10.0,
+    "ladder_grade_A": 30.0,
+    "ladder_grade_B": 15.0,
+    "ladder_grade_C": 5.0,
+    "sector_flow_positive_bonus": 30.0
+  },
+  "ladder_position": {
+    "boards_ge5": 50.0,
+    "boards_eq4": 40.0,
+    "boards_eq3": 30.0,
+    "boards_eq2": 15.0,
+    "boards_eq1": 5.0,
+    "space_dragon_bonus": 30.0,
+    "promote_rate_ge40": 20.0
+  },
+  "capital_flow": {
+    "flow_yi_ge50": 50.0,
+    "flow_yi_ge10": 30.0,
+    "flow_yi_positive": 15.0,
+    "flow_yi_negative": 0.0,
+    "seal_direction_bonus": 20.0
+  },
+  "bands": {
+    "first_choice_min": 80.0,
+    "second_choice_min": 65.0,
+    "watch_min": 50.0
+  },
+  "gates": {
+    "min_turnover_yi": 5.0,
+    "min_boards": 1,
+    "exclude_st": true,
+    "exclude_one_word": true,
+    "exclude_688": true
+  },
+  "data_fields": {
+    "candidate": ["code", "name", "theme", "boards", "zbc", "fbt", "hs", "cje_yi", "zsz_yi", "lt_mktcap", "seal_amt", "cap_score", "is_sector_dragon", "ladder_health", "ladder_grade", "is_capacity_core", "is_one_word", "is_st", "pct", "lead_score"],
+    "sector": ["zt_count", "ladder_health", "flow_yi"],
+    "env": ["regime", "sentiment_score", "nuke_count", "promote_rate"]
+  }
+}

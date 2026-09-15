@@ -1,0 +1,70 @@
+# ============================================================
+# 应用配置索引 app_config.yaml（P1-⑤ 基础层 · 2026-08-17）
+# ------------------------------------------------------------
+# 目的：登记系统全部配置的「键 → 用途 → 当前所在文件」索引，
+#       为后续配置收敛（settings.json + .env + 脚本常量 → 统一 yaml）
+#       提供基线。当前阶段只做索引登记，不做实际迁移。
+# ⛔ 迁移规则：收敛迁移时逐项改消费方（push_card/load_webhook 等），
+#    每迁一项跑 pytest + 真实推测试群验证，禁止批量盲迁。
+# ============================================================
+
+# ---- 飞书 webhook（config/settings.json）----
+feishu:
+  webhook:            # 正式推送群（交易日自动选择）
+    key: "feishu_webhook"
+    file: "config/settings.json"
+  test:               # 测试群（--webhook feishu_webhook_test 显式指定）
+    key: "feishu_webhook_test"
+    file: "config/settings.json"
+  prod:               # 正式群（备用键）
+    key: "feishu_webhook_prod"
+    file: "config/settings.json"
+  intraday:           # 盘中异动盯盘专用机器人（2026-09-03 用户切流）
+    key: "feishu_webhook_intraday"
+    file: "config/settings.json"
+  jiang_kunyang:      # 客户群·蒋坤阳（2026-09-10 建立·镜像广播目标）
+    key: "feishu_webhook_jiang_kunyang"
+    file: "config/settings.json"
+  mirror:             # 客户群镜像广播规则（push_card 消费·enabled=false 一键关）
+    key: "client_mirror"
+    file: "config/settings.json"
+    usage: "异动群(intraday)全量 + 正式群(prod)复盘卡(fupan/review) 镜像到客户群"
+  default_key:        # 自动选择时的默认键
+    key: "webhook_default_key"
+    file: "config/settings.json"
+
+# ---- 敏感令牌（wealth_code/.env，chmod 600）----
+env:
+  biying_token:
+    key: "BIYING_TOKEN"
+    file: "wealth_code/.env"
+    usage: "必盈数据源 token（主池）"
+  wealth_use_biying:
+    key: "WEALTH_USE_BIYING"
+    file: "wealth_code/.env"
+    usage: "启用必盈主池开关=1"
+
+# ---- 调度与守护（launchd plist）----
+launchd:
+  pulse_fetcher:
+    file: "~/Library/LaunchAgents/com.limao.pulse-fetcher.plist"
+    usage: "盘中 30s 抓取循环守护（唯一在装守护；intraday-pulse.plist 已停用不登记）"
+
+# ---- 关键脚本常量阈值（迁移候选）----
+thresholds:
+  min_turnover_yi:
+    value: 5
+    file: "wealth_code/core/quant_score.py"
+    usage: "成交额下限（亿），MIN_TURNOVER_YI"
+  dedup_window_min:
+    value: 10
+    file: "scripts/push_card.py"
+    usage: "同内容推送去重窗口（分钟）"
+  sentinel_timeout_min:
+    value: 45
+    file: "scripts/schedule_sentinel.py"
+    usage: "调度哨兵超期判定（分钟）"
+  backup_keep_days:
+    value: 30
+    file: "scripts/backup_snapshot.py"
+    usage: "盘后快照保留天数"

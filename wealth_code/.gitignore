@@ -1,0 +1,5 @@
+# 本地密钥（必盈 token），绝不提交
+.env
+
+# 临时卡片 JSON（推送落盘，非源码）
+cache/card_*.json

@@ -1,0 +1,49 @@
+# ============================================================
+# 狸猫猎手 · .gitignore
+# 原则：任何密钥 / 实时缓存 / 智能体运行时 都不入库
+# ============================================================
+
+# ===== 密钥 / Token（绝不提交） =====
+# 必盈 API token：仅通过环境变量 BIYING_TOKEN 提供，代码内零硬编码
+# 飞书 webhook：真实配置放本地 config/settings.json（不提交），仓库用 settings.example.json 占位
+.env
+*.env
+*.local
+config/settings.json
+
+# ===== 运行缓存（实时数据，非源码） =====
+cache/
+
+# ===== 财富密码·数据沉淀（每日自动生成的派生数据，非源码，勿提交） =====
+# theme_roll_5d.json / performance.md / performance.html / zt_history/*.json
+# 由 automation 每日重写；源码脚本在 wealth_code/pipelines/（已提交）
+wealth_code/data/
+
+# ===== 智能体运行时（含本地记忆，非源码；MEMORY.md 内也有 webhook，勿提交） =====
+.workbuddy/
+
+# ===== Python =====
+__pycache__/
+*.pyc
+*.pyo
+.Python
+
+# ===== 生成物：看板 HTML（由 HTML/gen_dashboard.py / gen_watch.py 每 30s 重写，非源码）=====
+# 需要时随时可再生成；入库只会造成无止境的 diff 噪声。
+HTML/dashboard.html
+HTML/watch.html
+
+# ===== 财富密码·按日派生文件（卡面 / 竞价快照 / 候选池，每日新增，避免仓库膨胀）=====
+# ⚠️ 账本类 jsonl 仍入库（account_nav_history / ai_nav_history / ai_decisions）
+#    —— 那是唯一真实战绩源，属于「必须以 git 兜底防误删」的资产。
+wealth_code/cache/card*
+wealth_code/cache/candidates*
+wealth_code/cache/auction_quotes*
+wealth_code/cache/panqian_card*
+wealth_code/cache/ambush_card*
+
+# ===== 系统杂项 =====
+.DS_Store
+*.log
+.pytest_tmp/
+.pytest_cache/

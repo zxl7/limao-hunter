@@ -1,0 +1,200 @@
+# ============================================================
+# 任务注册表 tasks.yaml · 中央调度配置（2026-08-17 建立）
+# ------------------------------------------------------------
+# 用途：统一登记全部定时任务的「任务名 → 骨架/类型 → rrule → 写回」映射。
+#       新任务只在此文件加一行，再人工建 automation 时保持 id 一致。
+#       校验：python3 scripts/validate_tasks.py（对照 automation DB 检查一致性）。
+# ⛔ 只改此文件 + automation 两处；禁止再逐任务零散改 prompt。
+# ⚠️ 2026-09-03：validate_tasks 只对 ACTIVE 任务比对 rrule（PAUSED=暂挂不触发，
+#    本地库与平台快照的漂移无运行意义，仅留档不比对）。
+# ============================================================
+
+# 骨架引用规则：
+#   骨架A/B/B.5/C = shared_rules.md 对应骨架（任务 prompt 极简引用）
+#   pipeline      = 财富密码 pipeline（eod/verify 脚本链）
+#   机构投研      = 财神-机构调研（Gangtise·早盘/午间研报卡）
+#   复盘系        = 盘后复盘派生小卡（龙虎榜速览·挂财神-复盘）
+#   脚本          = 纯脚本任务（无 AI 拼卡）
+
+tasks:
+  # ---------- 盘前 ----------
+  - name: "【盘前】盘前预测"
+    id: "automation-1785767165508"
+    kind: "骨架A"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=6;BYMINUTE=6"
+    webhook: "auto"
+    writeback: null
+
+  # ---------- 早盘竞价 ----------
+  - name: "【财富密码】财富密码·竞价验证卡"
+    id: "automation-1786429073209"
+    kind: "pipeline"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=20"
+    webhook: "auto"
+    writeback: null
+    # 2026-09-02 台账校准：DB 为 9:20（AI 旁白生成 + verify --fetch 数据准备·launchd 09:25 精确推）
+
+  # 2026-09-02 校准：该任务已在 automation DB 中删除（deleted_at 非空），仅留档不校验。
+  - name: "盘中调度哨兵"
+    id: "automation-1786948562261"
+    kind: "脚本"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10,11,13,14;BYMINUTE=25,55"
+    webhook: "auto"
+    writeback: null
+    retired: true
+
+  # ---------- 盘中猎手 ×11（骨架B）----------
+  - name: "【盘中】盘中猎手-0925"
+    id: "automation-1785767201967"
+    kind: "骨架B"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=25"
+    webhook: "auto"
+    writeback: "盘中猎手-0925"
+  - name: "【盘中】盘中猎手-0930"
+    id: "automation-1785767247210"
+    kind: "骨架B"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=30"
+    webhook: "auto"
+    writeback: "盘中猎手-0930"
+  - name: "【盘中】盘中猎手-0935"
+    id: "automation-1785767269889"
+    kind: "骨架B"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=35"
+    webhook: "auto"
+    writeback: "盘中猎手-0935"
+  - name: "【盘中】盘中猎手-0940"
+    id: "automation-1785767293798"
+    kind: "骨架B"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=40"
+    webhook: "auto"
+    writeback: "盘中猎手-0940"
+  - name: "【盘中】盘中猎手-0945"
+    id: "automation-1785767316822"
+    kind: "骨架B"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=45"
+    webhook: "auto"
+    writeback: "盘中猎手-0945"
+  - name: "【盘中】盘中猎手-1030"
+    id: "automation-1785767374935"
+    kind: "骨架B"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=10;BYMINUTE=30"
+    webhook: "auto"
+    writeback: "盘中猎手-1030"
+  - name: "【盘中】盘中猎手-1120"
+    id: "automation-1785767396487"
+    kind: "骨架B"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=11;BYMINUTE=20"
+    webhook: "auto"
+    writeback: "盘中猎手-1120"
+  - name: "【盘中】盘中猎手-1300"
+    id: "automation-1785767419563"
+    kind: "骨架B"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=13;BYMINUTE=0"
+    webhook: "auto"
+    writeback: "盘中猎手-1300"
+  - name: "【盘中】盘中猎手-1330"
+    id: "automation-1785767449762"
+    kind: "骨架B"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=13;BYMINUTE=30"
+    webhook: "auto"
+    writeback: "盘中猎手-1330"
+  - name: "【盘中】盘中猎手-1400"
+    id: "automation-1785767450186"
+    kind: "骨架B"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=14;BYMINUTE=0"
+    webhook: "auto"
+    writeback: "盘中猎手-1400"
+  - name: "【盘中】盘中猎手-1430"
+    id: "automation-1785767450595"
+    kind: "骨架B"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=14;BYMINUTE=30"
+    webhook: "auto"
+    writeback: "盘中猎手-1430"
+    # 2026-09-03 停用(PAUSED)：与尾盘潜伏卡 14:30 AI研判撞车（同刻+主题都偏尾盘/次日预判），
+    # 次日预判职责由尾盘潜伏卡接管；14:00 猎手=尾盘收口卡。恢复需用户拍板。
+
+  # ---------- 盘中快照 ×3（骨架B.5）----------
+  - name: "【盘中】盘中快照-1000"
+    id: "automation-1786674820933"
+    kind: "骨架B.5"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=10;BYMINUTE=0"
+    webhook: "auto"
+    writeback: "盘中快照-1000"
+  - name: "【盘中】盘中快照-1100"
+    id: "automation-1786674820934"
+    kind: "骨架B.5"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=11;BYMINUTE=0"
+    webhook: "auto"
+    writeback: "盘中快照-1100"
+  - name: "【盘中】盘中快照-1445"
+    id: "automation-1786674820935"
+    kind: "骨架B.5"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=14;BYMINUTE=45"
+    webhook: "auto"
+    writeback: "盘中快照-1445"
+    # PAUSED（2026-08-25 DB 校准）：尾盘横向全景已由猎手14:00 + 尾盘潜伏14:30 覆盖
+
+  # ---------- 盘后选股（pipeline）----------
+  - name: "【财富密码】财富密码·接力卡"
+    id: "automation-1786429073866"
+    kind: "pipeline"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=15;BYMINUTE=30"
+    webhook: "auto"
+    writeback: null
+  - name: "【财富密码】财富密码·尾盘潜伏卡（14:30 AI研判）"
+    id: "automation-1787803870793"
+    kind: "pipeline"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=14;BYMINUTE=30"
+    webhook: "auto"
+    writeback: null
+    # 2026-08-28 14:50→14:30 + AI研判层（双层：机械数据层 + AI 研判注入·build_ambush_card）
+
+  # ---------- 盘后长卡/复盘系 ----------
+  - name: "【盘后】盘后复盘"
+    id: "automation-1785767491575"
+    kind: "骨架C"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=17;BYMINUTE=18"
+    webhook: "auto"
+    writeback: null
+    # 2026-09-03 精简：9 模块版（🏦龙虎榜已拆独立速览卡）·title 带定调段
+  - name: "【盘后】龙虎榜速览卡"
+    id: "1145135d-7ef4-4100-bc95-977462d615cd"
+    kind: "复盘系"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=17;BYMINUTE=40"
+    webhook: "auto"
+    writeback: null
+    # 2026-09-03 R3 方向A 新建：复盘 17:18 摘掉 🏦 龙虎榜（18:00+ 才披露·原"待披露+补推整版"=双卡冗余），
+    # 独立速览小卡承担（机构 Top5+游资 Top5+资金性质结论）·挂财神-复盘技能
+    # ⚠️ 2026-09-09 用户自改 DB=17:40（yaml 已随 DB 对齐·用户明确"自己改的不用管"）
+
+  # ---------- 回测自学习（2026-09-01 · 财神-回测）----------
+  - name: "【系统迭代】推测回测-每日"
+    id: "27c81420-9c05-4f39-9edb-9fbc58c16f0a"
+    kind: "脚本"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=17;BYMINUTE=50"
+    webhook: "auto"
+    writeback: null
+  - name: "【系统迭代】推测回测-周五优化方案"
+    id: "34f8de42-70df-449d-98de-ad35236abb91"
+    kind: "脚本"
+    rrule: "FREQ=WEEKLY;BYDAY=FR;BYHOUR=17;BYMINUTE=40"
+    webhook: "auto"
+    writeback: null
+    # ⚠️ DB 为 FR 17:40，早于「推测回测-每日 17:50」→ 周五先出优化方案后出当日回测，次序待用户拍板
+
+  # ---------- 机构投研（财神-机构调研 · Gangtise MCP）----------
+  - name: "【机构调研】机构研报·早盘卡"
+    id: "36303687-5795-4204-a1b7-96b74282f387"
+    kind: "机构投研"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=7;BYMINUTE=50"
+    webhook: "auto"
+    writeback: null
+    # Gangtise 早报 hot_topic(morning) → 8-10 主线块 v5 版式（机构为主体·盘面印证一行）
+    # ⚠️ 2026-09-09 用户自改 DB=07:50（yaml 已随 DB 对齐·用户明确"自己改的不用管"）
+  - name: "【机构调研】机构晚报速览卡"
+    id: "ed5fd591-9d28-4a6f-a7af-3b6c519c21a4"
+    kind: "机构投研"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=21;BYMINUTE=0"
+    webhook: "auto"
+    writeback: null
+    # 2026-09-03 用户「建机构晚报 21:00·现在推一篇到正式群」：Gangtise 晚报 evening → 6-8 主线块 v5 版式（validFrom 09-04·产物 cache/gangtise_evening_research.json）
