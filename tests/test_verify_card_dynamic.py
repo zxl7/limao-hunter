@@ -87,3 +87,22 @@ def test_ai_view_line_no_ai_view_returns_empty():
     """无 AI 观点 → 空串（不占位·原行为不变）。"""
     it = _mk("000005", 1.0, [0.0, 2.0])
     assert _ai_view_line(it, {}) == ""
+
+
+def test_ai_reason_deduped_when_narrative_present():
+    """⛔ 理由去重（2026-09-17 用户「风险提示了两遍」）。
+
+    有**点评**（narrative·4 段含 ⚠️风险）时，不再渲染 AI 理由正文——否则同票出现两条风险
+    （实测：narrative 与 reason 各带一段 ⚠️风险，成对出现在相邻 block）；无点评时以理由兜底。
+    """
+    it = _mk("000006", 2.0, [1.0, 3.0])
+    it["narrative"] = "今日走势：…\n⚠️风险：点评里的风险段"
+    av = {"000006": {"view": "watch", "reason": "依据：…\n⚠️风险：AI理由里的风险段"}}
+    line = _ai_view_line(it, av)
+    assert "🤖 AI 判断：观察" in line
+    assert "点评里的风险段" not in line          # 理由正文整体不渲染
+    assert "AI理由里的风险段" not in line
+    # 无 narrative → 理由兜底（信息不丢）
+    it2 = {k: v for k, v in it.items() if k != "narrative"}
+    line2 = _ai_view_line(it2, av)
+    assert "AI理由里的风险段" in line2

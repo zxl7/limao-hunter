@@ -1153,7 +1153,13 @@ def _ai_dyn_verdict(it: dict) -> tuple[str, str] | None:
 
 
 def _ai_view_line(it: dict, ai_view: dict) -> str:
-    """AI 判断行（参与/放弃/观察 + 理由）+ 今日竞价动态结论。无 AI 观点 → ""（不占位）。"""
+    """AI 判断行（参与/放弃/观察）+ 今日竞价动态结论 + 理由（去重）。无 AI 观点 → ""（不占位）。
+
+    ⛔ **理由去重（2026-09-17 用户「风险提示了两遍」）**：该票若已有**点评**
+    （`record.narrative`·4 段含 `⚠️风险`），则**不再渲染 AI 理由正文**——reason（依据+⚠️风险）
+    与点评内容高度重叠，两套同时上卡 = 同一票出现两条 `⚠️风险`（实测成对出现在相邻 block）。
+    仅在**无点评**时以 reason 兜底（保信息不丢）。
+    """
     code = str(it.get("code") or "")
     v = (ai_view or {}).get(code)
     if not v:
@@ -1166,7 +1172,7 @@ def _ai_view_line(it: dict, ai_view: dict) -> str:
     _dyn = _ai_dyn_verdict(it)      # 今日竞价实况动态结论（2026-09-17·盘后静态判断 → 今日动态）
     if _dyn:
         txt += f" <text_tag color='{_dyn[1]}'>{_dyn[0]}</text_tag>"
-    if reason:
+    if reason and not it.get("narrative"):
         # 理由语义分段（2026-09-11）：依据一行、⚠️风险独立末行（不再一整段连写）
         txt += "\n" + _narr_render(reason)
     return txt
