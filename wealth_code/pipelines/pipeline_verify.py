@@ -114,8 +114,11 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
             caliber = "ai"
             _gap = signal.get("gap_pct")
             _gap = float(_gap) if isinstance(_gap, (int, float)) else None
+            # 方案 A（2026-09-17）：把候选的**盘后预期区间**一并传入 → 账本执行
+            # 「参与 ∧ ≤5% ∧ 落预期区间」三步裁决，与卡面动态结论同源（gap_zone）。
             can_enter, _ai_note, ai_meta = ai_caliber.decide(
-                ai_decisions.get(str(cand.get("code") or "").strip()), _gap)
+                ai_decisions.get(str(cand.get("code") or "").strip()), _gap,
+                expected_range=(cand.get("expectation") or {}).get("expected_range"))
             ai_meta["caliber"] = caliber
             ai_meta["ai_note"] = _ai_note
             ai_meta["caliber_changed"] = bool(can_enter != mech_can_enter)
@@ -182,6 +185,8 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
                 "ai_gap_limit": ai_meta.get("ai_gap_limit"),
                 # AI 自定上限（仅留痕）：2026-09-14 起**不参与裁决**，生效值恒为用户 5% 硬线
                 "ai_declared_limit": ai_meta.get("ai_declared_limit"),
+                # 预期区间门判定（2026-09-17「A 计划」）：below/ok/above/unknown（留痕·供审计）
+                "zone": ai_meta.get("zone"),
                 "ai_note": ai_meta.get("ai_note"),
                 "caliber_changed": ai_meta.get("caliber_changed"),
                 "note": signal.get("note"),

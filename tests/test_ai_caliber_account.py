@@ -148,17 +148,37 @@ def test_record_ai_gives_up_on_high_open():
 
 
 def test_record_ai_kk993_no_longer_gives_up_at_454():
-    """⛔ 09-14 事故回归点：闽东电力竞价 +4.54% + AI 自定 2% → **必须成交**。
+    """⛔ 09-14 事故回归点：AI 自定 2% **不得**否决 ≤5% 的竞价（AI 自定上限仅留痕）。
 
-    旧实现按 AI 自定 2% 判 skipped，当日该票涨停 +10.01%（14.51 → 15.27）。
+    09-14 旧实现按 AI 自定 2% 判 skipped，当日该票涨停 +10.01%（14.51 → 15.27）。
+    ⚠️ 2026-09-17「A 计划」后成交还须**竞价落在预期区间内**——故此处区间取 [1.0, 5.0]
+    （4.54% 属可接受高开）；超预期拦截见 test_record_ai_zone_above_blocks_super_gap。
     """
-    rec = pv._build_record(_cand("000993"), _q(13.88, 4.54), 15.27, date10="2026-09-11",
+    rec = pv._build_record(_cand("000993", exp=(1.0, 5.0)), _q(13.88, 4.54), 15.27,
+                           date10="2026-09-11",
                            ai_decisions={"000993": _dec("participate", 2.0)})
     oc = rec["performance"]["open_check"]
     assert oc["can_enter"] is True and oc["caliber"] == "ai"
     assert oc["ai_gap_limit"] == 5.0 and oc["ai_declared_limit"] == 2.0
+    assert oc["zone"] == "ok"                                     # 方案 A：落预期区间 → 成交
     assert rec["performance"]["next_day"]["status"] == "covered"
     assert rec["performance"]["next_day"]["return_pct"] == 5.24   # (15.27/14.51-1)*100
+
+
+def test_record_ai_zone_above_blocks_super_gap():
+    """方案 A（2026-09-17 用户「A 计划」）：竞价**高于预期区间**（高开太多）→ 不买。
+
+    与卡面「🤖 AI 判断：观察 → 高开超预期·高开太多 → 继续观察」同源（`gap_zone`）。
+    实证 09-17 西陇科学(002584) 预期[1.4,3.4] 竞价+7.33% → 当日收 -0.31%（高开低走）。
+    """
+    rec = pv._build_record(_cand("000993", exp=(1.0, 3.0)), _q(13.88, 4.54), 15.27,
+                           date10="2026-09-11",
+                           ai_decisions={"000993": _dec("participate", 2.0)})
+    oc = rec["performance"]["open_check"]
+    assert oc["can_enter"] is False                     # 超预期 → 不买（观察）
+    assert oc["zone"] == "above"
+    assert "高于预期区间" in oc["ai_note"]
+    assert rec["performance"]["next_day"]["status"] == "skipped"
 
 
 def test_record_ai_vetoes_mechanical_buy():
@@ -172,14 +192,30 @@ def test_record_ai_vetoes_mechanical_buy():
     assert rec["performance"]["next_day"]["status"] == "skipped"
 
 
-def test_record_ai_upgrades_mechanical_reject():
-    """AI 判参与且竞价在上限内 → 机械判未达标也成交（口径以 AI 为准）。"""
+def test_record_ai_zone_below_gives_up():
+    """方案 A（2026-09-17）：竞价**低于预期区间**（不及预期）→ 放弃 —— 与机械口径同向（不再覆盖）。
+
+    与卡面「🤖 AI 判断：观察 → 今日竞价X%·不及预期 → 放弃」同源（`gap_zone`）。
+    """
     rec = pv._build_record(_cand("600410", exp=(4.0, 6.0)), _q(10.0, 1.8), 10.5,
                            date10="2026-09-11",
                            ai_decisions={"600410": _dec("participate", 3.0)})
     oc = rec["performance"]["open_check"]
     assert oc["mech_can_enter"] is False                 # 机械：低于预期下沿 → 不达标
-    assert oc["can_enter"] is True and oc["caliber_changed"] is True
+    assert oc["can_enter"] is False                      # AI 也放弃（区间门·口径一致）
+    assert oc["zone"] == "below"
+    assert "低于预期区间" in oc["ai_note"]
+    assert rec["performance"]["next_day"]["status"] == "skipped"
+
+
+def test_record_ai_zone_ok_lets_ai_buy():
+    """方案 A：AI 判参与 ∧ 竞价落预期区间 ∧ ≤5% → 成交（AI 唯一口径仍成立）。"""
+    rec = pv._build_record(_cand("600410", exp=(0.5, 3.0)), _q(10.0, 1.8), 10.5,
+                           date10="2026-09-11",
+                           ai_decisions={"600410": _dec("participate", 3.0)})
+    oc = rec["performance"]["open_check"]
+    assert oc["zone"] == "ok"
+    assert oc["can_enter"] is True
     assert rec["performance"]["next_day"]["status"] == "covered"
 
 

@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-import argparse, json, os, random, sys, time, urllib.parse, urllib.request
+import argparse, json, os, random, re, sys, time, urllib.parse, urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -535,16 +535,26 @@ def fetch_market(raw):
 
 
 def parse_pool(raw, key):
-    """跌停池/炸板池：返回数量与全量名单"""
+    """跌停池/炸板池：返回数量与全量名单。
+
+    ⛔ **科创板 688/689 一律剔除**（2026-09-17 修）：用户无科创板交易权限，属**铁律**。
+    此前只过滤了 ST，漏了 688 —— 实证 2026-09-17 炸板池含「近岸蛋白(688137)」，
+    被盘中实时页的「极值名单」渲染出来（前端只拿到名字、没有代码，**无法自行过滤**）。
+    → 与 `parse_em_rising` / `parse_stocks` 的 688 过滤**同规格**，在源头统一剔除。
+    ⚠️ `count` 一并改为**剔除后**的名单长度，避免「数量含 688、名单不含」的自相矛盾。
+    """
     p = raw.get(key, {})
     items = (p or {}).get("data") or []
     if not isinstance(items, list): return {"count": 0, "names": []}
     names = []
     for it in items:
         if isinstance(it, dict):
+            sym = str(it.get("symbol") or it.get("code") or "")
+            if sym[:3] in ("688", "689"):
+                continue                      # ⛔ 科创板无权限（铁律）
             nm = it.get("stock_chi_name") or it.get("name") or ""
             if nm: names.append(nm)
-    return {"count": len(items), "names": names}
+    return {"count": len(names), "names": names}
 
 # ── 关注板块重挫归因（方案A：跌停/炸板池 → 关注板块命中）──
 # 基于用户关注方向（通信设备/半导体/航天军工/锂电池/CPO光模块，见 USER.md）
@@ -1105,46 +1115,151 @@ def detect_new_events(stocks, plates):
                               -len(x[1]))))
 
 # ── Dragon Diagnosis ──────────────────────────────────
+#
+# ⛔⛔ 2026-09-17 用户拍板：「**龙头基本不会出现日内切换** —— 龙头讲究的是连续性、领涨性和带领性。
+#      一般确定了之后，哪怕是前赴后继变强而已，也不会改变龙头的核心。」
+#      → 换人的**唯一条件 = 原龙头退位**（不再封板 = 炸板 / 跌停 / 断板）。
+#
+# 病根（实证 2026-09-17）：原实现是 `max(up, key=(主板, len(boards), hot, pct))` ——
+#   ① 每轮从「当轮上涨的票」里重选 → 拿到的是**排名**，不是**身份**；
+#   ② 末档排序键是**当轮涨幅** → 谁这会儿涨得多谁是龙头；
+#   ③ `len(boards)` 拿「板数字符串长度」当连板高度 —— 实测 `'4天2板'` 与 `'8天5板'` 长度同为 4
+#      → **完全并列** → 直接落到 `pct` 决胜负。
+# 后果：一天之内同一个题材"换"好几次龙头，且是**循环**（09-17 PCB板 6 次切换只有 3 个名字：
+#      中材科技→中岩大地→中材科技→澳弘电子→中材科技→中岩大地→澳弘电子）。
+#      这些抖动经 `memory_lib.detect_events` 变成 `龙头切换` 事件，占全天事件 **51.4%**。
 
-def diagnose_dragon(sector_stocks, total_zt):
-    """Diagnose sector dragon head with corrected leadership scoring"""
+# 龙头锁定开关：⛔ 关掉 = 回到「逐轮重选」的旧行为（可逆，便于对照与回退）
+ENABLE_DRAGON_LOCK = True
+# 缺失封板时刻时的排序兜底（排最后，⛔ 不让缺失数据胜出）
+_ENTER_TS_MISSING = 1 << 62
+_BOARD_RE = re.compile(r"(\d+)\s*板")
+
+def parse_board_num(boards) -> int:
+    """`m_days_n_boards`（形如 `'4天2板'` / `'2板'` / `'18天9板'`）→ **连板数**（整数）。
+
+    ⛔ 绝对不要用 `len(boards)` 当高度：`'4天2板'`(4) 与 `'8天5板'`(4) 长度相同、
+    而 `'18天9板'`(5) 只是**碰巧**更长。长度不是高度。
+    取**最后一个** `N板` 匹配（`4天2板` → 2）；无 `N板` 形态时退回第一个数字；再没有 → 0。
+    """
+    s = str(boards or "")
+    hits = _BOARD_RE.findall(s)
+    if hits:
+        try:
+            return int(hits[-1])
+        except ValueError:
+            return 0
+    m = re.search(r"\d+", s)
+    return int(m.group()) if m else 0
+
+def _leader_key(s: dict):
+    """龙头候选排序键 = **连续性 ↓ → 领涨性 ↑ → 代码（确定性兜底）**。
+
+    · **连续性**：连板数（`parse_board_num`，⛔ 不是字符串长度）
+    · **领涨性**：首封时刻（`enter_ts`）越早越像带队 —— 与 `wealth_code/core/leader.py`
+      的 `score_leadership(fbt, theme_first_fbt)` 同一口径（那边是「落后越多人越不像带队」）
+    · ⛔ **刻意不含 `pct`**：当轮涨幅进判据 = 龙头每轮抖动（就是上面那条病根）
+    · ⛔ **刻意不含「主板优先」**：用户 2026-08-13 已撤销主板倾斜（主板/创业板对称参与，
+      无板块属性加分/减分），故不再让主板票无条件压过先封板的创业板票
+    · 末档用 `code` 而非名单顺序 → **纯确定性**，同一份数据必得同一结论
+    """
+    return (
+        -parse_board_num(s.get("boards", "")),
+        s.get("enter_ts") or _ENTER_TS_MISSING,
+        str(s.get("code", "")),
+    )
+
+def update_lock(prev_lock: dict | None, candidate: dict, now_hm: str) -> dict:
+    """按锁定规则更新锁条目（**纯函数**，便于单测）。
+
+    · 同一只票 → 保留**首次确立**时刻（`at` 不变 = 身份延续）
+    · 换了票（= 原龙头退位后才可能发生）→ `at` 重置为当前时刻（新身份开始计时）
+    """
+    code = str((candidate or {}).get("code") or "")
+    if not code:
+        return dict(prev_lock or {})
+    keep_same = bool(prev_lock) and str((prev_lock or {}).get("code")) == code
+    return {
+        "code": code,
+        "name": (candidate or {}).get("name", ""),
+        "board": parse_board_num((candidate or {}).get("boards", "")),
+        "at": ((prev_lock or {}).get("at") or now_hm) if keep_same else now_hm,
+    }
+
+def _dragon_lock_path(day: str | None = None) -> Path:
+    """龙头锁的**按日**状态文件（⛔ 文件名带日期 → 次日自动重新确立，不用手动清）"""
+    d = day or datetime.now(BJ_TZ).strftime("%Y-%m-%d")
+    return CACHE_DIR / f"dragon_locks_{d}.json"
+
+def load_dragon_locks(day: str | None = None) -> dict:
+    """读当日龙头锁（`{题材名: {code, name, board, at}}`）。⛔ 任何异常 → 空 dict，绝不中断主流程"""
+    try:
+        d = _load_json(_dragon_lock_path(day)) or {}
+        locks = d.get("locks") if isinstance(d, dict) else None
+        return locks if isinstance(locks, dict) else {}
+    except Exception:
+        return {}
+
+def save_dragon_locks(locks: dict, day: str | None = None) -> bool:
+    """写当日龙头锁（原子写）。⛔ 失败只告警，不影响快照与推送"""
+    try:
+        p = _dragon_lock_path(day)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        ok = _save_json(p, {"day": p.stem.replace("dragon_locks_", ""), "locks": locks or {}})
+        if not ok:
+            p.write_text(json.dumps({"locks": locks or {}}, ensure_ascii=False), encoding="utf-8")
+        return True
+    except Exception as e:
+        print(f"  ⚠️ 龙头锁写盘失败（不影响主流程）: {e}")
+        return False
+
+def diagnose_dragon(sector_stocks, total_zt, locked: dict | None = None):
+    """板块龙头诊断。
+
+    @param locked 当日**已锁定**的龙头 `{code, name}`（来自 `load_dragon_locks`）。
+        ⛔ 只要它**本轮仍在封板名单里**（`up`），就**保持身份** —— 即使另有票连板更高、
+        涨幅更大，那只是「前赴后继变强」，不是换龙头。**只有它不再封板（退位）才允许换人。**
+    """
     up = [s for s in sector_stocks if s["up"]]
     if not up: return None
 
-    # Pick candidate: 主板优先(用户2026-08-04) > 板数 > hot > pct；20cm 不再自动胜出
-    def _is_main(s):
-        c = s.get("code", "")
-        return (c[:1] in ("6", "0")) and not c.startswith(("688", "300", "301"))
-    candidate = max(up, key=lambda s: (
-        _is_main(s), len(s.get("boards", "")), bool(s.get("hot_plates")), s["pct"]
-    ))
+    candidate = min(up, key=_leader_key)
+
+    # ── 龙头锁定：原龙头仍封板 → 保持身份（只允许加固，不允许易主）──
+    lock_held = False
+    if ENABLE_DRAGON_LOCK and locked and locked.get("code"):
+        still = next((s for s in up if str(s.get("code")) == str(locked["code"])), None)
+        if still is not None:
+            candidate = still
+            lock_held = True
 
     # Leadership: zt_count in sector / total market zt (max 10)
     leadership = min(10, round(len(up) / max(1, total_zt) * 25, 1))
 
-    # Breakthrough: boards + 20cm bonus
+    # Breakthrough: 连板数 + 20cm bonus
+    # ⛔ 原实现读的是 `'N天M板'` 里的 **N（天数）** 当高度 → 任何 ≥5 天的票都直接顶到 10 分。
+    #    改用**连板数 M**（`parse_board_num`），与注释「Breakthrough: boards」一致。
     bt = 5.0
-    b = candidate.get("boards","")
-    if "天" in b:
-        try:
-            d = int(b.split("天")[0])
-            bt = {1:5.5, 2:6.5, 3:7.5, 4:9.0}.get(d, min(10, 5+d*1.2))
-        except: pass
+    nb = parse_board_num(candidate.get("boards", ""))
+    if nb > 0:
+        bt = {1: 5.5, 2: 6.5, 3: 7.5, 4: 9.0}.get(nb, min(10, 5 + nb * 1.2))
     if candidate["pct"] >= 19: bt += 1.5
     bt = min(10, bt)
 
     # Uniqueness: only top board, only 20cm, only hot in sector
+    # ⛔ 同样把 `len(boards)` 换成连板数，否则「唯一最高板」判定跟着字符串长度走
     un = 5.0
-    cb = len(b) if b else 0
-    mxb = max(len(s.get("boards","")) for s in up)
-    if cb == mxb and sum(1 for s in up if len(s.get("boards","")) == mxb) == 1: un += 2.5
-    if candidate["pct"] >= 19 and sum(1 for s in up if s["pct"]>=19) == 1: un += 2.5
+    cb = parse_board_num(candidate.get("boards", ""))
+    mxb = max(parse_board_num(s.get("boards", "")) for s in up)
+    if mxb > 0 and cb == mxb and sum(1 for s in up if parse_board_num(s.get("boards", "")) == mxb) == 1:
+        un += 2.5
+    if candidate["pct"] >= 19 and sum(1 for s in up if s["pct"] >= 19) == 1: un += 2.5
     if candidate.get("hot_plates") and sum(1 for s in up if s.get("hot_plates")) == 1: un += 1.5
     un = min(10, un)
 
     score = round((leadership + bt + un) / 3, 1)
     return {"candidate": candidate, "leadership": leadership, "breakthrough": round(bt,1),
-            "uniqueness": round(un,1), "score": score}
+            "uniqueness": round(un,1), "score": score, "lock_held": lock_held}
 
 # ── Seal Quality ──────────────────────────────────────
 
@@ -1915,12 +2030,23 @@ def run_mode(mode, dry_run=False, json_only=False):
     print(f"  异动{len(stocks)}只 | 涨停{total_zt}只 | 板块{len(sectors)}个 | 快讯{len(newsflash)}条")
     print(f"  {idx_txt} | 跌停{ld_pool['count']} | 炸板{broken_pool['count']} | 天梯{len(ladder)}层")
 
-    # Diagnose
+    # Diagnose（含**当日龙头锁定**：确立后只允许加固，⛔ 换人只发生在原龙头退位时）
+    # ⚠️ 锁按日隔离（文件名带日期）；读/写失败一律降级为空锁 / 只告警，**不中断快照与推送**。
+    locks = load_dragon_locks() if ENABLE_DRAGON_LOCK else {}
+    now_hm = now().strftime("%H:%M")
     diagnoses = {}
     for pid, sec in sectors.items():
-        d = diagnose_dragon(sec["stocks"], total_market_zt)
-        if d:
-            diagnoses[pid] = d
+        sname = sec.get("name", "")
+        prev_lock = locks.get(sname)
+        d = diagnose_dragon(sec["stocks"], total_market_zt, locked=prev_lock)
+        if not d:
+            continue                # 该板块本轮无封板票 → 保留原锁不动（等它下一轮回来）
+        diagnoses[pid] = d
+        c = d.get("candidate") or {}
+        if c.get("code"):
+            locks[sname] = update_lock(prev_lock, c, now_hm)
+    if ENABLE_DRAGON_LOCK:
+        save_dragon_locks(locks)
 
     # Risks & positives
     risks = scan_risks(raw.get("labels"), stocks)

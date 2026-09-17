@@ -43,7 +43,8 @@ def test_selective_on_repair():
     d = do.build_decision(regime="neutral", sentiment=5.5, promote_rate=32.0,
                           nuke_count=3, avg_pct=2.1)
     assert d["verdict"] == "selective"
-    assert "3%" in d["rules"]["entry"] and "5%" in d["rules"]["entry"]
+    # 用户 5% 硬线（2026-09-14 起）：≤5% 参与、＞5% 放弃，entry 文案须含「≤5%」与「5%」
+    assert "≤5%" in d["rules"]["entry"] and "5%" in d["rules"]["entry"]
     assert d["rules"]["position"] == "≤50% 单票·≤1-2 只"
 
 

@@ -153,8 +153,13 @@ def _content_hash(card: dict) -> str:
 
 
 def dedup_check(card: dict, window_min: int = 10) -> tuple[bool, str]:
-    """同内容卡片在 window_min 分钟内已推过 → (True, 说明)，否则记录并返回 (False, '')。
-    文件损坏/写入失败不影响主流程（幂等降级为不拦截）。"""
+    """【只读检查】同内容卡片在 window_min 分钟内是否已推过 → (True, 说明)。
+
+    ⛔ 本函数**不再写盘**（2026-09-17 修复）：原实现在**发送前**就登记 hash，
+    导致发送失败时同内容在窗口内无法重试（被自己的去重误拦）。
+    登记改由「发送成功后」的 `dedup_mark()` 负责。
+    文件损坏/读取失败不影响主流程（幂等降级为不拦截）。
+    """
     import time
     try:
         path = _dedup_path()
@@ -165,16 +170,34 @@ def dedup_check(card: dict, window_min: int = 10) -> tuple[bool, str]:
             db = {}
         h = _content_hash(card)
         now = time.time()
-        # 清理过期记录（> 2h）
-        db = {k: v for k, v in db.items() if now - v < 7200}
         if h in db and now - db[h] < window_min * 60:
             return True, f"同内容卡片 {window_min} 分钟内已推送（hash {h[:8]}），跳过"
-        db[h] = now
-        json.dump(db, open(path, "w", encoding="utf-8"), ensure_ascii=False)
         return False, ""
     except Exception as e:
         print(f"[dedup] 去重降级（不拦截）: {e}", file=sys.stderr)
         return False, ""
+
+
+def dedup_mark(card: dict) -> None:
+    """【成功后登记】把内容 hash 写入去重库（顺带清理 >2h 过期记录）。
+
+    ⛔ 只在**实际推送成功后**调用；失败**不得**登记（否则失败卡在窗口内无法重试）。
+    写盘失败不影响主流程。
+    """
+    import time
+    try:
+        path = _dedup_path()
+        db = {}
+        try:
+            db = json.load(open(path, encoding="utf-8"))
+        except Exception:
+            db = {}
+        now = time.time()
+        db = {k: v for k, v in db.items() if now - v < 7200}
+        db[_content_hash(card)] = now
+        json.dump(db, open(path, "w", encoding="utf-8"), ensure_ascii=False)
+    except Exception as e:
+        print(f"[dedup] 登记降级（不影响推送）: {e}", file=sys.stderr)
 
 
 def push(card: dict, webhook: str, retries: int = 2):
@@ -428,6 +451,8 @@ def main():
         sys.exit(1)
     if ok:
         print("OK")
+        # ⛔ 2026-09-17 修复：内容 hash 只在**实际推送成功后**登记（失败不登记 → 可重试）
+        dedup_mark(card)
         _audit("push", card=Path(args.card).name, webhook=resolved, result="ok")
         mirror_push(card, mirror_targets(Path(args.card).name, resolved, card), args.card)
         sys.exit(0)

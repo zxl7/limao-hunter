@@ -29,6 +29,13 @@ PY = sys.executable
 PUSH = ROOT / "scripts" / "push_card.py"
 BEAT_SEC = 900  # 15min（2026-09-04 用户定：10min 粒度检查·至少 15min 一次）
 
+# ── 同源抑制（2026-09-15 降噪迭代·可逆）──
+# 背景：空窗也每 15min 推"无新异动"→单日 46 条重复空卡（垃圾信息主体之一）。
+# 新增：记录上次节拍卡的关键状态（涨停数/核按钮/情绪label/前3主线），若本轮状态与上次
+#   完全一致且核按钮<3（无预警价值）→ 跳过本轮（仅更新时间戳·不推空卡）；有实质变化才推。
+# ⛔ 可逆：BEAT_SUPPRESS_SAME=False 即回退"每15min必推"旧行为。
+BEAT_SUPPRESS_SAME = True
+
 sys.path.insert(0, str(ROOT))
 from common.json_io import save_json  # noqa: E402
 
@@ -73,8 +80,12 @@ def last_intraday_push_ts() -> float:
     return last
 
 
-def build_beat_card() -> dict:
-    """轻量节拍卡：涨停/主线/核按钮 客观现状，无交易结论。"""
+def build_beat_card() -> tuple[dict, dict]:
+    """轻量节拍卡：涨停/主线/核按钮 客观现状，无交易结论。
+
+    返回 (card, state)：state 为关键状态快照（涨停数/核按钮/情绪label/前3主线），
+    供「同源抑制」比对——状态与上一张完全一致且核按钮<3 时，主流程跳过推空卡。
+    """
     la = {}
     try:
         la = json.loads((SNAP / "latest.json").read_text(encoding="utf-8"))
@@ -88,6 +99,7 @@ def build_beat_card() -> dict:
     hhmm = now().strftime("%H:%M")
     total = la.get("total_zt") or 0
     top = (la.get("top5") or [])[:3]
+    top_names = [t.get("name") for t in top]
     top_txt = " · ".join(
         f"{t.get('name')} {t.get('zt_count')}家"
         + (f"({(t.get('leader') or {}).get('name')})" if (t.get('leader') or {}).get('name') else "")
@@ -113,13 +125,15 @@ def build_beat_card() -> dict:
     els = [
         {"tag": "div", "text": {"tag": "lark_md", "content": content}},
     ]
-    return {
+    card = {
         "title": f"📡 定时巡查 {hhmm} | 涨停{total} · 无新异动",
         "color": "grey",
         "config": {"wide_screen_mode": True},
-        "header": {"title": {"tag": "plain_text", "content": f"📡 定时巡查 {hhmm} | 涨停{total} · 无新异动"}, "template": "grey"},
+        "header": {"title": {"tag": "plain_text", content": f"📡 定时巡查 {hhmm} | 涨停{total} · 无新异动"}, "template": "grey"},
         "elements": els,
     }
+    state = {"total": total, "nuke": nuke, "label": label, "top3": top_names}
+    return card, state
 
 
 def sig_path() -> Path:
@@ -144,17 +158,29 @@ def main() -> int:
     if gap < BEAT_SEC:
         print(f"[intraday_beat] 距上次异动群推送 {int(gap)}s < {BEAT_SEC}s·跳过")
         return 0
-    card = build_beat_card()
+    card, cur_state = build_beat_card()
+    # ── 同源抑制（2026-09-15 降噪）：状态与上一张完全一致且核按钮<3 → 跳过推空卡 ──
+    if BEAT_SUPPRESS_SAME and nuke_no_warn(cur_state) and sig.get("intraday_beat_state") == cur_state:
+        sig["intraday_beat_ts"] = now().timestamp()  # 仅更新时间戳，避免下轮重复比对
+        save_json(sp, sig)
+        print(f"[intraday_beat] 同源抑制：状态无变化（空窗 {int(gap)}s）·跳过空卡")
+        return 0
     cf = Path(os.environ.get("TMPDIR", "/tmp")) / "limao_intraday_beat.json"
     cf.write_text(json.dumps(card, ensure_ascii=False), encoding="utf-8")
     rc = os.system(f'"{PY}" "{ROOT / "scripts" / "short_spirit.py"}" --send "{cf}"')
     if rc == 0:
         sig["intraday_beat_ts"] = now().timestamp()
+        sig["intraday_beat_state"] = cur_state
         save_json(sp, sig)
         print(f"[intraday_beat] 节拍卡已推（空窗 {int(gap)}s）")
     else:
         print(f"[intraday_beat] 推送失败 rc={rc}（状态未更新·下轮重试）")
     return 0 if rc == 0 else 1
+
+
+def nuke_no_warn(state: dict) -> bool:
+    """核按钮未达预警线（<3）→ 该节拍卡无预警价值，可同源抑制。"""
+    return (state or {}).get("nuke", 0) < 3
 
 
 if __name__ == "__main__":

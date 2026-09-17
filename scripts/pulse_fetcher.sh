@@ -94,6 +94,11 @@ run_step "newsflash_express" "$PY scripts/newsflash_express.py"                 
 # 2026-09-04 异动群节拍汇总：空窗≥15min 自动补一条「📡 盘中节拍」轻卡（无事件时保持群节奏·
 # 用户「异动群至少 15 分钟推一次」）；有事件推送自动顺延不重复（独立脚本幂等判 gap）。
 run_step "intraday_beat"   "$PY scripts/intraday_beat.py"                                           "cache/pulse_snapshots/beat.log"
+# 2026-09-17 盘中情绪时间轴记录（用户「时间轴要记录整个交易时间的情绪起落·既有爆发也有杀跌」）：
+# ⛔ 纯记录 · 零推送 · 不改任何推送行为/节奏；每轮把「本轮新发生的情绪事件」（涨停/炸板/跌停/
+#    板块走强/杀跌板块）**追加**到 cache/intraday_timeline_<date>.jsonl（原 latest.json 是覆盖写，盘中历史全丢）。
+# ⛔ 独立 try 包裹：任何异常都不影响守护链（run_step 已失败不中断）。
+run_step "intraday_timeline" "$PY scripts/intraday_timeline.py"                                     "cache/pulse_snapshots/timeline.log"
 # 2026-08-18 用户「脉冲与精灵分工」方案B：砍掉精灵日常持续调用，退化为仅 S级共振(live_signal.py:903)
 # + 冷却补推(:776) 触发。日常异动全交给窗口卡(close_window_step)；精灵不再每轮守护链跑，避免双线冗余刷屏。
 # run_step "short_spirit"    "$PY scripts/short_spirit.py --push"                                    "cache/pulse_snapshots/short_spirit.log"

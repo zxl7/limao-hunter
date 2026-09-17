@@ -186,3 +186,53 @@ def _krows(closes: list[float], code="600000") -> list[dict]:
                      "high": max(c, prev), "low": min(c, prev)})
         prev = c
     return rows
+
+
+# ── 历史日K 缓存必须是「当日」缓存（2026-09-15 修·数据准确性回归锁）──
+# 背景：原实现读 kl_hist_{code}.json 时不看日期、永久复用 → 反复进候选的票其历史基因被冻结在
+# 首次抓取日（09-15 实测 5 只候选停在 09-08/09-10/09-11，000993 晋级率按旧窗口算成 30.0%、
+# 实际已 46.2%）。现改为跨日失效重抓；重抓失败回退旧缓存（优雅降级，不让基因行整体消失）。
+
+def test_hist_rows_cache_hits_same_day(tmp_path, monkeypatch):
+    import json as _json
+    from datetime import datetime
+    monkeypatch.setattr(zg, "GENES", tmp_path)
+    today = datetime.now().strftime("%Y%m%d")
+    rows = [{"d": today, "open": 10.0, "close": 11.0, "high": 11.0, "low": 10.0}]
+    (tmp_path / "kl_hist_600000.json").write_text(
+        _json.dumps({"rows": rows, "src": "ths", "date": today}), encoding="utf-8")
+
+    def _boom(*a, **k):
+        raise AssertionError("当日缓存命中时不应再抓取")
+
+    monkeypatch.setattr(zg, "_fetch_ths_kline", _boom)
+    monkeypatch.setattr(zg, "_fetch_sina_kline", _boom)
+    assert zg._fetch_hist_rows("600000") == rows
+
+
+def test_hist_rows_cache_expires_across_days(tmp_path, monkeypatch):
+    import json as _json
+    from datetime import datetime
+    monkeypatch.setattr(zg, "GENES", tmp_path)
+    today = datetime.now().strftime("%Y%m%d")
+    stale = [{"d": "20260908", "open": 9.0, "close": 9.5, "high": 9.5, "low": 9.0}]
+    fresh = [{"d": today, "open": 10.0, "close": 11.0, "high": 11.0, "low": 10.0}]
+    (tmp_path / "kl_hist_600000.json").write_text(
+        _json.dumps({"rows": stale, "src": "ths", "date": "20260908"}), encoding="utf-8")
+
+    monkeypatch.setattr(zg, "_fetch_ths_kline", lambda code: fresh)
+    monkeypatch.setattr(zg, "_fetch_sina_kline", lambda code: None)
+    assert zg._fetch_hist_rows("600000") == fresh          # 跨日 → 重抓
+    c = _json.loads((tmp_path / "kl_hist_600000.json").read_text(encoding="utf-8"))
+    assert c["date"] == today and c["rows"] == fresh       # 写盘带上当日日期
+
+
+def test_hist_rows_falls_back_to_stale_on_fetch_failure(tmp_path, monkeypatch):
+    import json as _json
+    monkeypatch.setattr(zg, "GENES", tmp_path)
+    stale = [{"d": "20260908", "open": 9.0, "close": 9.5, "high": 9.5, "low": 9.0}]
+    (tmp_path / "kl_hist_600000.json").write_text(
+        _json.dumps({"rows": stale, "src": "ths", "date": "20260908"}), encoding="utf-8")
+    monkeypatch.setattr(zg, "_fetch_ths_kline", lambda code: None)
+    monkeypatch.setattr(zg, "_fetch_sina_kline", lambda code: None)
+    assert zg._fetch_hist_rows("600000") == stale          # 重抓失败 → 旧缓存兜底（不让基因行消失）

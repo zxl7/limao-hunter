@@ -40,6 +40,13 @@ ROOT = Path(__file__).resolve().parent.parent          # wealth_code/
 BASE = ROOT.parent                                      # 狸猫猎手/
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+# ⛔ 项目根也必须进 sys.path（2026-09-15 修）：`common/` 包在**项目根**、不在 wealth_code/ 下。
+#    以脚本方式运行本文件时 sys.path[0] = 脚本所在目录（wealth_code/scripts），cwd **不入** sys.path，
+#    于是 `_close_of` 里的 `import common.tencent_kline` 抛 ModuleNotFoundError → 被 except 静默吞掉
+#    → 返回值恒为 None → **AI 轨结算永远记「0 成交」**（09-14 补记那次是经 cwd 命中才偶然成功）。
+#    由 tests/test_ai_ledger_close_path.py 锁死（断言 BASE 已在 sys.path ∧ common 可解析）。
+if str(BASE) not in sys.path:
+    sys.path.insert(0, str(BASE))
 
 BJ_TZ = timezone(timedelta(hours=8))
 CACHE = ROOT / "cache"
@@ -67,6 +74,27 @@ except Exception:                                     # 独立运行兜底（sys
 
 USER_ENTRY_MAX_GAP_PCT = getattr(_ai_caliber, "USER_ENTRY_MAX_GAP_PCT", 5.0)
 MAX_POSITION_PER_STOCK = getattr(_ai_caliber, "MAX_POSITION_PER_STOCK", 0.5)
+
+
+def _expected_range_of(decision_date: str, code: str) -> list | None:
+    """从盘后候选文件取该票的预期区间（2026-09-17「A 计划」·供账本区间门）。
+
+    背景：AI 轨结算须与账户账本同走 `ai_caliber.decide`（含预期区间门），但决策台
+    `ai_decisions.jsonl` 本身不存区间 → 在 record 时从 `candidates-<decision_date>.json`
+    补写进决策行，settle 直接读行内字段（自包含·不依赖候选文件事后留存）。
+    """
+    p = CACHE / f"candidates-{decision_date}.json"
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    for k in ("relay", "watch"):
+        for it in (d.get(k) or []):
+            if str(it.get("code") or "") == str(code):
+                er = (it.get("expectation") or {}).get("expected_range")
+                if isinstance(er, (list, tuple)) and len(er) == 2:
+                    return [float(er[0]), float(er[1])]
+    return None
 
 
 def _read_jsonl(p: Path) -> list[dict]:
@@ -186,6 +214,10 @@ def cmd_record(args) -> int:
         if not row["reason"]:
             print(f"  跳过无理由决策: {code}（reason 必填·数据即事实）", file=sys.stderr)
             continue
+        # 方案 A（2026-09-17）：补写盘后预期区间 → 次日结算走同一区间门（与账户账本同源判据）
+        _er = _expected_range_of(ddate, code) if _ai_caliber else None
+        if _er:
+            row["expected_range"] = _er
         _append_jsonl(DECISIONS, row)
         n += 1
         print(f"  ✓ 记录 AI 决策 {ddate} {row['name']}({code}) {row['reason'][:40]}")
@@ -263,8 +295,15 @@ def cmd_settle(args) -> int:
             skipped.append((code, "无竞价数据（auction_quotes 缺失该票）"))
             continue
         gap = ((float(ap) - float(prev_close)) / float(prev_close) * 100) if prev_close else None
-        # ⛔ 用**用户 5% 硬线**（2026-09-14 用户纪律），不再读 AI 自定的 entry_max_gap。
-        if gap is not None and gap > USER_ENTRY_MAX_GAP_PCT:
+        # ⛔ 统一裁决（2026-09-17「A 计划」）：与**账户账本同一个函数** `ai_caliber.decide`——
+        #    参与 ∧ ≤5% 硬线 ∧ 落预期区间 → 成交；否则跳过（不及预期/高开太多/超线均不买）。
+        #    此前此处手写 `gap > 5%`，与账户账本新增的区间门脱节 → 两轨会同票不同结论。
+        if _ai_caliber is not None:
+            _can, _note, _ = _ai_caliber.decide(r, gap, expected_range=r.get("expected_range"))
+            if not _can:
+                skipped.append((code, _note))
+                continue
+        elif gap is not None and gap > USER_ENTRY_MAX_GAP_PCT:
             skipped.append((code, f"竞价高开 {gap:.2f}% 超过 {USER_ENTRY_MAX_GAP_PCT:g}% → 不追"))
             continue
         close = _close_of(code, tdate)

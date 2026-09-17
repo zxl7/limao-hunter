@@ -551,13 +551,23 @@ def _fetch_ths_kline(code: str) -> list[dict] | None:
 
 def _fetch_hist_rows(code: str) -> list[dict] | None:
     """长历史不复权日K（**同花顺 REST 优先 → 新浪回退**·2026-09-09 用户「用同花顺接口双重验证」），
-    带当日磁盘缓存（任一源命中即复用·缓存行结构同构无需分源）。"""
+    带**当日**磁盘缓存（任一源命中即复用·缓存行结构同构无需分源）。
+
+    ⛔ 2026-09-15 修（数据准确性·实证）：原实现读缓存时**不看日期、永久复用**（写盘只存 rows/src），
+    导致「反复进候选的票」其历史基因被冻结在首次抓取日——09-15 实测 5 只候选的 K 线停在
+    09-08/09-10/09-11，近一年涨停次数/晋级率/首板次日高开全部按旧窗口算（000993 晋级率 30.0%
+    实际已 46.2%）。现改为**跨日即失效重抓**（与 kl_ 短缓存 KLINE_TTL_DAYS=1 同语义）；
+    重抓失败时**回退旧缓存**（优雅降级，不让基因行整体消失）。文档自述「当日磁盘缓存」本就如此。
+    """
     cache_p = GENES / f"kl_hist_{code}.json"
+    cached: list[dict] | None = None
     try:
         if cache_p.exists():
             c = json.loads(cache_p.read_text(encoding="utf-8"))
             if c.get("rows"):
-                return c["rows"]
+                cached = c["rows"]
+                if str(c.get("date") or "") == datetime.now().strftime("%Y%m%d"):
+                    return cached          # 当日缓存命中
     except Exception:
         pass
     rows = _fetch_ths_kline(code)
@@ -567,10 +577,12 @@ def _fetch_hist_rows(code: str) -> list[dict] | None:
         src = "sina"
     if rows:
         try:
-            cache_p.write_text(json.dumps({"rows": rows, "src": src}), encoding="utf-8")
+            cache_p.write_text(json.dumps({"rows": rows, "src": src,
+                                           "date": datetime.now().strftime("%Y%m%d")}),
+                               encoding="utf-8")
         except Exception:
             pass
-    return rows or None
+    return rows or cached
 
 
 def _fetch_sina_kline(code: str) -> list[dict] | None:

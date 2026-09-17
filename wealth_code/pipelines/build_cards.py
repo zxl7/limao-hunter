@@ -30,6 +30,7 @@ if str(ROOT) not in sys.path:
 
 import json
 import subprocess
+import time
 from datetime import datetime, timedelta
 
 from pipelines.card_style import (  # noqa: E402
@@ -422,12 +423,14 @@ def _exp_verdict(r: dict, oc: dict) -> tuple[str, str]:
     gap = oc.get("gap_pct")
     super_min = exp.get("super_gap_min")
     if isinstance(gap, (int, float)):
-        # 三档判定（与 signal_eval 口径一致）：超线买入触发 → 高于预期上限(夹缝) → 符合预期 → 低于
+        # 三档判定 = `ai_caliber.gap_zone`（2026-09-17「A 计划」·与账本成交同源同容差，
+        #   防「标题行说高于预期 / AI 判断行说符合预期 / 账本却在买」三方脱节）
+        _zone = _ai_caliber.gap_zone(gap, erng)
         if super_min is not None and gap >= float(super_min):
             verdict = "🔺超预期"
-        elif gap > hi + 0.05:
+        elif _zone == "above":
             verdict = "🔺高于预期"
-        elif lo - 0.05 <= gap <= hi + 0.05:
+        elif _zone == "ok":
             verdict = "✅符合预期"
         else:
             verdict = "⚠️低于预期"
@@ -1118,8 +1121,39 @@ _AI_STANCE_FALLBACK = {
 }
 
 
+def _ai_dyn_verdict(it: dict) -> tuple[str, str] | None:
+    """今日竞价动态结论（2026-09-17 用户「不要写死板·竞价那一瞬间才能感知」）。
+
+    背景：AI 盘后 view 是**盘后一次性判定**——盘后无法预知次日竞价强弱，故盘后只能保守
+    给「观察」；用户要求「观察要有依据、要动态」：明显不及预期的票应归**放弃**，
+    带量高开转强的票保留**观察**（超 5% 上限不追），达标票才叫**可参与**。
+
+    口径：按**当日竞价实况**（gap_pct vs 盘后预期区间，复用 `_exp_verdict` 三档结论）
+    给动态执行结论。⛔ 只影响卡面呈现，**不改账本/成绩口径**（AI 决策时序铁律：决策
+    须竞价前定死，否则成绩失真）。
+    返回 (文案, 颜色)；无竞价数据 → None（优雅降级·不加行）。
+    """
+    oc = (it.get("performance") or {}).get("open_check") or {}
+    gap = oc.get("gap_pct")
+    if not isinstance(gap, (int, float)):
+        return None
+    # 判据唯一源 = ai_caliber.gap_zone（2026-09-17「A 计划」·与账本成交同源·⛔ 禁另写一套）
+    _exp = (it.get("expectation") or {}).get("expected_range")
+    _zone = _ai_caliber.gap_zone(gap, _exp)
+    if _zone == "unknown":
+        return None
+    g = f"{gap:+.2f}%"
+    if _zone == "below":
+        return (f"→ 今日竞价{g}·不及预期 → 放弃", "green")
+    if _zone == "above":
+        # 2026-09-17 用户「不要提示可参与、提示观察，因为高开太多」——
+        # 超预期＝高开超预期区间＝高开太多 → 一律「继续观察」（不给「可参与」）。
+        return (f"→ 今日竞价{g}·高开超预期·高开太多 → 继续观察", "yellow")
+    return (f"→ 今日竞价{g}·符合预期", "red")
+
+
 def _ai_view_line(it: dict, ai_view: dict) -> str:
-    """AI 判断行（参与/放弃/观察 + 理由）。无 AI 观点 → ""（不占位）。"""
+    """AI 判断行（参与/放弃/观察 + 理由）+ 今日竞价动态结论。无 AI 观点 → ""（不占位）。"""
     code = str(it.get("code") or "")
     v = (ai_view or {}).get(code)
     if not v:
@@ -1129,6 +1163,9 @@ def _ai_view_line(it: dict, ai_view: dict) -> str:
     color = "red" if view == "participate" else ("green" if view == "skip" else "purple")
     reason = str(v.get("reason") or "").strip()
     txt = f"　　<text_tag color='{color}'>🤖 AI 判断：{label}</text_tag>"
+    _dyn = _ai_dyn_verdict(it)      # 今日竞价实况动态结论（2026-09-17·盘后静态判断 → 今日动态）
+    if _dyn:
+        txt += f" <text_tag color='{_dyn[1]}'>{_dyn[0]}</text_tag>"
     if reason:
         # 理由语义分段（2026-09-11）：依据一行、⚠️风险独立末行（不再一整段连写）
         txt += "\n" + _narr_render(reason)
@@ -2371,11 +2408,78 @@ def _ambush_mainline_block(live: dict | None) -> list[dict]:
     return out
 
 
+# ===== 方案1（2026-09-17 用户「中京电子涨停之后的曲线…你就没有命中呀」拍板）=====
+# 个股「断板回流」机械通道：补上「涨停后休整→资金回流再走强」的**个股维度**盲区。
+# 与上面的题材相位回流（主题材通道）并列不互斥；口径/开关全部托管 core/reflow_scan.py。
+_REFLOW_POOL_FRESH_SEC = 600   # 落盘池复用窗口（同一轮 automation 的 dry-run 与推送不重复扫描）
+
+
+def _ambush_reflow_pool(cache_dir: Path) -> dict | None:
+    """取断板回流候选池：10 分钟内已落盘则复用，否则实时扫描并写 cache/reflow_pool.json。
+
+    失败（网络/数据缺失）返回 None，调用方静默跳过该块——绝不让卡片因此报错。
+    """
+    try:
+        from core import reflow_scan as _rs
+    except Exception:
+        return None
+    pool_p = cache_dir / "reflow_pool.json"
+    if pool_p.exists():
+        try:
+            d = json.loads(pool_p.read_text(encoding="utf-8"))
+            if time.time() - float(d.get("pool_ts_epoch") or 0) < _REFLOW_POOL_FRESH_SEC:
+                return d
+        except Exception:
+            pass
+    try:
+        res = _rs.scan_reflow(cache_dir)
+    except Exception:
+        return None
+    if not res:
+        return None
+    res["pool_ts_epoch"] = time.time()
+    try:
+        _rs.write_pool(cache_dir, res)
+    except Exception:
+        pass
+    return res
+
+
+def _ambush_reflow_block(cache_dir: Path) -> list[dict]:
+    """🔁 个股断板回流块（机械层·只列客观事实，不预测）。无候选返回 [] 行为不变。"""
+    res = _ambush_reflow_pool(cache_dir)
+    cands = (res or {}).get("candidates") or []
+    if not cands:
+        return []
+    out: list[dict] = [_div(
+        "<text_tag color='purple'>🔁 个股断板回流（涨停后休整·今日资金回流）</text_tag>"
+    )]
+    for r in cands:
+        nm = str(r.get("name") or "")
+        code = str(r.get("code") or "")
+        sec = str(r.get("sector") or "")
+        tag = str(r.get("tag") or "")
+        pct = float(r.get("today_pct") or 0)
+        boards = int(r.get("max_boards") or 0)
+        line = f"{_stock_hl({'name': nm, 'code': code})} <text_tag color='red'>{pct:+.1f}%</text_tag>"
+        bits = [b for b in (sec, tag, (f"近期曾{boards}板" if boards >= 2 else "")) if b]
+        if bits:
+            line += " · " + " · ".join(bits)
+        out.append(_div(line))
+    out.append(_div(
+        "⛔ 上面是「涨停后休整过、今天钱又回来」的票，性质不是新低位埋伏；"
+        "明天能不能接上要看竞价买盘，别闭着眼追"
+    ))
+    out.append(_hr())
+    return out
+
+
 def build_ambush_card(data: dict | None = None) -> dict:
     """🎯 尾盘潜伏·次日回流预期（14:30 定时）。详见 shared_rules【潜伏卡骨架】。
 
     双层结构（2026-08-28 用户「除了数据，需要 AI 介入和思考」升级）：
     - 机械数据层：theme_rotation 回流候选 + 今日实时板块资金流（不硬编码规律·完全以实时数据为准）
+      ＋🔥 今日新主线·次日接力锚（方案A）+ 🔁 个股断板回流（方案1·core/reflow_scan.py）
     - AI 研判层（data 注入）：🧠 板块资金流向分析 / 🔥 个股资金·地位·人气 / 🎯 次日重点标的推票
       data 契约：{ai_flow: 多行文本, stock_scan: [{name,code,role,pct,fund,hot,note}],
                  picks: [{theme,stocks,reason,risk}], ai_verdict: 置底综合研判}
@@ -2452,6 +2556,9 @@ def build_ambush_card(data: dict | None = None) -> dict:
     else:
         blocks.append(_div("今日无有望回流的题材（待回流方向与退潮观察均为空），等板块回调满 2 天且资金重新流入再说"))
         blocks.append(_hr())
+
+    # 模块②.5 个股断板回流（方案1 2026-09-17 用户拍板·个股维度通道，与题材回流并列不互斥）
+    blocks += _ambush_reflow_block(ROOT.parent / "cache")
 
     # 模块③ 今日板块资金流（实时·左红右绿双列）
     sr = (live or {}).get("sector_risk") or {}

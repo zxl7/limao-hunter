@@ -47,6 +47,28 @@ SPIRIT_LOWCAP_YI = 30             # B：开启 LOWCAP 后非豁免票市值门�
 ENABLE_SPIRIT_LOWCAP = True       # B：非豁免票市值门槛降至 30 亿（2026-09-07 用户「直接开始执行」盘中激活）
 ENABLE_SPIRIT_LEADER_FALLBACK = True  # C：东财抓取失败(下午常空池)→用 latest.json 连板龙头(boards>=2)兜底（同上盘中激活）
 
+# ── 低强度合并（2026-09-17 用户「前后端都改」）──────────────────────────────
+# 用户规则：① 低强度推送合并（1 分钟内只推了一个、强度不高的合并）
+#          ② 高强度联动爆发（多板块联动 → 即时聚合成一张）
+#          ③ 普通推送（无板块联动的独立事件，如单个涨停 → 普通平卡）
+# ⚠️ 「低强度」按**既有类型语义**表达，**不新造数值阈值**：
+#   信号类型由 `signal_type()` 产出 —— 涨停 / 炸板·回落 / 接近涨停 / 快速拉升。
+#   其中「快速拉升」= 涨幅未达冲板门槛（主板 <7.5% / 20cm <15%），即强度最低的一档。
+#   ⛔ 涨停（规则③要出平卡）、接近涨停（冲板预警·用户明确要「先于涨停播报」）、
+#      炸板·回落（风险须即时）**都算高强度**，不受合并影响。
+# 规则：本轮池内**只有 1 条且全为低强度** → 不单独出卡，等相邻低强度一起推
+#      （用户选「只合并相邻低强度时刻」）。
+#      ⚠️ 超时兜底（batch_timeout_min）不受影响 → 信息不丢。
+#      ⚠️ 早盘高频窗口 09:25–09:55 豁免：该窗口用户最高优先级要求「有信号就立刻推」。
+# 关闭方式：ENABLE_SPIRIT_LOWSTRENGTH_MERGE = False（回到改动前行为）
+# ⛔⛔ 默认 **False（关闭）** —— 2026-09-17 用户明确「保证盘中异动那边高频不要变化，
+#      这边（展示）慢慢优化」。故本能力**只作为已实现、已测试的待用能力保留**，
+#      ⛔ 绝不默认改变盘中推送节奏。要启用须用户明确指示，且收盘后 + 次日盘中验证。
+ENABLE_SPIRIT_LOWSTRENGTH_MERGE = False
+LOW_STRENGTH_TYPES = ("快速拉升",)
+EARLY_REALTIME_START_MIN = 9 * 60 + 25   # 09:25
+EARLY_REALTIME_END_MIN = 9 * 60 + 55     # 09:55
+
 
 def http_get(url, t=8):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -79,6 +101,18 @@ def session() -> str:
     now = datetime.now()
     hm = now.hour * 60 + now.minute
     return "morning" if hm <= (11 * 60 + 30) else "afternoon"
+
+
+def in_early_realtime_window(now=None) -> bool:
+    """早盘前半小时高频实时窗口 09:25–09:55（与 live_signal.EARLY_REALTIME_WINDOW 对齐）。
+
+    该窗口内用户最高优先级要求「接口有信号就立刻推」，故**低强度合并豁免**。
+    """
+    now = now or datetime.now()
+    if now.weekday() >= 5:
+        return False
+    hm = now.hour * 60 + now.minute
+    return EARLY_REALTIME_START_MIN <= hm <= EARLY_REALTIME_END_MIN
 
 
 def fetch_pool(cfg):
@@ -441,9 +475,7 @@ def build_card(signals, sess, now):
         """正文块：飞书 elements 顶层必须是 div，lark_md 须包在 text 里（否则空白）"""
         return {"tag": "div", "text": md(*lines)}
 
-    c = load_cfg()
     sess_cn = "上午" if sess == "morning" else "下午"
-    amt_thr = c["amount_morning_yi"] if sess == "morning" else c["amount_afternoon_yi"]
     groups = {"涨停": [], "接近涨停": [], "快速拉升": []}
     for s in signals:
         groups.setdefault(s["type"], []).append(s)
@@ -467,24 +499,41 @@ def build_card(signals, sess, now):
                 f"　<text_tag color='{col}'>{s['name']}({s['code']})</text_tag> "
                 f"{_pct_tag(s['pct'])}（{s['sector']}）｜⚡{s['reason']}")
     lines.append("")
-    # 2026-09-07 修复：卡面市值门槛必须显示「实际生效阈值」（B 开=30亿），不得写死 cfg 100亿
-    _cap_show = SPIRIT_LOWCAP_YI if ENABLE_SPIRIT_LOWCAP else c["min_market_cap_yi"]
-    _cap_note = "·连板/板块核心票豁免" if ENABLE_SPIRIT_CAPEXEMPT else ""
-    lines.append(f"**🧭 小结**：异动聚焦短线热点，按强度降序；"
-                 f"市值≥{_cap_show}亿{_cap_note}·当日总成交额≥{amt_thr}亿（{sess_cn}档）·剔除ST/次新")
     return {
         "title": f"短线精灵·异动信号 | {now.strftime('%H:%M')} | 命中{len(signals)}只",
         "color": "red",
         "elements": [
             block(*lines),
             {"tag": "hr"},
-            {"tag": "note", "elements": [md("📡 东财+选股宝 | 短线精灵引擎 | 市值/成交额/次新/ST 过滤")]},
+            {"tag": "note", "elements": [md(f"📡 选股宝+东财 | {now.strftime('%H:%M')}")]},
         ],
     }
 
 
 def _send_dedup_path() -> Path:
     return ROOT / "cache" / "spirit_send_dedup.json"
+
+
+def _events_path() -> Path:
+    """逐事件审计落盘路径（按日切分·append-only）。"""
+    return ROOT / "cache" / f"short_spirit_events_{datetime.now().strftime('%Y%m%d')}.jsonl"
+
+
+def append_event(rec: dict) -> None:
+    """⛔ 事件级审计（2026-09-17 A3）：把**逐事件**（含时间与身份）追加落盘，
+    供「合并后不丢不重 / 送达状态」核验 —— 原实现只有覆盖写快照，无法还原每次推送。
+
+    ⚠️ 盘中链路安全第一：**任何异常都不得影响主流程**，故整体 try 包裹、失败仅打印。
+    ⛔ 本函数只追加记录，**不改变任何推送行为/节奏**。
+    """
+    try:
+        r = {"at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), **rec}
+        p = _events_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"[short_spirit] 事件落盘降级（不影响主流程）: {e}", file=sys.stderr)
 
 
 def _send_card(card_path: str, webhook: str | None = None, dry: bool = False) -> int:
@@ -521,15 +570,22 @@ def _send_card(card_path: str, webhook: str | None = None, dry: bool = False) ->
         print(f"[short_spirit] --send 同内容 45s 内已推·跳过（防抖 {cf.name}）")
         return 0
     ded = {k: v for k, v in ded.items() if now.timestamp() - float(v) < 600}  # 只留 10min 窗口
-    ded[h] = now.timestamp()
-    dp.write_text(json.dumps(ded), encoding="utf-8")
     if dry:
+        # ⛔ 有界修复（2026-09-17）：dry 仅预览/校验，不得写下内容去重——
+        # 否则把「未真正推送」的卡记成已推，真实发送时 45s 防抖会误拦本应重发的卡。
         print(f"[short_spirit] --send(dry) {cf.name}: {card.get('title', '')[:60]}")
         return 0
     wc = f"--webhook {webhook} " if webhook else "--webhook feishu_webhook_intraday "
     rc = __import__("os").system(f'"{sys.executable}" "{ROOT}/scripts/push_card.py" {wc}"{cf}"')
-    print(f"[short_spirit] --send 推送{'成功' if rc == 0 else '失败'} {cf.name} | {card.get('title', '')[:50]}")
-    return 0 if rc == 0 else 1
+    if rc == 0:
+        # ⛔ 有界修复（2026-09-17）：仅「实际发送成功」才提交内容去重；
+        # 发送失败不提交，下一轮可重试（不把失败卡误判为已推）。
+        ded[h] = now.timestamp()
+        dp.write_text(json.dumps(ded, ensure_ascii=False), encoding="utf-8")
+        print(f"[short_spirit] --send 推送成功 {cf.name} | {card.get('title', '')[:50]}")
+        return 0
+    print(f"[short_spirit] --send 推送失败 {cf.name} | {card.get('title', '')[:50]}")
+    return 1
 
 
 def main():
@@ -562,6 +618,12 @@ def main():
               "pool_total": total, "after_filter": kept, "signals": signals}
     OUT_PATH.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[short_spirit] 池{total}→过滤{kept}→信号{len(signals)} | 时段={sess}")
+    # ⛔ A3 事件级审计：本轮「看到了什么」（逐事件含类型/行业/强度，时间=本轮 at）
+    append_event({"kind": "scan", "session": sess, "pool_total": total, "after_filter": kept,
+                  "count": len(signals),
+                  "items": [{"code": s["code"], "name": s.get("name"), "type": s.get("type"),
+                             "sector": s.get("sector"), "strength": s.get("strength")}
+                            for s in signals]})
 
     if args.dry_run or not args.push:
         return
@@ -607,10 +669,29 @@ def main():
         print("[short_spirit] --force 但待推池为空，跳过（无新信号）")
         return
 
+    # ⛔ 低强度合并（2026-09-17 用户「前后端都改」）：
+    #   池内**只有 1 条且全为低强度（快速拉升）** → 不单独出卡，等相邻低强度一起推。
+    #   ⚠️ by_timeout 兜底不受影响（超时仍推）→ 信息不丢；涨停/冲板/炸板不受影响。
+    #   ⚠️ 早盘高频窗口 09:25–09:55 豁免（用户最高优先级：窗口内「有信号就立刻推」）。
+    if (ENABLE_SPIRIT_LOWSTRENGTH_MERGE
+            and len(pending) == 1
+            and all(s.get("type") in LOW_STRENGTH_TYPES for s in pending)
+            and not by_timeout
+            and not in_early_realtime_window(now)):
+        save_pushed(pushed, now, update_last=False)
+        print("[short_spirit] 低强度单条·合并等待（只合并相邻低强度，不单独出卡）")
+        append_event({"kind": "held", "reason": "low_strength_single",
+                      "codes": [s["code"] for s in pending]})
+        return
+
     card_signals = sorted(pending, key=lambda x: -x["strength"])[: cfg["max_signals"]]
     card = build_card(card_signals, sess, now)
     cf = ROOT / "cache" / "short_spirit_card.json"
     cf.write_text(json.dumps(card, ensure_ascii=False), encoding="utf-8")
+    # ⛔ 有界修复（2026-09-17）：入池后、任何发送尝试之前可靠落盘 pending（update_last=False）。
+    # 下方 push_card 失败（rc!=0）时：pending 已持久化、codes/last_push 未登记 → 下一轮可重试；
+    # 成功时下方 save_pushed(pushed, now)（update_last=True）再正式结算。不可改 batch/force/选股/过滤/调度业务。
+    save_pushed(pushed, now, update_last=False)
     rc = __import__("os").system(f'"{sys.executable}" "{ROOT}/scripts/push_card.py" --webhook feishu_webhook_intraday "{cf}"')
     if rc == 0:
         pushed["codes"] = (pushed.get("codes", []) or []) + [s["code"] for s in card_signals]
@@ -620,6 +701,10 @@ def main():
             pushed["pending_ts"] = ""
         save_pushed(pushed, now)
         print(f"[short_spirit] 推送成功 {len(card_signals)} 只（触发：{'数量达标' if by_count else '超时兜底'}）")
+        # ⛔ A3 事件级审计：本轮「送达了什么」（仅在成功分支 → 送达状态可信）
+        append_event({"kind": "pushed", "count": len(card_signals),
+                      "codes": [s["code"] for s in card_signals],
+                      "trigger": "count" if by_count else ("timeout" if by_timeout else "force")})
 
 
 if __name__ == "__main__":

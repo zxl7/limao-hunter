@@ -241,6 +241,15 @@ HIGH_FREQ_INTRADAY = True
 COMMON_COOLDOWN_SEC = 0 if HIGH_FREQ_INTRADAY else 120
 PENDING_PATH = SNAP / "pulse_pending.json"
 
+# ── 精灵推送最小间隔闸门（2026-09-15 降噪迭代·可逆）──
+# 背景：HIGH_FREQ 放开全部闸门后，早盘 09:25-09:55 每轮(30s)都触发 short_spirit --push --force
+#   → 单日早盘炸 60+ 张合并卡（信息不丢但刷屏）。新增最小间隔闸门：
+#   早盘高频窗口内 SPIRIT_EARLY_MIN_GAP_SEC（保留实时感）/ 窗口外 SPIRIT_MIN_GAP_SEC。
+#   间隔未到则本轮跳过触发，待推池持续累积新信号→下个合格轮次一次性批量推（合并呈现·不丢信号）。
+# ⛔ 可逆：SPIRIT_MIN_GAP_SEC=0（且 SPIRIT_EARLY_MIN_GAP_SEC=0）即回退"每轮即推"旧行为。
+SPIRIT_MIN_GAP_SEC = 90
+SPIRIT_EARLY_MIN_GAP_SEC = 45
+
 # ── 板块加强独立卡（2026-09-07 · 优化A/B/C · 2026-09-07 10:46 用户「直接启动」激活）──
 # 背景：HIGH_FREQ 高频模式下 A 级板块信号只触发 short_spirit 个股卡，板块级
 #   「强势/加强」无独立出口 → 用户看到农业个股刷屏，看不到"农业在整体走强"。
@@ -249,6 +258,11 @@ PENDING_PATH = SNAP / "pulse_pending.json"
 ENABLE_SECTOR_BOOST_CARD = True     # 总开关：板块强势/加强独立卡出口（异动群）
 ENABLE_GRADUAL_BOOST = True         # B：渐进加强（zc>已推峰值 且 距上次渐进报≥8min → 慢涨再报）
 GRADUAL_BOOST_MIN_GAP_S = 8 * 60    # B：同板块渐进加强最小间隔（秒·防每轮+1刷屏）
+# ── 板块加强卡·全类型最小间隔（2026-09-15 降噪·可逆）──
+# 背景：首次/峰值跃迁/渐进三型加强卡无统一板块间隔→单日 76 张。
+# 新增：非首次加强（峰值跃迁+2 / 渐进）需满足板块最小间隔才成卡；首次板块强势仍即时（最有价值）。
+# ⛔ 可逆：BOOST_MIN_GAP_S=0 即回退"每轮可报"旧行为。
+BOOST_MIN_GAP_S = 10 * 60
 ENABLE_SECTOR_FAMILY = True         # C：板块家族聚合（家族名去重+合并计数，如 泛农业）
 ENABLE_SECTOR_FLOW_LINE = True      # A：板块卡资金行补查（不在前5榜也查，未入榜显灰字）
 # ── ⛔ 板块过热预警（2026-09-08 用户「发酵到高位别追高·话术通俗」）──────────
@@ -319,6 +333,24 @@ def in_early_realtime_window(now: datetime | None = None) -> bool:
         return False
     mins = now.hour * 60 + now.minute
     return EARLY_REALTIME_START <= mins <= EARLY_REALTIME_END
+
+
+def spirit_gap_sec(now: datetime | None = None) -> int:
+    """当前时段精灵推送最小间隔（秒）：早盘高频窗口更小、其余更大。"""
+    return SPIRIT_EARLY_MIN_GAP_SEC if in_early_realtime_window(now) else SPIRIT_MIN_GAP_SEC
+
+
+def spirit_push_allowed(sig: dict, now: datetime | None = None) -> bool:
+    """精灵推送间隔闸门（2026-09-15 降噪）：距上次精灵推送未达最小间隔则拦。"""
+    now = now or datetime.now()
+    lp = (sig or {}).get("spirit_last_push")
+    if not lp:
+        return True
+    try:
+        el = (now - datetime.fromisoformat(lp)).total_seconds()
+    except Exception:
+        return True
+    return el >= spirit_gap_sec(now)
 
 
 def load_pending() -> dict:
@@ -1670,6 +1702,7 @@ def main():
         except Exception as _fam_err2:
             print(f"[live_signal] 家族聚合计算失败，回退单板块: {_fam_err2}")
     _gradual_ts = sig.get("gradual_boost_ts") or {}   # B：板块→最近一次渐进报 iso
+    _boost_last_ts = sig.get("boost_last_ts") or {}    # 2026-09-15 降噪：板块→最近一次任意加强卡 iso
     for s in _iter_sectors:
         nm = s.get("name")
         if not nm:
@@ -1708,6 +1741,17 @@ def main():
             zc, pzc,
             first=_first, peak=int(sector_peak.get(nm) or 0),
             high_freq=HIGH_FREQ_INTRADAY, gradual_ok=_gradual)
+        # 2026-09-15 降噪：非首次加强（峰值跃迁/渐进）受板块最小间隔约束，防每轮+1/峰值跳变刷屏；
+        # 首次板块强势（最有价值）不受限，即时成卡。满足间隔才落 boost_last_ts。
+        if _stage:
+            if not _first:
+                _lb = _boost_last_ts.get(nm)
+                if _lb and (now - datetime.fromisoformat(_lb)).total_seconds() < BOOST_MIN_GAP_S:
+                    _stage = None
+                else:
+                    _boost_last_ts[nm] = now.isoformat()
+            else:
+                _boost_last_ts[nm] = now.isoformat()
         if _stage:
             s2 = dict(s)
             s2["_sector_stage"] = _stage
@@ -1718,6 +1762,8 @@ def main():
     sig["sector_zt_peak"] = sector_peak
     if _gradual_ts:
         sig["gradual_boost_ts"] = _gradual_ts
+    if _boost_last_ts:
+        sig["boost_last_ts"] = _boost_last_ts
 
     # ── ⛔ 板块过热预警（2026-09-08 用户「发酵到高位别追高」·独立出口）──
     # 只对「今天已报过的强势板块」（in sector_pushed）判：涨停数进入已推峰值 80%
@@ -2132,13 +2178,14 @@ def main():
                     _el = (datetime.now() - datetime.fromisoformat(_pend["last_push"])).total_seconds()
                 except Exception:
                     _el = 1e9
-            if pending_count(_pend) > 0 and _el >= COMMON_COOLDOWN_SEC and not dry:
+            if pending_count(_pend) > 0 and spirit_push_allowed(sig) and not dry:
                 # 盘中异动信号卡 → 短线精灵引擎（自带无信号跳过/当天code去重/幂等）
-                # ⛔ 异动群高频（2026-09-03）：冷却=0（COMMON_COOLDOWN_SEC）且 --force
-                #    （有池即推，不等 batch/timeout 门槛）
+                # ⛔ 2026-09-15 降噪：间隔闸门（spirit_push_allowed）约束，避免无新信号时也每轮补推刷屏。
                 _ss_force = " --force" if HIGH_FREQ_INTRADAY else ""
                 rc = os.system(f'{PY} "{HERE / "short_spirit.py"}" --push{_ss_force}')
                 print(f"[live_signal] 盘中异动信号→短线精灵触发 {'成功' if rc == 0 else '失败'} n={pending_count(_pend)}")
+                if rc == 0:
+                    sig["spirit_last_push"] = datetime.now().isoformat()
                 _pend = {"last_push": datetime.now().isoformat(), "nf": [], "zt": [], "surge": [],
                          "strong": [], "sector": [], "charge": []}
             save_pending(_pend)
@@ -2465,9 +2512,17 @@ def main():
         # （自带当天 code 去重 + 空池自动跳过 = 幂等，不刷屏）；False（主群限频）仍按窗口缓冲。
         if in_early_realtime_window(datetime.now()) or HIGH_FREQ_INTRADAY:
             if not dry:
-                rc_e = os.system(f'{PY} "{HERE / "short_spirit.py"}" --push --force')
-                print(f"[live_signal] 早盘高频窗口→短线精灵即时推 {'成功' if rc_e == 0 else '失败'} "
-                      f"A级信号 n={len(a_events)}")
+                # ⛔ 2026-09-15 降噪：间隔闸门——早盘高频窗口/全天 HIGH_FREQ 原每轮(30s)即推，
+                # 单日早盘炸 60+ 张。间隔未到则跳过本轮，待推池累积→下个合格轮次批量推（不丢信号）。
+                if spirit_push_allowed(sig):
+                    rc_e = os.system(f'{PY} "{HERE / "short_spirit.py"}" --push --force')
+                    if rc_e == 0:
+                        sig["spirit_last_push"] = datetime.now().isoformat()
+                        save_sig(sig)
+                    print(f"[live_signal] 早盘高频窗口→短线精灵即时推 {'成功' if rc_e == 0 else '失败'} "
+                          f"A级信号 n={len(a_events)}")
+                else:
+                    print(f"[live_signal] 精灵间隔闸门（{spirit_gap_sec()}s 未到）·跳过本轮·待推池累积合并")
             else:
                 print("[live_signal] 早盘高频窗口→短线精灵即时推（dry 跳过）")
         else:

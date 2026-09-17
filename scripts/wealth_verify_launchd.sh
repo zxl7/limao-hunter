@@ -82,7 +82,11 @@ if ls "$ROOT"/wealth_code/cache/card_*.json >/dev/null 2>&1; then
 else
     log "⚠️ 卡 JSON 缺失（可能被守卫跳过）"
 fi
-if [ -s "$ROOT/cache/auction_quotes-$TODAY.json" ]; then
+# ⚠️ 2026-09-15 修复：路径原为 $ROOT/cache/（少 wealth_code 一层），
+# 而真实落盘在 wealth_code/cache/（run_wealth_code.py: ROOT=wealth_code/ → ROOT/"cache"）。
+# 后果：该分支**恒为假** —— 报价明明落地也每日误报「⚠️ 竞价报价缺失」，
+# 使告警失去意义（真缺报价时无法与假警区分）。全仓另 8 处引用均为 wealth_code/cache。
+if [ -s "$ROOT/wealth_code/cache/auction_quotes-$TODAY.json" ]; then
     log "竞价报价已落地 ✓"
 else
     log "⚠️ 竞价报价缺失"

@@ -59,6 +59,35 @@ USER_ENTRY_MAX_GAP_PCT = 5.0
 # 单票仓位上限（2026-09-14 用户「买入仓位不超过 50%」）——AI 给的操作建议仓位一律裁剪到此。
 MAX_POSITION_PER_STOCK = 0.5
 
+# ── 预期区间门（2026-09-17 用户「A 计划」）────────────────────────────────
+# 背景：此前「卡面动态结论」与「账本成交」是**两套独立逻辑**——卡面看预期区间给三档，
+#   账本只看 `participate ∧ ≤5%`，实测出现「卡面说继续观察、账本却买入」的自相矛盾。
+# 方案 A（用户拍板）= 把卡面判定**下沉为执行条件**，二者共用 `gap_zone` 这**唯一判据源**：
+#    成交 = AI 判 participate ∧ 竞价 ≤ 5% 硬线 ∧ 竞价落在预期区间（含容差）
+# 用户口径：「高开太多（超预期）→ 观察」「不及预期 → 放弃」「符合预期 → 买」。
+EXPECTED_ZONE_TOL = 0.5   # 预期区间容差（pp）：超上沿 / 破下沿此范围内仍算「符合预期」（防误杀）
+
+
+def gap_zone(gap_pct: Any, expected_range: Any,
+             tol: float = EXPECTED_ZONE_TOL) -> str:
+    """竞价涨幅相对**盘后预期区间**的三档判定 —— **唯一判据源**（账本 + 卡面共用）。
+
+    返回：'below' 低于预期（放弃）/ 'ok' 符合预期（可买）/ 'above' 超预期＝高开太多（观察）
+          / 'unknown' 无预期区间或无竞价数据（调用方回退旧口径·不误伤）。
+    ⛔ 本函数是「超预期/符合/低于预期」的唯一实现——任何地方不得再自写一套（防双轨脱节）。
+    """
+    if gap_pct is None or not (isinstance(expected_range, (list, tuple)) and len(expected_range) == 2):
+        return "unknown"
+    try:
+        lo, hi, g = float(expected_range[0]), float(expected_range[1]), float(gap_pct)
+    except (TypeError, ValueError):
+        return "unknown"
+    if g < lo - tol:
+        return "below"
+    if g > hi + tol:
+        return "above"
+    return "ok"
+
 ROOT = Path(__file__).resolve().parent.parent          # wealth_code/
 if str(ROOT) not in sys.path:                          # 允许独立运行
     sys.path.insert(0, str(ROOT))
@@ -157,29 +186,48 @@ def clamp_position(p: Any) -> float | None:
     return round(min(v, MAX_POSITION_PER_STOCK), 4)
 
 
-def decide(decision: dict | None, gap_pct: float | None) -> tuple[bool, str, dict]:
-    """按 AI 口径裁决单票能否成交（2026-09-14 用户纪律：低于 5% 直接买）。
+def decide(decision: dict | None, gap_pct: float | None,
+           expected_range: Any = None) -> tuple[bool, str, dict]:
+    """按 AI 口径裁决单票能否成交（2026-09-14 纪律 ＋ 2026-09-17「A 计划」区间门）。
 
-    入参：decision = AI 决策行（None=该票未被 AI 判断）；gap_pct = 当日竞价涨幅(%)。
+    入参：decision = AI 决策行（None=该票未被 AI 判断）；gap_pct = 当日竞价涨幅(%)；
+         expected_range = 盘后预期区间 [lo, hi]（缺省 None → 回退旧口径·只按 5% 硬线）。
     返回：(can_enter, note, meta)
 
-    裁决链：AI 判 participate ∧ 竞价 ≤ USER_ENTRY_MAX_GAP_PCT(5%) ∧ 有竞价数据 → 成交。
+    裁决链（方案 A·**卡面 = 账本**）：
+      AI 判 participate ∧ 有竞价数据
+        ∧ 竞价 ≤ USER_ENTRY_MAX_GAP_PCT(5%) 硬线
+        ∧ 竞价落在预期区间（`gap_zone`·含 EXPECTED_ZONE_TOL 容差）
+      → 成交
     ⛔ AI 自定 entry_max_gap 仅留痕（meta.ai_declared_limit），不参与裁决。
+    ⛔ 判据**唯一源 = `gap_zone`**（卡面 `build_cards._ai_dyn_verdict` 同调此函数·禁另写一套）。
     """
     base = {"ai_gap_limit": USER_ENTRY_MAX_GAP_PCT,
             "ai_declared_limit": ai_declared_limit(decision)}
     if decision is None:
         return False, "AI 昨日未对这只票下判断 → 不买", {"ai_view": None, **base}
-    view = str(decision.get("view") or "")
+    # ⚠️ 缺失 view 视为 participate（历史兼容·与 `ai_ledger.cmd_settle` 的 todo 筛选
+    #    `r.get("view") or "participate"` 同口径）——09-11 前决策行无 view 字段，
+    #    若此处严格判空 → 与结算层口径打架（同票「结算层算参与、裁决层判不买」）。
+    view = str(decision.get("view") or "participate")
     if view != "participate":
         return False, f"AI 判「{view_label(view)}」→ 不买", {"ai_view": view or None, **base}
     if gap_pct is None:
         return False, "无竞价数据 → 不知道能不能买到，不买（诚实跳过）", {
             "ai_view": "participate", **base}
-    if float(gap_pct) > USER_ENTRY_MAX_GAP_PCT:
-        return False, (f"竞价高开 {float(gap_pct):+.2f}% 超过 {USER_ENTRY_MAX_GAP_PCT:g}%"
+    _g = float(gap_pct)
+    _zone = gap_zone(_g, expected_range)
+    base["zone"] = _zone
+    if _g > USER_ENTRY_MAX_GAP_PCT:
+        return False, (f"竞价高开 {_g:+.2f}% 超过 {USER_ENTRY_MAX_GAP_PCT:g}%"
                        " → 不追（纪律：高开超 5% 的不买）"), {
             "ai_view": "participate", **base}
-    return True, (f"AI 要买·竞价 {float(gap_pct):+.2f}% 在 {USER_ENTRY_MAX_GAP_PCT:g}% 以内"
+    if _zone == "below":
+        return False, (f"竞价 {_g:+.2f}% 低于预期区间 → 放弃（不及预期·不接）"), {
+            "ai_view": "participate", **base}
+    if _zone == "above":
+        return False, (f"竞价 {_g:+.2f}% 高于预期区间（高开太多）→ 观察（不追）"), {
+            "ai_view": "participate", **base}
+    return True, (f"AI 要买·竞价 {_g:+.2f}% 在预期区间内且 ≤{USER_ENTRY_MAX_GAP_PCT:g}%"
                   " → 买入"), {
         "ai_view": "participate", **base}

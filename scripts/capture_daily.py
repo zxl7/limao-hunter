@@ -19,6 +19,7 @@
 """
 import sys
 import json
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
@@ -107,6 +108,56 @@ def capture_eruption():
     return out
 
 
+def _ensure_pool_fresh(today: str, now_hour: int | None = None) -> str:
+    """确保 cache/yesterday_zt.json 是「今日」口径——盘后链时序缺陷的**脚本级根治**（2026-09-15）。
+
+    ⛔ 事故（09-04 / 09-07 / 09-11 三日实证，09-14 复核）：盘后链里 `capture_daily` 若
+    早于 `record_zt_snapshot` 执行，`yesterday_zt.json` 仍是**前一交易日**的 → 双重损坏：
+      ① 当日 `zt_history/zt_{今日}.json` 归档缺失 → 形态/N字/回流检测**永久少一天料**；
+      ② 反而把**前一交易日**的归档文件用旧数据重写一遍。
+    旧处置分别依赖「automation 执行次序写对」（脆弱）与「事后 `_heal_residual_archives`
+    自愈」（受 heal_date 匹配 + limit 限制）。本函数把自愈**前置到源头**：
+    发现口径日 ≠ 今日即主动跑一次上游 `record_zt_snapshot`（幂等），使本流程与调用次序解耦。
+
+    安全边界（防误伤）：
+      · **15:00 前不主动补齐**——盘前/盘中 yesterday_zt 停在前一交易日是**正常态**，
+        此时跑上游会抓到不完整的盘中涨停池（数据污染）；
+      · 补齐失败不影响主流程（返回描述串，由调用方打印，原逻辑继续走
+        `_heal_residual_archives` 兜底）；
+      · 顺序正确时（date == today）**零额外开销**，直接返回 "ok"。
+
+    返回：动作描述（"ok" / "filled(...)" / "fill-failed(...)" / "stale-before-close(...)"）。
+    """
+    src = CACHE / "yesterday_zt.json"
+
+    def _cur_date():
+        try:
+            return json.loads(src.read_text(encoding="utf-8")).get("date")
+        except Exception:
+            return None
+
+    cur = _cur_date()
+    if cur == today:
+        return "ok"
+    # ⛔ 收盘前不主动补齐（见上方安全边界）；now_hour 可注入以便回归测试
+    hour = datetime.now().hour if now_hour is None else now_hour
+    if hour < 15:
+        return f"stale-before-close(cur={cur})"
+    up = ROOT / "scripts" / "record_zt_snapshot.py"
+    if not up.exists():
+        return f"skip-no-upstream(cur={cur})"
+    try:
+        r = subprocess.run([sys.executable, str(up)], cwd=str(ROOT),
+                           capture_output=True, text=True, timeout=180)
+        new = _cur_date()
+        if r.returncode == 0 and new == today:
+            return f"filled(cur={cur}→{new})"
+        tail = (r.stderr or r.stdout or "").strip().splitlines()[-1:] or [""]
+        return f"fill-failed(cur={cur}→{new} rc={r.returncode} {tail[0][:80]})"
+    except Exception as e:
+        return f"fill-err(cur={cur}):{e}"
+
+
 def _heal_residual_archives(heal_date: str, pool: list, limit: int = 5) -> list:
     """残缺日自愈（2026-09-14 立）：过去交易日归档若缺 zt_list，且其日期正是 `heal_date`
     （= 本次 yesterday_zt 的口径日），用该池补写；来源不明的残缺日只告警不编造。
@@ -143,8 +194,12 @@ def capture_zt():
     """复制昨日涨停池为按天历史副本（用其自带 date 字段命名）。
 
     若当日盘中已沉淀 intraday_points（题材时间轴），合并保留，不覆盖丢失。
-    落盘后顺带做**残缺日自愈**（见 _heal_residual_archives）。
+    ⛔ 写盘前先做**前置补齐**（`_ensure_pool_fresh`·根治盘后链时序错：既防当日缺料，
+       也防把前一交易日归档用旧数据重写）；落盘后顺带做**残缺日自愈**（`_heal_residual_archives`）。
     """
+    _fill = _ensure_pool_fresh(_today())
+    if _fill != "ok":
+        print(f"[capture_daily] 🔧 涨停池前置补齐：{_fill}")
     src = CACHE / "yesterday_zt.json"
     if not src.exists():
         return None
@@ -167,6 +222,10 @@ def capture_zt():
     target.write_text(json.dumps(data, ensure_ascii=False))
     if not (data.get("zt_list") or []):
         print(f"[capture_daily] ⚠️ 缺 zt_list：{target.name}（yesterday_zt 无涨停池·盘后链时序?）")
+    # ⛔ 盘后仍拿不到今日池 = 上游补齐失败 → 当日归档注定缺料，必须显式告警（勿静默）
+    if date_str != _today() and datetime.now().hour >= 15:
+        print(f"[capture_daily] ⚠️ 盘后未拿到今日涨停池：本次归档口径={date_str}"
+              f"（今日 {_today()} 缺料·见上方前置补齐结果）")
     _heal_residual_archives(date_str, data.get("zt_list") or [])
     return date_str
 
