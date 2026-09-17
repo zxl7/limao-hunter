@@ -1835,7 +1835,14 @@ AI 在「主线定性」中研判出的**最强主线（TOP1 = 持续性最强�
 
 **🔁-3 学习只改阈值配置**：auto_apply 只允许回写 `expectation_rules.json` / `relay_score_config.json`（参数文件）；⛔ 禁碰 shared_rules.md 宪法/骨架/任务 prompt（中央规则原则）。
 
-**🔁-4 可逆性设计（最高优先级·用户铁律）**：①主开关 `config/learning_config.json auto_apply`（默认 **False**=只出建议不改参数）；②`--auto-apply` 参数只是第二重闸，两重都过才回写；③每次回写前**先备份**回滚快照 `cache/backups/learning_rollback_*.json`；④单次调整幅度钳制 `max_adjust_step`（默认 0.3/2 分）；⑤回滚命令 `python3 scripts/learning.py --rollback <snapshot>`；⑥审计 `audit("config", module="learning", ...)` 全记录。
+**🔁-4 可逆性设计 + 分级自动（2026-09-17 用户「全方位自动学习+迭代」修订·最高优先级）**：
+① **模式开关 = `config/learning_config.json auto_apply_mode`**：`off`=只出建议（最保守）/ **`tiered`=分级自动（当前默认）** / `high_only`=只应用 high（旧行为）；`auto_apply`（bool）保留向后兼容。
+　⚠️ **修订背景（闭环断裂事故）**：2026-09-01~09-17 共 **19 次学习全「建议 N 条 / 应用 0 条」**（`auto_apply=False` 且只认 high）→ **学而不改、闭环断**；同期区间命中率长期 ~20%（门槛 40%）无人修。
+② **分级判据 = `RULE_RISK`（改动风险·⛔ 与 `severity` 严重度解耦·勿混用）**：`low`（预期区间数值 R1/R4）→ 自动回写；`medium`（选股池门槛 R2）→ 自动 + 留痕；`high`（语义类 R3/R5）→ **仅建议**。
+③ **防过度三闸**：`max_adjust_step`（单次幅度 0.3）＋ `max_apply_per_run`（单次条数 2）＋ **`apply_cooldown_days`（同规则 N 日冷却·默认 3）**——防"命中率连日低 → 连日各改一次"的累积漂移（实证风险：不加冷却则 5 天可累计下移 1.5）。
+④ 每次回写前**先备份**回滚快照 `cache/backups/learning_rollback_*.json`；回滚 `python3 scripts/learning.py --rollback <snapshot>`；审计 `audit("config", module="learning", ...)` 全记录。
+⑤ **PDCA 效果追踪**：`learning_history.jsonl` 记 `range_hit_rate_avg` + `applied_rules`；下次运行 `_track_effect()` 输出 `effect{since, range_hit_rate:"前→后", improved}`——⛔ 效果差**不自动回滚**（人工决定·防"自动改 + 自动回滚"互相打架）。
+⑥ 实证（09-17 首次打通）：`base_range [-0.3,2.2] → [-0.6,1.9]`（修"预期系统性偏乐观"），快照 `learning_rollback_20260917_215246_*`；二次运行 `cooled_rules=['R1_range_low']` 生效、参数未被重复下移。
 
 **🔁-5 样本守卫（防小样本误学习）**：候选评估样本 <3 只时命中率偏差只降级 low 提示，⛔ 不触发 high 回写（实证：08-31 单票深中华A -2.27% 命中 0% 不代表门槛过松）。
 
@@ -1843,7 +1850,9 @@ AI 在「主线定性」中研判出的**最强主线（TOP1 = 持续性最强�
 
 **🔁-7 回测发现 → 升级联动**：回测暴露的系统性偏差（如区间命中率持续 <40%→预期系统性偏乐观）→ 学习建议 → 人工确认后回写或立项 upgrade_plan；⛔ 单日偏差不自动改参数，窗口≥3 日才触发。
 
-**定时任务**：推测回测-每日（WEEKLY MO-FR 18:10）/ 推测回测-周五优化方案（WEEKLY FR 19:00·🛠 聚合回测+提案+体检+升级待办·O1..On 编号决策清单供用户逐条拍板）——两任务已登记 config/tasks.yaml + 财神-中枢台账。
+**🔁-9 AI 判定质量自学习（R5 · 2026-09-17 用户「让 AI 学会自动学习」）**：`scripts/learning.py:_ai_quality_stats()` 读 `ai_decisions.jsonl` 的 `view` × 该票**次日是否进涨停池**（`zt_history`·归档缺料则跳过该票·⛔ 不编造），统计三档命中率 —— `participate.rate` 低（<40%）⇒ AI「参与」判定偏松；`watch.rate` 高（≥40%）⇒ **AI 过度保守**（把好票压成「观察」·正是 09-17 用户投诉方向）。语义类 → **仅建议**（`RULE_RISK`=high·无 step 不回写）。样本 <3 → 不触发（🔁-5 守卫）。**实证 09-17（49 样本）**：参与 66.7%(2/3) / 观察 32.1%(9/28) / 放弃 5.6%(1/18)——AI 判定方向正确（放弃的确实不涨），观察档有优化空间。
+
+**定时任务**：推测回测-每日（WEEKLY MO-FR 18:10）/ 推测回测-周五优化方案（WEEKLY FR 19:00·🛠 聚合回测+提案+体检+升级待办·O1..On 编号决策清单供用户逐条拍板）——两任务已登记 config/tasks.yaml + 财神-中枢台账。⚠️ 任务命令**无需**带 `--auto-apply`：`auto_apply_mode=tiered` 已在配置层生效（`--auto-apply` 仅用于把 `off` 临时提级）。
 
 **🔁-8 提案模式（2026-09-01 用户拍板·自我进化权限边界）**：回测发现的偏差分两层处理——①数值阈值（R1/R2/R4 白名单）→ learning.py 自动回写 config（可逆）；②方法论/语义（情绪校准、候选门槛、数据补漏）→ `scripts/gen_proposals.py` 生成**skill 更新提案**（P1-P4），周五优化方案卡展示「📋 待审提案」区块，**用户拍板后由 agent 手动应用**。⛔ **skill 永不自动修改**（只接收提案）；自动回写白名单仅限 expectation_rules.json / relay_score_config.json；提案状态流转 draft→approved（用户拍板）→applied（agent 手动改完）。
 

@@ -58,18 +58,90 @@ BJ_TZ = timezone(timedelta(hours=8))
 DEFAULT_LEARNING_CONFIG = {
     "schema": "learning_config_v1",
     "updated": None,
-    "note": "回测自我学习主开关。auto_apply=False 时只出建议不改参数；True 时按建议单次小幅回写阈值配置（先备份后改·可回滚）。",
-    "auto_apply": False,
+    "note": ("回测自我学习开关。**auto_apply_mode 为唯一模式开关**："
+             "off=只出建议不改参数（最保守）；tiered=**分级自动**（数值阈值自动回写·语义类仅建议·默认）；"
+             "high_only=只应用 high 级（旧行为）。所有回写均先备份后改·可回滚。"),
+    "auto_apply": False,           # 向后兼容：缺 auto_apply_mode 时按此推导模式
+    # ── 自动学习分级（2026-09-17 用户「全方位自动学习+迭代」）──────────────────
+    # 背景：此前 19 次学习全「建议 N 条 / 应用 0 条」（auto_apply=False）→ 闭环断裂、学而不改。
+    # 分级原则：**数值阈值可自动**（影响面小·幅度钳制·快照可回滚）；**语义/结构仅建议**（防误改宪法类）。
+    "auto_apply_mode": "tiered",
+    "tier_policy": {"low": True, "medium": True, "high": False},
+    "max_apply_per_run": 2,        # 单次最多自动应用条数（防批量误改·配合 max_adjust_step 双重钳制）
+    "apply_cooldown_days": 3,      # ⛔ 应用冷却：同规则 N 日内已自动应用过 → 不再重复应用
+                                   #   （防"命中率连续低 → 连日各下移 0.3"过度调整·5 天累计 1.5）
+    "track_effect": True,          # PDCA：记录应用后效果并对上轮做命中率对比
     "max_adjust_step": 0.3,        # 单次最大调整幅度（base_range 下移等）
     "window_days": 5,              # 偏差检测窗口（最近 N 个回测记录）
     "min_samples": 3,              # 样本量守卫：候选/区间评估样本 < 此值不触发 high 建议（防小样本误学习）
+    # ⚠️ 术语澄清：`severity`（规则产出的 high/low）= **偏差严重程度**（要不要重视）；
+    #    `RULE_RISK`（下方常量）= **自动改动的风险等级**（敢不敢自动改）——两者**解耦**，
+    #    切勿混用（曾误用 severity 做自动判据 → 数值类 R1 被划入「仅建议」而不落地）。
     "rules": {
         "R1_range_low":   {"enabled": True, "hit_rate_threshold": 40, "suggest": "base_range 下移 0.3（预期系统性偏乐观）", "target": "expectation_rules.json.base_range", "step": 0.3},
         "R2_cand_low":    {"enabled": True, "hit_rate_threshold": 40, "suggest": "relay first_choice_min 门槛上调 2 分", "target": "relay_score_config.json.bands.first_choice_min", "step": 2},
         "R3_sentiment_bias": {"enabled": True, "abs_diff_threshold": 1.0, "suggest": "AI 情绪预判存在系统性偏差（见 diff 方向）", "target": "ai_judge", "step": None},
         "R4_range_high":  {"enabled": True, "hit_rate_threshold": 80, "suggest": "max_range_width 收紧 0.3（区间过宽无信息量）", "target": "expectation_rules.json.max_range_width", "step": 0.3},
+        # R5 AI 判定质量（2026-09-17 用户「让 AI 学会自动学习」·语义类·仅建议不自动改）
+        "R5_ai_quality":  {"enabled": True, "participate_hit_min": 40, "watch_miss_max": 40,
+                           "suggest": "校准 AI 判定口径（参与门槛 / 观察降级规则）", "target": "ai_judge", "step": None},
     },
 }
+
+
+def _next_trade_day(date10: str) -> str:
+    """次一交易日（仅跳周末·与 ai_caliber.next_trade_day / pipeline_verify._next_day 同算法）。"""
+    try:
+        d = datetime.strptime(str(date10), "%Y-%m-%d") + timedelta(days=1)
+        while d.weekday() >= 5:
+            d += timedelta(days=1)
+        return d.strftime("%Y-%m-%d")
+    except Exception:
+        return str(date10)
+
+
+def _ai_quality_stats() -> dict | None:
+    """R5 数据源：**AI 判定质量**统计（2026-09-17·「让 AI 学会自动学习」核心之一）。
+
+    口径：AI 决策台账 `ai_decisions.jsonl` 的 `view` × 该票**次日是否进涨停池**（`zt_history`）：
+      · `participate.rate` = AI 判「参与」的票次日涨停占比 → 低 ⇒ AI 参与判定偏松 / 环境差
+      · `watch.rate`       = AI 判「观察」的票次日涨停占比 → 高 ⇒ **AI 过度保守**（把好票压成观察）
+    样本 < 3 → None（不触发·防小样本误学习）。只读落盘文件，不外呼。
+    """
+    p = ROOT / "wealth_code" / "cache" / "ai_decisions.jsonl"
+    try:
+        rows = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+    except Exception:
+        return None
+    zt_dir = CACHE / "zt_history"
+    stat: dict[str, list[int]] = {"participate": [0, 0], "watch": [0, 0], "skip": [0, 0]}
+    cache_zt: dict[str, set[str]] = {}
+    for r in rows:
+        code = str(r.get("code") or "")
+        view = str(r.get("view") or "participate")
+        dd = str(r.get("decision_date") or "")
+        if len(code) != 6 or not dd:
+            continue
+        nd = _next_trade_day(dd)
+        if nd not in cache_zt:
+            try:
+                zt = json.loads((zt_dir / f"zt_{nd}.json").read_text(encoding="utf-8"))
+                cache_zt[nd] = {str(x.get("code") or "") for x in (zt.get("zt_list") or [])}
+            except Exception:
+                cache_zt[nd] = set()
+        if not cache_zt[nd]:
+            continue                      # 次日归档缺料 → 跳过该票（不编造）
+        stat.setdefault(view, [0, 0])
+        stat[view][1] += 1
+        if code in cache_zt[nd]:
+            stat[view][0] += 1
+    total = sum(v[1] for v in stat.values())
+    if total < 3:
+        return None
+    out: dict = {"_total": total}
+    for k, (h, n) in stat.items():
+        out[k] = {"hit": h, "n": n, "rate": round(h / n * 100, 1) if n else None}
+    return out
 
 
 def load_learning_config() -> dict:
@@ -183,6 +255,30 @@ def detect_biases(hist: list[dict], cfg: dict) -> list[dict]:
                 "severity": "low",
             })
 
+    # R5 AI 判定质量（2026-09-17·语义类·仅建议）：AI 参与命中率过低 / 观察漏判率过高
+    r5 = rules.get("R5_ai_quality", {})
+    if r5.get("enabled", True):
+        q = _ai_quality_stats()
+        if q:
+            msgs = []
+            pa = q.get("participate") or {}
+            wa = q.get("watch") or {}
+            if pa.get("n", 0) >= min_samples and pa.get("rate") is not None \
+                    and pa["rate"] < r5.get("participate_hit_min", 40):
+                msgs.append(f"AI 判「参与」的票次日涨停率仅 {pa['rate']}%（{pa['hit']}/{pa['n']}）")
+            if wa.get("n", 0) >= min_samples and wa.get("rate") is not None \
+                    and wa["rate"] >= r5.get("watch_miss_max", 40):
+                msgs.append(f"AI 判「观察」的票次日涨停率高达 {wa['rate']}%（{wa['hit']}/{wa['n']}）→ 疑似过度保守")
+            if msgs:
+                suggestions.append({
+                    "rule": "R5_ai_quality",
+                    "evidence": "；".join(msgs),
+                    "suggest": r5.get("suggest", "校准 AI 判定口径（参与门槛 / 观察降级规则）"),
+                    "target": "ai_judge",
+                    "step": None,          # 语义类·无参数可回写 → 仅建议
+                    "severity": "high",
+                })
+
     return suggestions
 
 
@@ -239,11 +335,89 @@ def apply_suggestion(sug: dict, cfg: dict) -> dict:
     target_file.write_text(json.dumps(conf, ensure_ascii=False, indent=2), encoding="utf-8")
     audit("config", module="learning", action="auto_apply", rule=sug["rule"],
           target=target, before=before, after=after, snapshot=snapshot)
-    return {"applied": True, "target": target, "before": before, "after": after,
-            "snapshot": snapshot, "suggest": sug["suggest"]}
+    return {"applied": True, "rule": sug.get("rule"), "target": target,
+            "before": before, "after": after, "snapshot": snapshot, "suggest": sug["suggest"]}
 
 
 # ---------------- 主流程 ----------------
+
+# ── 规则 → **自动应用风险等级**（2026-09-17·与 severity 严重程度解耦）──────────
+# low    = 数值阈值·影响面小（预期区间参数）→ 可自动回写
+# medium = 影响面中等（选股池门槛）→ 可自动回写 + 审计留痕
+# high   = 语义/结构类 → **仅建议**（防误改宪法/骨架/口径）
+RULE_RISK = {
+    "R1_range_low": "low",
+    "R4_range_high": "low",
+    "R2_cand_low": "medium",
+    "R3_sentiment_bias": "high",
+    "R5_ai_quality": "high",       # AI 判定质量·语义类→仅建议
+}
+
+
+def _recent_applied_rules(days: int = 3) -> set[str]:
+    """近 N 日内已自动应用过的**规则名**集合 —— 应用冷却（防同一参数被连日重复下移）。
+
+    数据源 = `learning_history.jsonl` 的 `applied_rules` + `generated_at`。
+    """
+    try:
+        rows = [json.loads(l) for l in LEARN_HIST.read_text(encoding="utf-8").splitlines() if l.strip()]
+    except Exception:
+        return set()
+    cutoff = datetime.now(BJ_TZ) - timedelta(days=max(0, int(days)))
+    out: set[str] = set()
+    for r in rows:
+        try:
+            t = datetime.fromisoformat(str(r.get("generated_at") or ""))
+        except Exception:
+            continue
+        if t >= cutoff:
+            for name in (r.get("applied_rules") or []):
+                out.add(str(name))
+            # 兼容旧记录（只有 applied_summary·无 applied_rules）→ 从 target 反推规则
+            if not r.get("applied_rules"):
+                for summ in (r.get("applied_summary") or []):
+                    s = str(summ)
+                    if "base_range" in s and "下移" not in s:
+                        out.add("R1_range_low")
+    return out
+
+
+def _resolve_mode(cfg: dict) -> str:
+    """解析学习模式：**auto_apply_mode 优先**；缺省时按旧 auto_apply 推导（向后兼容）。
+
+    off=只建议 / tiered=分级自动（默认） / high_only=只应用 high（旧行为）。
+    """
+    m = str(cfg.get("auto_apply_mode") or "").strip().lower()
+    if m in ("off", "tiered", "high_only"):
+        return m
+    return "high_only" if cfg.get("auto_apply") else "off"
+
+
+def _track_effect(hist: list[dict]) -> dict | None:
+    """PDCA 效果追踪：与上一次「有自动应用」的学习记录对比区间命中率变化。
+
+    返回 {"since","applied","range_hit_rate","improved"}；无历史/不可比 → None。
+    ⛔ 只读不写：效果差时**不自动回滚**（人工用 `--rollback <快照>` 决定），防"自动改+自动回滚"互相打架。
+    """
+    try:
+        prev = [json.loads(l) for l in LEARN_HIST.read_text(encoding="utf-8").splitlines() if l.strip()]
+    except Exception:
+        return None
+    prev = [r for r in prev if r.get("applied_summary") and r.get("range_hit_rate_avg") is not None]
+    if not prev:
+        return None
+    rates = [r["summary"].get("range_hit_rate") for r in hist
+             if (r.get("metrics") or {}).get("range_hit", {}).get("available")
+             and (r["metrics"]["range_hit"] or {}).get("evaluable", 0) > 0]
+    if not rates:
+        return None
+    cur = sum(rates) / len(rates)
+    was = float(prev[-1]["range_hit_rate_avg"])
+    return {"since": prev[-1].get("generated_at"),
+            "applied": prev[-1].get("applied_summary"),
+            "range_hit_rate": f"{was:.1f}% → {cur:.1f}%",
+            "improved": cur > was}
+
 
 def run_learning(auto_apply: bool = False, window: int | None = None) -> dict:
     cfg = load_learning_config()
@@ -256,25 +430,60 @@ def run_learning(auto_apply: bool = False, window: int | None = None) -> dict:
         return result
 
     suggestions = detect_biases(hist, cfg)
-    applied = []
-    if auto_apply and cfg.get("auto_apply"):
+    mode = _resolve_mode(cfg)
+    # CLI --auto-apply 可把 off 临时提升为 tiered（定时任务用）；配置写 off 时仍尊重 off
+    if auto_apply and mode == "off":
+        mode = "tiered"
+
+    applied: list[dict] = []
+    result_cooled: list[str] = []
+    if mode == "tiered":
+        # 分级自动（2026-09-17）：低/中风险「数值阈值」自动回写；高风险（语义/结构类）仅建议
+        tiers = cfg.get("tier_policy") or DEFAULT_LEARNING_CONFIG["tier_policy"]
+        limit = int(cfg.get("max_apply_per_run", 2))
+        # ⛔ 判据 = `RULE_RISK[rule]`（改动风险），**不是** severity（偏差严重度·两者解耦）
+        _cool = _recent_applied_rules(int(cfg.get("apply_cooldown_days", 3)))
+        cands = [s for s in suggestions
+                 if tiers.get(RULE_RISK.get(str(s.get("rule")), "high"), False)
+                 and s.get("step") is not None
+                 and str(s.get("rule")) not in _cool]      # 冷却：同规则 N 日内不重复应用
+        for sug in cands[:limit]:
+            applied.append(apply_suggestion(sug, cfg))
+        result_cooled = [str(s.get("rule")) for s in suggestions if str(s.get("rule")) in _cool]
+    elif mode == "high_only" and (auto_apply or cfg.get("auto_apply")):
         for sug in suggestions:
             if sug["severity"] == "high":
                 applied.append(apply_suggestion(sug, cfg))
 
+    # 窗口命中率均值（供下次 `_track_effect` 对比·PDCA 基准）
+    _rates = [r["summary"].get("range_hit_rate") for r in hist
+              if (r.get("metrics") or {}).get("range_hit", {}).get("available")
+              and (r["metrics"]["range_hit"] or {}).get("evaluable", 0) > 0]
+    range_avg = round(sum(_rates) / len(_rates), 1) if _rates else None
+
     result = {
         "generated_at": datetime.now(BJ_TZ).isoformat(timespec="seconds"),
         "window": window,
-        "auto_apply": bool(auto_apply and cfg.get("auto_apply")),
+        "mode": mode,
+        "auto_apply": mode != "off",
         "suggestions": suggestions,
         "applied": applied,
     }
+    if result_cooled:
+        result["cooled_rules"] = result_cooled      # 因冷却期未重复应用的规则（留痕）
+    if range_avg is not None:
+        result["range_hit_rate_avg"] = range_avg
+    if cfg.get("track_effect", True):
+        eff = _track_effect(hist)
+        if eff:
+            result["effect"] = eff
     SUGGEST_FILE.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # 学习历史 append
+    # 学习历史 append（含 range_hit_rate_avg / effect → PDCA 可回溯）
     rec = {k: v for k, v in result.items() if k != "applied"}
     if applied:
         rec["applied_summary"] = [f"{a.get('target')}: {a.get('before')}→{a.get('after')}" for a in applied]
+        rec["applied_rules"] = [a.get("rule") for a in applied if a.get("rule")]   # 供 `_recent_applied_rules` 冷却
     with open(LEARN_HIST, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
@@ -284,6 +493,8 @@ def run_learning(auto_apply: bool = False, window: int | None = None) -> dict:
         print(f"[learning] ✅ 已回写 {a['target']}: {a['before']} → {a['after']} (快照 {a['snapshot']})")
     if not suggestions:
         print("[learning] 窗口内无显著偏差，无需学习建议")
+    elif not applied and mode != "off":
+        print(f"[learning] ⚠️ 模式 {mode} 下无自动应用（高风险仅建议 / 无 step / 超上限）")
     return result
 
 

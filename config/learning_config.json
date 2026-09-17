@@ -1,7 +1,7 @@
 {
   "schema": "learning_config_v1",
   "updated": "2026-09-01T09:06:38+08:00",
-  "note": "auto_apply 临时置 True：2026-09-08 用户拍板「允许优化」授权 R1 base_range 下移 0.3 单次回写，跑完即恢复 False（09-08 17:56）",
+  "note": "回测自我学习开关。auto_apply_mode 为唯一模式开关：off=只建议；tiered=分级自动（数值阈值自动回写·语义类仅建议·默认）；high_only=只应用 high（旧行为）。",
   "auto_apply": false,
   "max_adjust_step": 0.3,
   "window_days": 5,
@@ -34,5 +34,13 @@
       "target": "expectation_rules.json.max_range_width",
       "step": 0.3
     }
-  }
+  },
+  "auto_apply_mode": "tiered",
+  "tier_policy": {
+    "low": true,
+    "medium": true,
+    "high": false
+  },
+  "max_apply_per_run": 2,
+  "track_effect": true
 }
