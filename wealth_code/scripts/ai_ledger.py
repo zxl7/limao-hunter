@@ -76,25 +76,33 @@ USER_ENTRY_MAX_GAP_PCT = getattr(_ai_caliber, "USER_ENTRY_MAX_GAP_PCT", 5.0)
 MAX_POSITION_PER_STOCK = getattr(_ai_caliber, "MAX_POSITION_PER_STOCK", 0.5)
 
 
-def _expected_range_of(decision_date: str, code: str) -> list | None:
-    """从盘后候选文件取该票的预期区间（2026-09-17「A 计划」·供账本区间门）。
+def _cand_fields_of(decision_date: str, code: str) -> dict:
+    """从盘后候选文件取该票的 gate 字段（预期区间 + 量能目标）—— 2026-09-17「A 计划/A2/量能门」。
 
-    背景：AI 轨结算须与账户账本同走 `ai_caliber.decide`（含预期区间门），但决策台
-    `ai_decisions.jsonl` 本身不存区间 → 在 record 时从 `candidates-<decision_date>.json`
-    补写进决策行，settle 直接读行内字段（自包含·不依赖候选文件事后留存）。
+    背景：AI 轨结算须与账户账本同走 `ai_caliber.decide`（含预期区间门 + 量能门），
+    但决策台 `ai_decisions.jsonl` 不存这两项 → 在 record 时从
+    `candidates-<decision_date>.json` 补写进决策行，settle 直接读行内字段
+    （自包含·不依赖候选文件事后留存）。
+    返回 {} 表示取不到（诚实降级·结算时对应门不生效）。
     """
     p = CACHE / f"candidates-{decision_date}.json"
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
-        return None
+        return {}
     for k in ("relay", "watch"):
         for it in (d.get(k) or []):
             if str(it.get("code") or "") == str(code):
-                er = (it.get("expectation") or {}).get("expected_range")
+                exp = it.get("expectation") or {}
+                out: dict = {}
+                er = exp.get("expected_range")
                 if isinstance(er, (list, tuple)) and len(er) == 2:
-                    return [float(er[0]), float(er[1])]
-    return None
+                    out["expected_range"] = [float(er[0]), float(er[1])]
+                need = exp.get("auction_amount_min_yi")
+                if isinstance(need, (int, float)) and need > 0:
+                    out["amount_need_yi"] = float(need)
+                return out
+    return {}
 
 
 def _read_jsonl(p: Path) -> list[dict]:
@@ -214,10 +222,11 @@ def cmd_record(args) -> int:
         if not row["reason"]:
             print(f"  跳过无理由决策: {code}（reason 必填·数据即事实）", file=sys.stderr)
             continue
-        # 方案 A（2026-09-17）：补写盘后预期区间 → 次日结算走同一区间门（与账户账本同源判据）
-        _er = _expected_range_of(ddate, code) if _ai_caliber else None
-        if _er:
-            row["expected_range"] = _er
+        # 方案 A / A2 / 量能门（2026-09-17）：补写盘后预期区间 + 量能目标
+        # → 次日结算走与账户账本**同一** `ai_caliber.decide`（区间门 + 量能门同源）
+        _cf = _cand_fields_of(ddate, code) if _ai_caliber else {}
+        if _cf:
+            row.update(_cf)
         _append_jsonl(DECISIONS, row)
         n += 1
         print(f"  ✓ 记录 AI 决策 {ddate} {row['name']}({code}) {row['reason'][:40]}")
@@ -299,7 +308,10 @@ def cmd_settle(args) -> int:
         #    参与 ∧ ≤5% 硬线 ∧ 落预期区间 → 成交；否则跳过（不及预期/高开太多/超线均不买）。
         #    此前此处手写 `gap > 5%`，与账户账本新增的区间门脱节 → 两轨会同票不同结论。
         if _ai_caliber is not None:
-            _can, _note, _ = _ai_caliber.decide(r, gap, expected_range=r.get("expected_range"))
+            _can, _note, _ = _ai_caliber.decide(
+                r, gap, expected_range=r.get("expected_range"),
+                auction_amount_yi=q.get("auction_amount_yi"),
+                need_yi=r.get("amount_need_yi"))
             if not _can:
                 skipped.append((code, _note))
                 continue

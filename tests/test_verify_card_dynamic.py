@@ -40,15 +40,27 @@ def test_below_expectation_gives_up():
     assert "-9.96%" in txt
 
 
-def test_super_gap_always_keeps_watch():
-    """超预期＝高开太多 → 一律「继续观察」，不分是否超 5%、⛔ 不给「可参与」（2026-09-17 用户）。"""
-    for code, gap, rng in (("002584", 7.33, [1.4, 3.4]), ("000001", 4.2, [1.0, 3.0])):
+def test_above_5pct_keeps_watch():
+    """高开太多（>5% 硬线）→「继续观察」·⛔ 不给「可参与」（A2：判据＝绝对线）。"""
+    for code, gap, rng in (("002584", 7.33, [1.4, 3.4]), ("003026", 9.99, [0.9, 2.9])):
         d = _ai_dyn_verdict(_mk(code, gap, rng))
         assert d is not None, code
         txt, color = d
-        assert "继续观察" in txt, (code, txt)
-        assert "可参与" not in txt, (code, txt)
+        assert "继续观察" in txt and "可参与" not in txt, (code, txt)
         assert color == "yellow"
+
+
+def test_below_5pct_high_open_not_mis_killed():
+    """⛔ A2 核心回归点：≤5% 的合理高开不再因「超预期区间上沿」被误杀 → 符合预期。
+
+    背景：预期区间被 `max_range_width=2.0` 钳到 2pp 宽 →「超预期」门槛实际 2~4%，
+    实证误杀 3.81%（北自科技）/3.59%（万向德农）= 14%。A2 改绝对 5% 线后恢复。
+    """
+    for code, gap, rng in (("000011", 3.81, [0.0, 2.0]), ("000012", 3.59, [0.9, 2.9]),
+                           ("000013", 4.2, [1.0, 3.0])):
+        d = _ai_dyn_verdict(_mk(code, gap, rng))
+        assert d is not None and "符合预期" in d[0], (code, gap, rng, d)
+        assert d[1] == "red"
 
 
 def test_in_range_is_as_expected():
@@ -66,11 +78,15 @@ def test_no_quote_degrades_gracefully():
     assert _ai_dyn_verdict(r) is None
 
 
-def test_no_expectation_degrades():
-    """无预期区间 → None（旧数据向后兼容）。"""
+def test_no_expectation_still_judged_by_absolute_line():
+    """A2：无预期区间仍按**绝对 5% 线**判（above 不依赖区间·不再整行省略）。"""
     r = {"code": "000004", "name": "Y", "expectation": {},
          "performance": {"open_check": {"gap_pct": 3.0}}}
-    assert _ai_dyn_verdict(r) is None
+    d = _ai_dyn_verdict(r)
+    assert d is not None and "符合预期" in d[0]
+    r2 = {"code": "000005", "name": "Z", "expectation": {},
+          "performance": {"open_check": {"gap_pct": 6.0}}}
+    assert "继续观察" in _ai_dyn_verdict(r2)[0]
 
 
 def test_ai_view_line_carries_dynamic_verdict():

@@ -118,7 +118,10 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
             # 「参与 ∧ ≤5% ∧ 落预期区间」三步裁决，与卡面动态结论同源（gap_zone）。
             can_enter, _ai_note, ai_meta = ai_caliber.decide(
                 ai_decisions.get(str(cand.get("code") or "").strip()), _gap,
-                expected_range=(cand.get("expectation") or {}).get("expected_range"))
+                expected_range=(cand.get("expectation") or {}).get("expected_range"),
+                # 量能门（2026-09-17）：红开但量能 < 目标×0.7 → 降级观察（无量高开不追）
+                auction_amount_yi=signal.get("auction_amount_yi"),
+                need_yi=signal.get("auction_amount_need_yi"))
             ai_meta["caliber"] = caliber
             ai_meta["ai_note"] = _ai_note
             ai_meta["caliber_changed"] = bool(can_enter != mech_can_enter)

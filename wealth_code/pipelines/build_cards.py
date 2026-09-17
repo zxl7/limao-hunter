@@ -971,19 +971,52 @@ def _stock_hl_boards(it: dict, color: str = "purple") -> str:
     return _hl(f"{it.get('name', '')}({it.get('code', '')}){score_txt}{_boards_txt(it)}", color)
 
 
-def _hist_gene_line(it: dict) -> str:
-    """历史涨停基因行（2026-09-09 用户「历史涨停因子很重要·要加进卡里」·eod 卡常驻渲染）：
-    读 cache/zt_genes/hist_{code}.json（新浪不复权日K自算·6年窗·scripts/zt_genes.py hist 产出）。
-    档案存在 → 返回灰字基因行（250日涨停次数·历史最长板·晋级率·首板次日高开）；
-    档案缺失（未预生成/抓取失败）→ 返回 "" 诚实省略，不硬凑不报错。"""
-    code = str(it.get("code") or "")
-    if len(code) != 6:
-        return ""
-    p = ROOT.parent / "cache" / "zt_genes" / f"hist_{code}.json"
+# ── 股性档阈值（2026-09-17 用户「股性定选谁」落地·可逆常量）──────────────
+GENE_HABITUAL_MIN = 40.0   # 历史晋级率 ≥40% → 惯犯（接力强·优先）
+GENE_WEAK_MAX = 15.0       # 历史晋级率 <15%  → 偶犯（接力弱·降级）
+
+
+def _load_hist_gene(code: str) -> dict:
+    """读该票历史涨停基因档案（cache/zt_genes/hist_{code}.json）；缺失 → {}。"""
+    if len(str(code)) != 6:
+        return {}
     try:
-        g = json.loads(p.read_text(encoding="utf-8"))
+        return json.loads((ROOT.parent / "cache" / "zt_genes" / f"hist_{code}.json")
+                          .read_text(encoding="utf-8"))
     except Exception:
-        return ""
+        return {}
+
+
+def _gene_grade(g: dict) -> tuple[str, str]:
+    """股性档（惯犯 / 普通 / 偶犯）—— 2026-09-17「股性定选谁」从**只展示**升级为**可判定因子**。
+
+    判据主看历史晋级率 `promo_rate_hist`（涨停次日再涨停 %）：
+      ≥40% → 惯犯（接力强·同方向内优先、可给足仓位）
+      15~40% → 普通
+      <15%  → 偶犯（接力弱·降级：仓位减半；环境弱时直接跳过）
+    返回 (档名, 颜色)；数据缺失 → ("", "")（诚实省略·不误判）。
+    """
+    pr = g.get("promo_rate_hist")
+    if pr is None:
+        return "", ""
+    try:
+        v = float(pr)
+    except (TypeError, ValueError):
+        return "", ""
+    if v >= GENE_HABITUAL_MIN:
+        return "惯犯", "red"
+    if v < GENE_WEAK_MAX:
+        return "偶犯", "green"
+    return "普通", "neutral"
+
+
+def _hist_gene_line(it: dict) -> str:
+    """历史涨停基因行（2026-09-09 用户「历史涨停因子很重要·要加进卡里」·eod/verify 卡常驻渲染）：
+    读 cache/zt_genes/hist_{code}.json（新浪不复权日K自算·6年窗·scripts/zt_genes.py hist 产出）。
+    档案存在 → 返回灰字基因行（**股性档**·250日涨停次数·历史最长板·晋级率·首板次日高开）；
+    档案缺失（未预生成/抓取失败）→ 返回 "" 诚实省略，不硬凑不报错。
+    ⚠️ 2026-09-17：新增「股性档（惯犯/普通/偶犯）」，供 AI 判定与人工速读（`_gene_grade`）。"""
+    g = _load_hist_gene(str(it.get("code") or ""))
     zt = g.get("zt_250")
     if zt is None:
         return ""
@@ -992,8 +1025,10 @@ def _hist_gene_line(it: dict) -> str:
     fpo = g.get("first_prem_open_hist")
     prs = "—" if pr is None else f"{float(pr):.0f}%"
     fpos = "—" if fpo is None else f"{float(fpo):+.2f}%"
+    grade, _color = _gene_grade(g)
+    gt = f"（{grade}）" if grade else ""
     # 口径（2026-09-09 双源验证统一）：涨停次数/晋级/首板高开=近250交易日窗；最长板=全历史
-    return (f"　　<font color='grey'>📈 历史基因｜近一年{zt}次涨停·晋级{prs}·"
+    return (f"　　<font color='grey'>📈 历史基因{gt}｜近一年{zt}次涨停·晋级{prs}·"
             f"首板高开{fpos}｜历史最长{mb}板</font>")
 
 
@@ -1146,9 +1181,8 @@ def _ai_dyn_verdict(it: dict) -> tuple[str, str] | None:
     if _zone == "below":
         return (f"→ 今日竞价{g}·不及预期 → 放弃", "green")
     if _zone == "above":
-        # 2026-09-17 用户「不要提示可参与、提示观察，因为高开太多」——
-        # 超预期＝高开超预期区间＝高开太多 → 一律「继续观察」（不给「可参与」）。
-        return (f"→ 今日竞价{g}·高开超预期·高开太多 → 继续观察", "yellow")
+        # 2026-09-17 A2：above ＝ **绝对高开太多**（gap > 5% 用户硬线），非「超模型区间」。
+        return (f"→ 今日竞价{g}·高开太多（超5%上限）→ 继续观察", "yellow")
     return (f"→ 今日竞价{g}·符合预期", "red")
 
 

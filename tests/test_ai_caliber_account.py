@@ -166,19 +166,35 @@ def test_record_ai_kk993_no_longer_gives_up_at_454():
 
 
 def test_record_ai_zone_above_blocks_super_gap():
-    """方案 A（2026-09-17 用户「A 计划」）：竞价**高于预期区间**（高开太多）→ 不买。
+    """方案 A + A2：竞价**高开太多（>5% 硬线）** → 不买（观察）。
 
-    与卡面「🤖 AI 判断：观察 → 高开超预期·高开太多 → 继续观察」同源（`gap_zone`）。
+    与卡面「🤖 AI 判断：观察 → 今日竞价X%·高开太多（超5%上限）→ 继续观察」同源（`gap_zone`）。
     实证 09-17 西陇科学(002584) 预期[1.4,3.4] 竞价+7.33% → 当日收 -0.31%（高开低走）。
     """
-    rec = pv._build_record(_cand("000993", exp=(1.0, 3.0)), _q(13.88, 4.54), 15.27,
+    rec = pv._build_record(_cand("000993", exp=(1.0, 3.0)), _q(13.88, 7.33), 15.27,
                            date10="2026-09-11",
                            ai_decisions={"000993": _dec("participate", 2.0)})
     oc = rec["performance"]["open_check"]
-    assert oc["can_enter"] is False                     # 超预期 → 不买（观察）
+    assert oc["can_enter"] is False                     # 高开太多 → 不买（观察）
     assert oc["zone"] == "above"
-    assert "高于预期区间" in oc["ai_note"]
+    assert "超过 5%" in oc["ai_note"]
     assert rec["performance"]["next_day"]["status"] == "skipped"
+
+
+def test_record_ai_zone_ok_below_5pct_not_mis_killed():
+    """⛔ A2 核心回归点：≤5% 的合理高开**不再**因「超区间上沿」被误杀 → 成交。
+
+    背景：原判据「超预期区间上沿就观察」受 `max_range_width=2.0` 钳制（区间仅 2pp），
+    把 3.81%（北自科技）/ 3.59%（万向德农）这类 ≤5% 高开拦成观察 → 误杀率 14%。
+    A2 改为绝对 5% 线后，此类票恢复成交。
+    """
+    rec = pv._build_record(_cand("000993", exp=(0.0, 2.0)), _q(13.88, 3.81), 15.27,
+                           date10="2026-09-11",
+                           ai_decisions={"000993": _dec("participate", 2.0)})
+    oc = rec["performance"]["open_check"]
+    assert oc["zone"] == "ok"
+    assert oc["can_enter"] is True                      # ≤5% → 可买（修复误杀）
+    assert rec["performance"]["next_day"]["status"] == "covered"
 
 
 def test_record_ai_vetoes_mechanical_buy():
