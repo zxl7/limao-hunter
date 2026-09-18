@@ -331,13 +331,17 @@ def _flatten_candidates(candidates: Any) -> list[dict]:
 
 
 def _valve_reason(c: dict, gap: float, boards: Any) -> str:
-    """逃生阀放行理由（**大白话**·过 card_copy_rules 门禁：禁身位/梯队/龙一/研判等黑话）。"""
+    """逃生阀放行理由（**大白话**·过 card_copy_rules 门禁：禁身位/梯队/龙一/研判等黑话）。
+
+    ⏱️ 时点口径（2026-09-18）：定调是**昨日收盘**定的、竞价是**今日**开的 —— 两个时点必须分开写，
+    ⛔ 禁把「昨日定的空仓」写成「今天是空仓日」（次日读卡会被读成当日结论）。
+    """
     th = str(c.get("theme_name") or c.get("theme") or "").strip()
     mates = c.get("theme_mates_cnt")
     _b = f"{int(boards)}板" if isinstance(boards, (int, float)) and boards else "首板"
     _dir = f"{th}方向" if th else "这个方向"
     _mate = f"、同方向还有 {int(mates)} 家" if isinstance(mates, (int, float)) and mates else ""
-    return (f"今天是空仓日，但它开在 {gap:+.2f}% 并且有量，是{_dir}里板数最高的一只"
+    return (f"昨日收盘定的是空仓，但它今日开在 {gap:+.2f}% 并且有量，是{_dir}里板数最高的一只"
             f"（{_b}{_mate}）→ 只买一小笔试错")
 
 

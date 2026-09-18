@@ -183,7 +183,7 @@ def test_verify_card_risk_not_inline_and_narrative_multiline(monkeypatch):
     blocks = _blocks(card)
     heads = [b for b in blocks if b.startswith("✅")]
     assert heads and all("⚠️" not in h for h in heads), heads      # 标题行无内联风险
-    narr = [b for b in blocks if "今日走势" in b]
+    narr = [b for b in blocks if "昨日走势" in b]
     assert narr and len(_lines(narr[0])) >= 4, narr
 
 

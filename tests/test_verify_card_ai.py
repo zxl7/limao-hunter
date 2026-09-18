@@ -41,7 +41,7 @@ def test_verify_card_has_hist_gene(monkeypatch):
     card = bc.build_verify_card(_vr("2099-01-01", [_rec("000759", "中百集团", "buy", 0.4)]))
     s = _text(card)
     assert "📈 历史基因" in s and "近一年" in s      # 2026-09-10 白话化：近250日→近一年
-    assert "🤖 AI 判断" not in s          # 无 AI 视图 → 不占位（诚实）
+    assert "🤖 AI 昨日判断" not in s          # 无 AI 视图 → 不占位（诚实）
 
 
 def test_verify_card_has_ai_view(monkeypatch, tmp_path):
@@ -59,8 +59,8 @@ def test_verify_card_has_ai_view(monkeypatch, tmp_path):
     card = bc.build_verify_card(_vr("2099-01-02", [_rec("000759", "中百集团", "buy", 0.4),
                                                    _rec("000930", "中粮科技", "pending", 2.2)]))
     s = _text(card)
-    assert "🤖 AI 判断：放弃" in s and "冰点中位断板风险" in s
-    assert "🤖 AI 判断：参与" in s
+    assert "🤖 AI 昨日判断：放弃" in s and "冰点中位断板风险" in s
+    assert "🤖 AI 昨日判断：参与" in s
 
 
 def test_verify_card_no_data_graceful(monkeypatch, tmp_path):
@@ -70,7 +70,7 @@ def test_verify_card_no_data_graceful(monkeypatch, tmp_path):
     monkeypatch.setattr(bc, "ROOT", tmp_path / "wealth_code")
     card = bc.build_verify_card(_vr("2099-01-03", [_rec("888888", "不存在", "reject", -1.0)]))
     s = _text(card)
-    assert "📈 历史基因" not in s and "🤖 AI 判断" not in s
+    assert "📈 历史基因" not in s and "🤖 AI 昨日判断" not in s
     assert card["elements"]
 
 
@@ -96,7 +96,7 @@ def test_verify_card_reject_section_has_gene_and_ai(monkeypatch, tmp_path):
     s = _text(card)
     assert "其余没达标" in s
     assert "📈 历史基因" in s and "近一年" in s      # 2026-09-10 白话化：近250日→近一年
-    assert "🤖 AI 判断：放弃" in s and "首板魔咒" in s
+    assert "🤖 AI 昨日判断：放弃" in s and "首板魔咒" in s
 
 
 def test_boards_txt_and_stock_label():
@@ -309,7 +309,7 @@ def test_eod_mid_carry_line_no_jargon():
     assert hit == [], f"eod 卡残留术语 {hit}"
 
 
-# ── 2026-09-11：竞价卡「🤖 AI 今日买入计划」段 ──
+# ── 2026-09-11：竞价卡「🤖 AI 昨日买入计划」段 ──
 # 用户需求原话：「AI 在每天 9:25 竞价的时候，在那张卡片里面要告诉我今天买什么，
 # 然后我们再来统计它的收益。不要因为我的买动，而是要 AI 做出它自己的买入和操作方向。」
 # 机制：AI 昨日盘后写 ai_view（stance/direction + views）→ 次日卡上按竞价 gap 判成交 + 展示 AI 独立轨成绩。
@@ -319,7 +319,7 @@ _PLAN_BAD = ["已结算", "样本", "承接", "孤军", "弱转强", "容量核�
 
 
 def test_verify_card_ai_plan_block(monkeypatch, tmp_path):
-    """有 ai_view（含攻守定调）→ 渲染「🤖 AI 今日买入计划」：买到/没买到 + 其余不买 + 战绩。"""
+    """有 ai_view（含攻守定调）→ 渲染「🤖 AI 昨日买入计划」：买到/没买到 + 其余不买 + 战绩。"""
     monkeypatch.setattr(bc, "_core_reversal_block", lambda: None)
     monkeypatch.setattr(bc, "_nav_drawdown_block", lambda m: None)
     d = tmp_path / "cache"
@@ -342,11 +342,11 @@ def test_verify_card_ai_plan_block(monkeypatch, tmp_path):
     r3 = _rec("603421", "鼎信通讯", "reject", 1.2)
     r3["boards"] = 3
     s = _text(bc.build_verify_card(_vr("2099-02-01", [r1, r2, r3])))
-    assert "🤖 AI 今日买入计划" in s and "01-30" in s       # 决策日（execution-1）显式标注
+    assert "🤖 AI 昨日买入计划" in s and "01-30" in s       # 决策日（execution-1）显式标注
     assert "只做最强的一只" in s and "电力/绿电" in s and "市场不冷不热" in s
     assert "买入" in s and "高开5%以内" in s               # 000993 竞价+2.10% ≤ 5% → 买到
     assert "没买到" in s and "高开超5%" in s               # 000823 竞价+6.80% > 5% → 没买到
-    assert "其余 1 只今天不买" in s and "鼎信通讯" in s
+    assert "其余 1 只昨日没有安排买" in s and "鼎信通讯" in s
     assert "还没开始记账" in s                            # 无 AI 轨账本 → 诚实不编造
     hit = [b for b in _PLAN_BAD if b in s]
     assert hit == [], f"AI 买入计划段残留术语: {hit}"
@@ -479,7 +479,7 @@ def test_ai_participate_count_unit():
 
 
 # ── 2026-09-15 用户「个股下的话术重复了」：同源 reason 禁两处渲染 ──
-# 背景：`views[code].reason` 被「🤖 AI 今日买入计划」块（买入票）+ 个股段
+# 背景：`views[code].reason` 被「🤖 AI 昨日买入计划」块（买入票）+ 个股段
 # `_ai_view_line`（🤖 AI 判断行）各渲染一次 → 同一段逐字重复。
 # 09-15 超声电子(000823) 实证：整卡扫描该段 4 句全部 x2（唯一逐字重复项）。
 # 修复：计划块仅在**下方不会渲染该票 AI 判断行**时才补出理由（信息不丢）。
@@ -495,7 +495,7 @@ def test_ai_reason_rendered_once(monkeypatch, tmp_path):
     monkeypatch.setattr(bc, "ROOT", tmp_path / "wealth_code")
     r = _rec("000823", "超声电子", "buy", 1.63)      # decision_status=buy → 个股段渲染 AI 判断行
     s = _text(bc.build_verify_card(_vr_buys("2099-04-01", [r], 1)))
-    assert "🤖 AI 今日买入计划" in s and "电子布涨价链最强" in s
+    assert "🤖 AI 昨日买入计划" in s and "电子布涨价链最强" in s
     assert s.count("电子布涨价链最强") == 1, "同源 AI 理由被重复渲染（计划块 + 个股段）"
 
 

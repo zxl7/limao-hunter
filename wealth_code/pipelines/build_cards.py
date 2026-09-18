@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import json
+import re as _re
 import subprocess
 import time
 from datetime import datetime, timedelta
@@ -485,7 +486,7 @@ def _today_open_read(rows: list[dict]) -> str:
         tag = "开盘偏弱"
     else:
         tag = "开盘分化"
-    return f"今天开盘：这 {n} 只里 {up} 只高开、{dn} 只低开，平均 {avg:+.2f}%（{tag}）"
+    return f"今日开盘：这 {n} 只里 {up} 只高开、{dn} 只低开，平均 {avg:+.2f}%（{tag}）"
 
 
 def _load_zt_snapshot() -> dict | None:
@@ -690,6 +691,34 @@ _NARR_LABEL_ALIAS = {
 _NARR_LINE_TARGET = 56          # 单行目标字数（折行阈值 = 56×1.35 ≈ 76 字）
 _NARR_SEG_ORDER = ("今日走势", "题材催化", "历史股性", "⚠️ 风险")
 
+# ── 时点词平移（2026-09-18 用户「毕竟是上一个交易日的结论·不要用『今日』·改成『昨日』」）──
+# 病灶（实测 09-18 09:26 竞价卡）：卡片把上一交易日盘后写的文案（个股点评 / AI 判断理由 /
+#   全局旁白 / AI 买入选票）原样搬到次日读——文案里的「今天」指撰写当天，读者却读成当天。
+#   最刺眼的一处：🗣️ 已标「（09-17 周四收盘盘面）」，正文却写「**今日盘面**：今天市场明显转冷」，
+#   而 09-18 实际是转暖日（78 家涨停）→ 同卡自相矛盾。
+# 口径（**唯一规则**）：
+#   · 产出端一律按「撰写当日」视角写相对时间词（今天＝撰写当天、明天＝撰写次一交易日）；
+#   · 渲染端在「撰写日 ≠ 读卡日」（跨日复用）时统一 +1 天平移 —— 今天→昨天、昨天→前天、
+#     明天→今天。当日卡（盘后 eod / 接力卡）不平移，保持原样。
+#   · ⛔ 单次扫描替换，禁级联（否则「今天→昨天」会被二次替换成「前天」）。
+#   · 「昨日/今日」为**时点标签**用词（AI 结论段 + 段名），当日实况读数一律「今日」。
+_DAY_SHIFT_PAIRS = (("今天", "昨天"), ("今日", "昨日"),
+                    ("明天", "今天"), ("明日", "今日"),
+                    ("昨天", "前天"), ("昨日", "前日"))
+_DAY_SHIFT_MAP = dict(_DAY_SHIFT_PAIRS)
+_DAY_SHIFT_RE = _re.compile("|".join(_re.escape(_k) for _k, _ in _DAY_SHIFT_PAIRS))
+
+
+def _shift_day_words(text: str) -> str:
+    """相对时间词 +1 天平移（跨日复用文案：上一交易日撰写 → 次日读卡）。
+
+    无时点词 → 原样返回（零副作用）。⚠️ 只用于**渲染出口**，⛔ 禁用于写盘/落库。
+    """
+    s = str(text or "")
+    if not s:
+        return s
+    return _DAY_SHIFT_RE.sub(lambda m: _DAY_SHIFT_MAP[m.group(0)], s)
+
 
 def _narr_label_of(text: str) -> tuple[str | None, str]:
     """解析「段名：正文」→ (规范段名, 正文)；段名不在白名单 → (None, 原文)。"""
@@ -764,6 +793,12 @@ def _narr_segments(narrative) -> list[tuple[str, str]]:
         return []
     rows = [c.strip() for c in s.split("\n") if c.strip()]
     if len(rows) <= 1:
+        # 单段文本：先按「段名：正文」认白名单段名（2026-09-18）——全局旁白若被写成单段
+        # 「盘面：今天市场…」，也必须认成**盘面段**，否则会退化成「今日走势」而无法随跨日平移
+        # 成「昨日盘面」；认不出段名才走锚点启发式（存量点评 blob 走这条）。
+        lab, body = _narr_label_of(s)
+        if lab and body:
+            return [(lab if i == 0 else "", ln) for i, ln in enumerate(_narr_wrap(body))]
         return _narr_heuristic(s)          # 单段存量文本 → 锚点启发式
     out: list[tuple[str, str]] = []
     for c in rows:                          # agent 已显式分段：逐行取「段名：正文」
@@ -803,9 +838,13 @@ def _narr_basis_label(narr_date: str | None, session_date: str | None) -> str:
     return f"（{d.strftime('%m-%d')} {_WEEKDAY_CN[d.weekday()]}收盘盘面）"
 
 
-def _narr_render(narrative, indent: str = "　　") -> str:
+def _narr_render(narrative, indent: str = "　　", *, prev: bool = False) -> str:
     """点评 → 语义分段的 lark_md 多行文本（段名加粗 / 风险段 turquoise 标签置尾）。
 
+    prev: 文案**撰写日 ≠ 读卡日**（跨日复用 —— 竞价卡的点评/旁白/AI 理由都写于上一交易日
+          盘后）→ 段名与正文统一 +1 天平移（今日走势→昨日走势、今天→昨天），
+          使「上一交易日的结论」在次日卡上读作「昨日」。⛔ 当日卡（盘后 eod / 接力卡）保持
+          默认 False，文案原样上卡。
     返回 "" 表示无点评（诚实省略，不占位不编造）。
     """
     segs = _narr_segments(narrative)
@@ -814,6 +853,9 @@ def _narr_render(narrative, indent: str = "　　") -> str:
         body = str(body or "").strip()
         if not body:
             continue
+        if prev:                                   # 跨日复用：时点词 +1 天（段名 + 正文）
+            lab = _shift_day_words(lab)
+            body = _shift_day_words(body)
         if lab == "⚠️ 风险":
             lines.append(f"{indent}<text_tag color='turquoise'>⚠️ 风险</text_tag>：{body}")
         elif lab:
@@ -1185,7 +1227,9 @@ _AI_STANCE_FALLBACK = {
     "attack": "环境允许·正常做",
     "selective": "只做最强的一两只",
     "defend": "只观察·不主动出手",
-    "hibernate": "空仓待命·今天不买",
+    # ⛔ 时点（2026-09-18）：定调写于上一交易日盘后 → 标签里**不写「今天」**（时点由
+    #    「AI 昨日判断：」前缀承担），否则次日卡上「今天不买」会被读成当日结论。
+    "hibernate": "空仓待命·不买",
 }
 
 
@@ -1251,23 +1295,31 @@ def _ai_view_line(it: dict, ai_view: dict) -> str:
     if _dyn and view != "participate" and "放弃" in _dyn_txt:
         txt = f"　　🤖 <text_tag color='{_dyn[1]}'>{_dyn_txt.lstrip('→ ').strip()}</text_tag>"
     else:
-        txt = f"　　<text_tag color='{color}'>🤖 AI 判断：{label}</text_tag>"
+        # 时点标签（2026-09-18）：AI 的 view/reason 写于**上一交易日盘后** → 显式标「昨日判断」，
+        # 与紧随其后的「→ 今日竞价…」动态结论形成两个时点，⛔ 禁写「AI 今日判断」。
+        txt = f"　　<text_tag color='{color}'>🤖 AI 昨日判断：{label}</text_tag>"
         if _dyn:
             txt += f" <text_tag color='{_dyn[1]}'>{_dyn[0]}</text_tag>"
     if reason and not it.get("narrative"):
         # 理由语义分段（2026-09-11）：依据一行、⚠️风险独立末行（不再一整段连写）
-        txt += "\n" + _narr_render(reason)
+        # prev=True：理由写于上一交易日盘后 → 时点词平移（今天→昨天），见 `_shift_day_words`。
+        txt += "\n" + _narr_render(reason, prev=True)
     return txt
 
 
 def _ai_plan_block(raw: dict, records: list[dict]) -> list[dict]:
-    """🤖 AI 今日买入计划（2026-09-11 用户「竞价卡要告诉我今天买什么，并统计 AI 自己的收益」）。
+    """🤖 AI 昨日买入计划（2026-09-11 立项·2026-09-18 时点口径修正）。
 
-    数据源 cache/ai_view_{trade_date}.json —— AI 在**昨日盘后**自定（不看今日盘面，
+    用户原话（2026-09-11）：「竞价卡要告诉我今天买什么，并统计 AI 自己的收益」。
+    ⛔ 时点（2026-09-18）：「毕竟是上一个交易日的结论」——标题写**昨日**买入计划，
+    段内所有时点词按「撰写日→读卡日」+1 天平移（今天→昨天），
+    只保留「今日竞价」指代当日实况读数（见 `_shift_day_words`）。
+
+    数据源 cache/ai_view_{trade_date}.json —— AI 在**上一交易日盘后**自定（不看今日盘面，
     故不存在用未来信息作弊）：
       · stance/stance_label/direction/note → 攻守定调与方向
       · views[code].view → participate 买入 / watch 观察 / skip 放弃 + reason + entry_max_gap
-    成交判定：取当日竞价 gap_pct 与 AI 自定的入场上限比较 → 买到 / 没买到（高开超上限·诚实标注）。
+    成交判定：取当日竞价 gap_pct 与**用户 5% 硬线**比较 → 买到 / 没买到（高开超上限·诚实标注）。
     收益：AI 独立轨 ai_nav_history.jsonl 聚合；⛔ 不写 holdings、与真人持仓无关（观点层）。
     """
     views = raw.get("views") or {}
@@ -1291,7 +1343,7 @@ def _ai_plan_block(raw: dict, records: list[dict]) -> list[dict]:
     others: list[str] = []
     # 🚪 hibernate 竞价逃生阀（2026-09-18 用户拍板「A」）：AI 判「观察」但因
     #    「带量转强 ∧ 方向内板数最高」被**当日唯一**放行小仓试错的票 —— 必须与普通买入
-    #    **同列展示**，否则卡面会出现「AI 今天没有要买的」却在持仓/账本里真有成交
+    #    **同列展示**，否则卡面会出现「AI 昨日没有要买的」却在持仓/账本里真有成交
     #    （自相矛盾·2026-09-18 用户刚批评过同类「观察又说放弃」打架）。
     valve_codes = {str(r.get("code") or "") for r in records
                    if ((r.get("performance") or {}).get("open_check") or {}).get("hibernate_valve")}
@@ -1306,23 +1358,27 @@ def _ai_plan_block(raw: dict, records: list[dict]) -> list[dict]:
             others.append(str(_r.get("name") or _v.get("name") or _code))
 
     blocks: list[dict] = [_div(
-        f"**🤖 AI 今日买入计划**<font color='grey'>（{mmdd} 盘后定·今天竞价定成交）</font>"
+        # ⛔ 时点（2026-09-18 用户「毕竟是上一个交易日的结论·不要用今日·改成昨日」）：
+        #    这份计划由**上一交易日盘后**定死，⛔ 标题禁写「AI 今日买入计划」；
+        #    括注同时交代两个时点：昨日（盘后定）↔ 今日（竞价定成交）。
+        f"**🤖 AI 昨日买入计划**<font color='grey'>（{mmdd} 盘后定 · 今日竞价定成交）</font>"
     )]
     head = []
     if stance_label:
-        head.append(f"AI 判断：{stance_label}")
+        head.append(f"AI 昨日判断：{stance_label}")   # ⛔ 禁写「AI 判断」（无时点会被读成当日）
     if direction:
         head.append(f"方向：{direction}")
     if head:
         blocks.append(_div("｜".join(head)))
     if note:
-        blocks.append(_div(f"<font color='grey'>{note}</font>"))
+        # note 由上一交易日盘后撰写 → 时点词 +1 天平移（今天→昨天），否则次日读成当日盘面。
+        blocks.append(_div(f"<font color='grey'>{_shift_day_words(note)}</font>"))
 
     if valve_codes and buys:
-        blocks.append(_div("　　<font color='grey'>⚠️ 今天本来是空仓日——只有下面这一只是破例小仓试错"
-                           "（它竞价带了量、是方向里板数最高的）</font>"))
+        blocks.append(_div("　　<font color='grey'>⚠️ 昨日收盘定的是空仓——只有下面这一只是今日竞价破例小仓试错"
+                           "（它带了量、是方向里板数最高的）</font>"))
     if not buys:
-        blocks.append(_div("<font color='grey'>今天没有要买的（AI 自己空仓）</font>"))
+        blocks.append(_div("<font color='grey'>昨日没有选出要买的（AI 自己空仓）</font>"))
     for code, v in buys:
         r = by_code.get(code) or {}
         oc = (r.get("performance") or {}).get("open_check") or {}
@@ -1360,11 +1416,13 @@ def _ai_plan_block(raw: dict, records: list[dict]) -> list[dict]:
             _oc_r = (r.get("performance") or {}).get("open_check") or {}
             _rendered_below = bool(r) and _oc_r.get("decision_status") != "unavailable"
             if not _rendered_below:
-                blocks.append(_div(_narr_render(reason)))  # 语义分段（2026-09-11·风险独立末行）
+                # prev=True：理由写于上一交易日盘后 → 时点词平移（今天→昨天）。
+                blocks.append(_div(_narr_render(reason, prev=True)))  # 语义分段（风险独立末行）
 
     if others:
         shown = "、".join(others[:8]) + ("等" if len(others) > 8 else "")
-        blocks.append(_div(f"　　<font color='grey'>其余 {len(others)} 只今天不买：{shown}</font>"))
+        # 名单来自**上一交易日盘后**的选票 → 时点必须是「昨日」，⛔ 禁写「今天不买」。
+        blocks.append(_div(f"　　<font color='grey'>其余 {len(others)} 只昨日没有安排买：{shown}</font>"))
 
     st = _load_ai_stats()
     if st:
@@ -1708,7 +1766,7 @@ def _core_reversal_block() -> list[dict]:
         rows.append(f"{name}({code}) {nb}板｜竞价 {gap:+.2f}%｜{tag}")
     if not rows:
         return []
-    return [_div("<text_tag color='neutral'>👑 昨天连板的票 · 今天竞价表现</text_tag>"),
+    return [_div("<text_tag color='neutral'>👑 昨日连板的票 · 今日竞价表现</text_tag>"),
             _div("\n".join(rows))]
 
 
@@ -1825,8 +1883,9 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
         blocks.extend(dd_blocks)
         blocks.append(_hr())
 
-    # 🤖 AI 今日买入计划（2026-09-11 用户「竞价卡要告诉我今天买什么 + 统计 AI 自己的收益」）
-    # 数据源 = 昨日盘后 AI 自定的 ai_view_{今日}.json；AI 决策先于竞价 → 无非公开信息
+    # 🤖 AI 昨日买入计划（2026-09-11 立项「竞价卡要告诉我今天买什么 + 统计 AI 自己的收益」；
+    # 2026-09-18 时点口径修正：计划由上一交易日盘后定 → 标题与段内时点词统一为「昨日」）
+    # 数据源 = 上一交易日盘后 AI 自定的 ai_view_{今日}.json；AI 决策先于竞价 → 无非公开信息
     blocks.extend(_ai_plan_block(_ai_raw, records))
 
     # 👑 核心弱转强（昨日连板核心·今日竞价·2026-08-14 用户定·情绪核心战法）
@@ -1890,14 +1949,14 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
             if _ai:
                 blocks.append(_div(_ai))
             if r.get("narrative"):
-                blocks.append(_div(_narr_render(r["narrative"])))   # 语义分段（2026-09-11）
+                blocks.append(_div(_narr_render(r["narrative"], prev=True)))   # 语义分段·跨日平移（09-18）
         blocks.append(_hr())
     else:
         # 机械参考无达标票。若 AI 口径另有成交，卡头 🤖 AI 计划段已逐票给出
         # （2026-09-14 口径统一后本段只陈述机械面，避免与 AI 段互相打脸）。
         blocks.append(_div(
-            "⚪ 机械参考：今天没有票达标（买不买看上面的 🤖 AI 计划）。" if ai_caliber
-            else "⚠️ 今天没有能买的信号——空仓，或者只看不动。"))
+            "⚪ 机械参考：今日没有票达标（买不买看上面的 🤖 AI 计划）。" if ai_caliber
+            else "⚠️ 今日没有能买的信号——空仓，或者只看不动。"))
         blocks.append(_hr())
 
     # ⛔ 冰点命中票（2026-08-19 用户定·P1-6 语义澄清）：regime=ice 时 buy→hit，
@@ -1915,7 +1974,7 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
         _ys_txt = (f"做多气氛{float(_ys):.0f}分" if isinstance(_ys, (int, float))
                    else "做多气氛≤2分")
         blocks.append(_div(
-            f"<text_tag color='red'>⛔ 空仓待命（昨天收盘定的：{_ys_txt}·市场很冷）</text_tag>"))
+            f"<text_tag color='red'>⛔ 空仓待命（昨日收盘定的：{_ys_txt}·市场很冷）</text_tag>"))
         _open_read = _today_open_read(records)
         if _open_read:
             blocks.append(_div(f"　　<font color='grey'>{_open_read}</font>"))
@@ -1986,7 +2045,7 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
             if _ai:
                 blocks.append(_div(_ai))
             if r.get("narrative"):
-                blocks.append(_div(_narr_render(r["narrative"])))   # 语义分段（2026-09-11）
+                blocks.append(_div(_narr_render(r["narrative"], prev=True)))   # 语义分段·跨日平移（09-18）
         blocks.append(_hr())
 
     # 其余未达标（reject：涨幅或量能不达标 → 灰色简列）
@@ -2060,12 +2119,18 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
     # 全局拟人旁白（随 verify_result 传入；2026-08-13 拆行 → 2026-09-11 语义分段，与盘后卡一致）
     # 盘面基准日标注（2026-09-14）：旁白透传自上一交易日的候选文件 → 显式标明基准日，防止把
     # 上一交易日收盘盘面读成当日盘面（用户口径：用上一交易日的即可，不必重取当日数据）。
+    # ⏱️ 时点平移（2026-09-18）：旁白撰写日 ≠ 读卡日时，正文时点词也要跟着平移 —— 否则出现
+    #    「（09-17 周四收盘盘面）… **今日盘面**：今天市场明显转冷」这种**同卡自相矛盾**
+    #    （09-18 实证：那天其实转暖、78 家涨停）。判据 = 基准日标注是否非空（非空 ⇒ 跨日）。
     gn = verify_result.get("global_narrative")
     if gn:
-        _gn_body = _narr_render(gn).strip()
+        _sum = verify_result.get("summary") or {}
+        # 撰写日：优先 narrative_date（当日 --narratives 注入时由 run_wealth_code 显式写），
+        # 否则回落到候选文件日期（= 上一交易日盘后撰写）。
+        _narr_d = verify_result.get("narrative_date") or _sum.get("date10")
+        _lbl = _narr_basis_label(_narr_d, _sum.get("trade_date10"))
+        _gn_body = _narr_render(gn, prev=bool(_lbl)).strip()
         if _gn_body:
-            _sum = verify_result.get("summary") or {}
-            _lbl = _narr_basis_label(_sum.get("date10"), _sum.get("trade_date10"))
             blocks.append(_div(f"🗣️ **全局**{_lbl}\n{_gn_body}"))
 
     # 未达标个股点评：⛔ 2026-08-14 用户要求底部不显示「点评」块，已删除（其余未达标行已含简列）
@@ -2111,7 +2176,6 @@ def push_card_file(card: dict, *, webhook: str | None = None, dry_run: bool = Fa
 #    的 market_context（仅 post-9:26 可用，盘前若 null 诚实标"待9:26更新"，严禁编造）。
 # ③ 隐私：群推卡禁止读取 cache/holdings.json、禁止在 card 任何位置出现个股持仓/仓位。
 # ④ 语言一致性：模块顺序/标题/页脚固定，保证每次输出结构一致。
-import re as _re
 _STOCK_CODE_RE = _re.compile(r"\d{6}")
 
 

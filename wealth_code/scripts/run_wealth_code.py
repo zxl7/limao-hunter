@@ -271,6 +271,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
         _, g = _load_narratives(args.narratives)
         if g:
             res["global_narrative"] = g  # 竞价验证卡全局 🗣️ 由 agent 产出
+            # ⏱️ 撰写日留痕（2026-09-18）：agent 是**当日开盘前**写的这份旁白（内容讲昨收盘面、
+            #    操作讲今日），与「透传上一交易日盘后旁白」分属两种基准 → 显式标当日，
+            #    渲染层据此判定**不做时点平移**（`build_cards._narr_basis_label` 日期一致 ⇒ 空标注、
+            #    不平移）。⛔ 不写这个字段会被误当成上一交易日旁白而整体 +1 天平移。
+            res["narrative_date"] = res["summary"].get("trade_date10") or datetime.now(BJ_TZ).strftime("%Y-%m-%d")
     if args.push:
         # ⛔ 竞价守卫（2026-08-19 用户发现 09:20 提前推无效卡）：
         #   1) 当前北京时间早于 09:25:30（竞价撮合定价前）→ 不推，只记录
