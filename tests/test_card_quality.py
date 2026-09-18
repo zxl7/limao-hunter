@@ -53,10 +53,25 @@ def test_struct_values_not_treated_as_text(tmp_path):
 
 
 def test_jargon_detected(tmp_path):
-    """黑话禁项 → 报（复盘卡未走 build_cards·本项是唯一自动防线）。"""
-    p = _write(tmp_path, {"title": "T", "elements": [_div("今天市场很亢奋，梯队完整，承接不错")]})
+    """黑话检测分级（2026-09-18 词表单一源 + 两级化）：
+    Tier-1 机器黑话 → `jargon`（真问题）；Tier-2 行业术语 → `jargon_warn`（提示）；
+    情绪周期体系词（亢奋/退潮/冰点）→ 均不报（用户体系语汇·保留）。"""
+    p = _write(tmp_path, {"title": "T", "elements": [
+        _div("今天市场很亢奋，梯队完整，承接不错"),
+        _div("盘面状态 regime=ice"),
+    ]})
     r = cq.check_card(p)
-    assert "亢奋" in r["jargon"] and "梯队" in r["jargon"] and "承接" in r["jargon"]
+    assert "regime=" in r["jargon"]                            # Tier-1 真问题
+    assert {"梯队", "承接"} <= set(r["jargon_warn"])            # Tier-2 提示
+    assert "亢奋" not in r["jargon"] and "亢奋" not in r["jargon_warn"]
+
+
+def test_module_label_exempt_body_word_caught(tmp_path):
+    """模块名 `🧠 AI综合研判` 豁免；正文裸 `研判` 仍计入 Tier-2。"""
+    p = _write(tmp_path, {"title": "T", "elements": [
+        _div("**🧠 AI综合研判**"), _div("盘面状态｜研判 1/10")]})
+    r = cq.check_card(p)
+    assert "研判" in r["jargon_warn"]
 
 
 def test_clean_card_no_issue(tmp_path):

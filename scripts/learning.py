@@ -447,8 +447,9 @@ def _factor_attr_stats() -> dict | None:
 def _card_quality_stats(days: int = 3) -> dict | None:
     """R7 数据源：**卡面质量自检**（2026-09-18 用户「做上去」·B 项）。
 
-    调用 `scripts/card_quality_check.py --json --days N`，取近 N 天卡的
-    重复文案 / 黑话禁项 / 结构异常。无问题 → None（不触发）。
+    调用 `scripts/card_quality_check.py --json --days N`，取**门禁生效日后**生成卡的
+    重复文案 / 机器黑话（Tier-1 真问题）/ 行业术语（Tier-2 措辞提示）/ 结构异常。
+    两类都进建议（措辞提示虽不阻断推送，但正是「卡面白话化」要持续收敛的部分）。
     ⛔ 只读：自检脚本本身不改卡，本规则也只出建议（语义类）。
     """
     import subprocess
@@ -461,7 +462,7 @@ def _card_quality_stats(days: int = 3) -> dict | None:
         d = json.loads(r.stdout)
     except Exception:
         return None
-    if not isinstance(d, dict) or not d.get("issues"):
+    if not isinstance(d, dict) or (not d.get("issues") and not d.get("hinted")):
         return None
     return d
 

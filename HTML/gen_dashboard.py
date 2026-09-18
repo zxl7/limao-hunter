@@ -2210,7 +2210,7 @@ def render_nuke_alert(d, fb):
         if breakdown:
             tag = '<span class="warn" style="color:var(--down);font-weight:700">真破位</span>'
         elif b5:
-            tag = '<span class="stat">破MA5·分歧</span>'
+            tag = '<span class="stat">破5日线·分歧</span>'
         elif b10:
             tag = '<span class="stat">破MA10</span>'
         else:

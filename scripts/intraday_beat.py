@@ -129,7 +129,7 @@ def build_beat_card() -> tuple[dict, dict]:
         "title": f"📡 定时巡查 {hhmm} | 涨停{total} · 无新异动",
         "color": "grey",
         "config": {"wide_screen_mode": True},
-        "header": {"title": {"tag": "plain_text", content": f"📡 定时巡查 {hhmm} | 涨停{total} · 无新异动"}, "template": "grey"},
+        "header": {"title": {"tag": "plain_text", "content": f"📡 定时巡查 {hhmm} | 涨停{total} · 无新异动"}, "template": "grey"},
         "elements": els,
     }
     state = {"total": total, "nuke": nuke, "label": label, "top3": top_names}

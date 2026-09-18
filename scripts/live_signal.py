@@ -161,7 +161,7 @@ def detect_fund_switch(latest: dict, prev: dict, sig: dict, hhmm: str) -> dict |
 
 
 def build_fund_switch_card(sw: dict, hhmm: str) -> dict:
-    """💰 资金切换卡（机器检测·非AI研判）。"""
+    """💰 资金切换卡（机器检测·非AI判断）。"""
     old_names = "、".join(sw["old_names"][:3])
     lines = [
         f"**💰 资金场内切换**：{sw['old']}退潮 → {sw['new']}承接（{hhmm}）",
@@ -173,7 +173,7 @@ def build_fund_switch_card(sw: dict, hhmm: str) -> dict:
         "<font color='turquoise'>切换确认：旧龙开板出货+新方向资金霸榜·跟随新方向承接者，旧线龙头不追</font>",
     ]
     elements = [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
-                {"tag": "note", "elements": [{"tag": "plain_text", "content": "💰 资金切换检测（机器检测·非AI研判）"}]}]
+                {"tag": "note", "elements": [{"tag": "plain_text", "content": "💰 资金切换检测（机器检测·非AI判断）"}]}]
     return {"title": f"⚡短线精灵·资金切换·{sw['old']}→{sw['new']} {hhmm}", "color": "red", "elements": elements}
 
 
@@ -672,7 +672,7 @@ def build_first_zt_card(fz: dict, sec: str, hhmm: str) -> dict:
     return {"title": f"⚡短线精灵·题材首板 {hhmm}", "color": "orange",
             "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
                          {"tag": "note", "elements": [
-                             {"tag": "plain_text", "content": f"🆕 首板提示（机器检测·非AI研判）{hhmm}"}]}]}
+                             {"tag": "plain_text", "content": f"🆕 首板提示（机器检测·非AI判断）{hhmm}"}]}]}
 
 
 _ZT_HIST_CACHE: dict = {"sig": None, "res": None}   # mtime 缓存：文件未变不重读磁盘
@@ -922,12 +922,12 @@ def build_n_shape_card(stock: dict, hist, sec_info: dict, hhmm: str,
         line,
         f"　🏷 板块：{sec}（今日涨停{zt_today}只{top}）",
         "　💡 关注：二波需放量过前高确认，量能/情绪双升才成立",
-        "　⛔ 破前波起点或 MA5 失效即离场，勿在缩量反抽中追高",
+        "　⛔ 破前波起点或 5日线 失效即离场，勿在缩量反抽中追高",
     ]
     return {"title": f"⚡短线精灵·N字二波 {hhmm}", "color": "red",
             "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
                          {"tag": "note", "elements": [
-                             {"tag": "plain_text", "content": f"🔁 N字形态监测（机器检测·非AI研判）{hhmm}"}]}]}
+                             {"tag": "plain_text", "content": f"🔁 N字形态监测（机器检测·非AI判断）{hhmm}"}]}]}
 
 
 def _reflow_name_hit(theme: str, board: str) -> bool:
@@ -988,10 +988,10 @@ def build_reflow_card(cands, hhmm: str) -> dict:
         live_tag = f"｜盘中入榜 {_lh[0]}" if _lh else ""
         lines.append(f"　<font color='purple'>▸ {theme}｜资金{trend}{live_tag}｜跟踪池 {pool}</font>")
     lines.append("")
-    lines.append("<font color='purple'>资金开始进场，留意竞价高开/龙头回踩MA5企稳的确认动作</font>")
+    lines.append("<font color='purple'>资金开始进场，留意竞价高开/龙头回踩5日线企稳的确认动作</font>")
     elements = [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}}]
     elements.append({"tag": "note", "elements": [
-        {"tag": "plain_text", "content": "🔔 回流前兆监测（机器检测·非AI研判）"}]})
+        {"tag": "plain_text", "content": "🔔 回流前兆监测（机器检测·非AI判断）"}]})
     return {"title": f"⚡短线精灵·回流前兆 {hhmm}", "color": "purple", "elements": elements}
 
 
@@ -1081,7 +1081,7 @@ def build_card(new_nf, new_zt, new_surge, new_strong, hhmm: str, new_sector=None
                 lines.append(f"　{ls}")
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}})
     elements.append({"tag": "note", "elements": [
-        {"tag": "plain_text", "content": f"⚡ 实时信号播报 {hhmm}（机器检测·非AI研判）"}]})
+        {"tag": "plain_text", "content": f"⚡ 实时信号播报 {hhmm}（机器检测·非AI判断）"}]})
     return {"title": f"⚡短线精灵·盘中异动 {hhmm}", "color": "red", "elements": elements}
 
 
@@ -1314,7 +1314,7 @@ def build_climax_card(sectors: list, hhmm: str, broken_cnt: int = 0) -> dict:
 
     提醒：主流板块涨停家数已冲到今日高点（≥已推峰值 80%）且不再往上创新高——
     最热闹的时候追进去最容易站岗（T+1 今天买明天才能卖）；炸板多时补一句
-    「封板在松动」。每天每板块最多 1 次（sig.climax_warned），机器检测非 AI 研判。
+    「封板在松动」。每天每板块最多 1 次（sig.climax_warned），机器检测非 AI 判断。
     """
     def md(*lines):
         return {"tag": "lark_md", "content": "\n".join(lines)}
@@ -1332,7 +1332,7 @@ def build_climax_card(sectors: list, hhmm: str, broken_cnt: int = 0) -> dict:
     if broken_cnt >= CLIMAX_BROKEN_HINT_N:
         lines.append(f"　今天盘中已有 {broken_cnt} 家涨停被砸开，封板在松动，追高更要小心")
     elements = [{"tag": "div", "text": md(*lines)}, {"tag": "hr"},
-                {"tag": "note", "elements": [md(f"⛔ 板块过热机器检测 | {hhmm} | 非AI研判·防站岗提示")]}]
+                {"tag": "note", "elements": [md(f"⛔ 板块过热机器检测 | {hhmm} | 非AI判断·防站岗提示")]}]
     return {"title": f"⛔ 短线精灵·板块过热 {hhmm}", "color": "orange", "elements": elements}
 
 
@@ -1399,7 +1399,7 @@ def build_sector_boost_card(sectors: list, hhmm: str, latest: dict) -> dict:
     lines.append("")
     lines.append("📈 板块级强度机器检测：涨停家数达阈值/创新高/持续爬升即报，非个股推荐")
     elements = [block(*lines), {"tag": "hr"},
-                {"tag": "note", "elements": [md(f"📡 板块强势/加强 | {hhmm} | 机器检测·非AI研判")]}]
+                {"tag": "note", "elements": [md(f"📡 板块强势/加强 | {hhmm} | 机器检测·非AI判断")]}]
     return {"title": f"📊 短线精灵·板块加强 {hhmm}", "color": "red", "elements": elements}
 
 
@@ -1407,8 +1407,8 @@ def build_nuke_card(fb: dict, hhmm: str) -> dict:
     """核按钮预警卡（分级·2026-08-07 用户标准）。
 
     破位分级：
-      - break_count>=3（核按钮中真破位=跌破MA5+MA10家数）→ 高位破位杀跌·亏钱效应恶化
-      - 否则（连板分歧回踩MA5/仍线上）→ 正常分歧，不报「回避高位接力」
+      - break_count>=3（核按钮中真破位=跌破5日线+10日线家数）→ 高位破位杀跌·亏钱效应恶化
+      - 否则（连板分歧回踩5日线/仍线上）→ 正常分歧，不报「回避高位接力」
     """
     nuke_count = fb.get("nuke_count") or 0
     break_count = fb.get("break_count") or 0
@@ -1416,20 +1416,20 @@ def build_nuke_card(fb: dict, hhmm: str) -> dict:
 
     if is_breakdown:
         title = f"⚡短线精灵·高位破位预警 {hhmm}"
-        lines = [f"**⚠️ 高位破位杀跌**·亏钱效应恶化（{break_count}只跌破MA5+MA10）："]
+        lines = [f"**⚠️ 高位破位杀跌**·亏钱效应恶化（{break_count}只跌破5日线+10日线）："]
     else:
         title = f"⚡短线精灵·连板分歧提示 {hhmm}"
-        lines = ["**⚠️ 连板分歧回踩**：昨日涨停今日大跌，但多数为连板分歧回踩MA5（仍在均线上）："]
+        lines = ["**⚠️ 连板分歧回踩**：昨日涨停今日大跌，但多数为连板分歧回踩5日线（仍在均线上）："]
 
     for n in (fb.get("nuke_list") or [])[:6]:
         tag = "昨连板" if n.get("prev_boards", 0) >= 2 else "昨涨停"
-        # 破位标记：真破位（跌破MA5+MA10）走红，否则绿（跌绿）
+        # 破位标记：真破位（跌破5日线+10日线）走红，否则绿（跌绿）
         if n.get("breakdown") is True:
             color = "red"
         else:
             color = "green"
         pos = "破位" if n.get("breakdown") is True else (
-            "破MA5" if n.get("break_ma5") is True else "仍线上")
+            "破5日线" if n.get("break_ma5") is True else "仍线上")
         lines.append(f"<font color='{color}'>{n.get('name')}({n.get('code')}) {n.get('pct')}%</font>　[{tag}·{pos}]")
     if not (fb.get("nuke_list") or []):
         lines.append("（名单缺失）")
@@ -1446,10 +1446,10 @@ def build_nuke_card(fb: dict, hhmm: str) -> dict:
     if is_breakdown:
         lines.append("<font color='red'>建议：回避高位接力，防守优先，等待亏钱效应收敛</font>")
     else:
-        lines.append("<font color='turquoise'>解读：连板分歧回踩MA5属正常调整，未见真破位杀跌；高位股仍看MA5得失，破MA5+MA10再降仓</font>")
+        lines.append("<font color='turquoise'>解读：连板分歧回踩5日线属正常调整，未见真破位杀跌；高位股仍看5日线得失，破5日线+10日线再降仓</font>")
     elements = [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}}]
     elements.append({"tag": "note", "elements": [
-        {"tag": "plain_text", "content": "⚠️ 核按钮预警（机器检测·非AI研判）"}]})
+        {"tag": "plain_text", "content": "⚠️ 核按钮预警（机器检测·非AI判断）"}]})
     return {"title": title, "color": "turquoise", "elements": elements}
 
 
@@ -1488,7 +1488,7 @@ def build_ebb_card(fb: dict, latest: dict, hhmm: str, dims: list) -> dict:
     ld = latest.get("limit_down") or {}
     bk = latest.get("broken") or {}
     lines = [f"**🌊 冰点/退潮环境**：情绪 <font color='green'>{score}/10·{label}</font>", ""]
-    lines.append(f"**恶化维度**（命中 {len(dims)} 项）：")
+    lines.append(f"**恶化的方面**（命中 {len(dims)} 项）：")
     for d in dims:
         lines.append(f"<font color='green'>▸ {d}</font>")
     lines.append("")
@@ -1502,7 +1502,7 @@ def build_ebb_card(fb: dict, latest: dict, hhmm: str, dims: list) -> dict:
     elements = [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
                 {"tag": "hr"},
                 {"tag": "note", "elements": [{"tag": "plain_text",
-                 "content": "🌊 退潮/冰点聚合预警（机器检测·非AI研判）"}]}]
+                 "content": "🌊 退潮/冰点聚合预警（机器检测·非AI判断）"}]}]
     return {"title": f"🌊 短线精灵·退潮冰点预警 {hhmm}", "color": "turquoise", "elements": elements}
 
 
@@ -1510,7 +1510,7 @@ def build_institution_card(hits: list, hhmm: str) -> dict:
     """🏛️ 机构票拉升卡（P2-17 L2·2026-09-11 落地）。
 
     hits = [(code, name, pct, theme)]——机构早盘卡点名池内、早盘窗口内拉升未封板的票。
-    机器检测·非AI研判；⛔ 不构成个股推荐（机会色=红·语义色板）。
+    机器检测·非AI判断；⛔ 不构成个股推荐（机会色=红·语义色板）。
     """
     lines = ["**🏛️ 机构票拉升**（今晨机构早盘卡点名 × 盘中即时响应）：", ""]
     for c, n, p, th in hits:
@@ -1518,11 +1518,11 @@ def build_institution_card(hits: list, hhmm: str) -> dict:
                      + (f"　<font color='grey'>{th[:30]}</font>" if th else ""))
     lines.append("")
     lines.append("<font color='turquoise'>解读：机构点名方向出现盘中资金响应（逻辑被认可）；"
-                 "未封板=尚在博弈，承接强度需自行验证</font>")
+                 "未封板=尚在博弈，有没有资金接需自行验证</font>")
     elements = [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
                 {"tag": "hr"},
                 {"tag": "note", "elements": [{"tag": "plain_text",
-                 "content": "🏛️ 机构票拉升（机器检测·非AI研判）"}]}]
+                 "content": "🏛️ 机构票拉升（机器检测·非AI判断）"}]}]
     return {"title": f"🏛️ 短线精灵·机构票拉升 {hhmm}", "color": "red", "elements": elements}
 
 
@@ -2481,7 +2481,7 @@ def main():
         lines.append("<font color='purple'>板块刚启动·提前布局窗口（非确认信号，待共振成熟升级 S 级）</font>")
         pe_card = {"title": f"⚡短线精灵·板块苗头 {hhmm}", "color": "purple",
                    "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
-                                {"tag": "note", "elements": [{"tag": "plain_text", "content": "🌱 前瞻提示（机器检测·非AI研判）"}]}]}
+                                {"tag": "note", "elements": [{"tag": "plain_text", "content": "🌱 前瞻提示（机器检测·非AI判断）"}]}]}
         cf_p = Path(tempfile.gettempdir()) / "limao_pre_resonance_card.json"
         cf_p.write_text(json.dumps(pe_card, ensure_ascii=False), encoding="utf-8")
         rc_p = os.system(f'{PY} "{HERE / "short_spirit.py"}" --send "{cf_p}"')

@@ -27,14 +27,24 @@ import validate_schema as vs  # noqa: E402
 
 @pytest.fixture(scope="session")
 def real_cards():
-    """真实推送卡（代码生成）—— 最新一张 eod 卡 + 竞价卡。"""
-    cards = []
+    """真实推送卡（代码生成）—— **最近 4 张**（最新 eod 卡 + 竞价卡）。
+
+    ⚠️ 2026-09-18 修正：原实现 glob `wealth_code/cache/card_*.json` **全量 103 张历史卡**，
+    混入 08-13 旧格式卡（`[炸板回封×1] 可信度35%`）与 `*_debug_*` / `*preview*` 调试卡
+    → 与新政（白话门禁 Tier-1 阻断）冲突，且与 fixture 注释「最新一张」的**原意不符**。
+    本测试目的是「防 lint 误伤**当前**生产卡」，故只取最近产物。
+    """
+    files = []
     for pat in ("card_*.json", "card_2026*.json"):
-        for f in sorted((ROOT / "wealth_code" / "cache").glob(pat)):
-            try:
-                cards.append(json.loads(f.read_text(encoding="utf-8")))
-            except Exception:
-                continue
+        files += [f for f in (ROOT / "wealth_code" / "cache").glob(pat)
+                  if "debug" not in f.name and "preview" not in f.name]
+    files = sorted({p.resolve() for p in files}, key=lambda p: -p.stat().st_mtime)[:4]
+    cards = []
+    for f in files:
+        try:
+            cards.append(json.loads(f.read_text(encoding="utf-8")))
+        except Exception:
+            continue
     return cards
 
 
