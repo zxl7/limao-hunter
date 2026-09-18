@@ -17,72 +17,70 @@ def fld(content):
 
 elements = []
 
-# 1 结论定调 (首屏)
+# 1 结论定调 (首屏·≤2行·换角度:结构切换视角)
 elements.append(div(
     f"<text_tag color='{R}'>🎯 结论</text_tag>\n"
-    "观望·控仓等分歧转一致（资源线逆势承接）\n"
-    "情绪4.1/分歧·晋级率18.3%·涨停42(昨93)"
+    "修复延续·医药+外贸双线领涨，芯片资金接力回流（半导体+75.7亿）\n"
+    "情绪5.5/修复·核按钮1只(冰点转暖)·但晋级率19.1%<25%·最高板5→4 接力质量待验"
 ))
 elements.append(hr())
 
-# 2 大盘概览
+# 2 大盘概览 (指数一行并排·⛔禁写深成)
 elements.append(title("📈 大盘概览"))
 elements.append(div(
-    "上证 +0.15% ｜ 深证 -0.39% ｜ 创业板 -1.07%\n"
-    "涨停 42｜破板率 19.2%｜涨跌 3101:2002"
+    "上证 +0.79% ｜ 深证 +0.71% ｜ 创业板 +0.89%\n"
+    "涨停 46｜封板率 74.2%｜炸板率 29.5%"
 ))
 elements.append(hr())
 
-# 3 情绪演变
+# 3 情绪演变 (本卡 vs 上卡·语义色板)
 elements.append(div(
-    "📉 情绪演变：偏强 → <text_tag color='green'>4.1/分歧</text_tag>｜转差"
-    "（涨停42 vs 昨93·环比-55%；晋级率18.3%）"
+    "📉 情绪演变：上卡(09:41 猎手)偏强 → 本卡 <text_tag color='green'>5.5/10·修复</text_tag>｜转差\n"
+    "（核按钮1只较昨16只冰点转暖·但晋级率19.1%<25%·最高板5→4）"
 ))
 elements.append(hr())
 
-# 4 突发题材榜
+# 4 突发题材榜 (delta分级·new/surging全展开·ongoing压缩·⛔禁6位代码)
 topic = (
-    f"📌 <text_tag color='{R}'>大农业 涨停8 〔↗持续〕</text_tag> ｜ 动因：粮食安全+农业政策预期\n"
-    "亚盛集团 9天5板 <text_tag color='red'>+10.0%</text_tag>\n"
-    "跟：中粮科技+10.0%·泸天化+10.0%·敦煌种业+9.97%\n\n"
-    f"📌 <text_tag color='{R}'>大消费 涨停6 〔↗持续〕</text_tag> ｜ 动因：消费扩容政策+内需\n"
-    "海欣食品 3天3板 <text_tag color='red'>+10.05%</text_tag>\n"
-    "跟：桂林旅游+10.03%·三元生物+11.64%\n\n"
-    f"📌 <text_tag color='{R}'>机器人 涨停3 〔↗持续〕</text_tag> ｜ 动因：人形机器人产业催化\n"
-    "爱仕达 4天4板 <text_tag color='red'>+9.99%</text_tag>\n"
-    "跟：百合花+9.99%·科森科技+9.99%\n\n"
-    f"🆕 <text_tag color='{R}'>有色金属 涨停1 〔新〕</text_tag> ｜ 动因：铜价走强+资源避险\n"
-    "北方铜业 <text_tag color='red'>+9.98%</text_tag>\n"
-    "跟：电工合金+11.92%·江西铜业+5.93%"
+    f"🆕 <text_tag color='{R}'>液冷服务器 涨停1 〔新〕</text_tag> ｜ 动因：祥鑫收购酷尔芯切入液冷赛道\n"
+    "祥鑫科技 <text_tag color='red'>+10.01%</text_tag>\n\n"
+    f"🔥 <text_tag color='{R}'>外贸受益概念 涨停4 〔↗持续〕</text_tag> ｜ 动因：外贸受益概念发酵\n"
+    "华纺股份 2天2板 <text_tag color='red'>+9.94%</text_tag>\n\n"
+    f"📌 <text_tag color='{R}'>医药 涨停5 〔↗持续〕</text_tag> ｜ 动因：十五五医药规划+创新药\n"
+    "南华生物 2天2板 <text_tag color='red'>+10.0%</text_tag>\n\n"
+    f"📌 <text_tag color='{R}'>机器人 涨停4 〔↗持续〕</text_tag>｜国产芯片 涨停4 〔↗持续〕｜PCB板 涨停3 〔↗持续〕"
 )
 elements.append(title("🔥 突发题材榜"))
 elements.append(div(topic))
 elements.append(hr())
 
-# 5 核心标的 (整行红·一行一只·不评可买)
+# 5 核心标的 (整行红·一行一只·不评可买·⛔禁6位代码)
 core = "\n".join([
-    f"<text_tag color='{R}'>亚盛集团 +10.0% [大农业·9天5板]</text_tag>",
-    f"<text_tag color='{R}'>海欣食品 +10.05% [大消费·3天3板]</text_tag>",
-    f"<text_tag color='{R}'>爱仕达 +9.99% [机器人·4天4板]</text_tag>",
-    f"<text_tag color='{R}'>北方铜业 +9.98% [有色金属·新]</text_tag>",
-    f"<text_tag color='{R}'>广哈通信 +12.69% [6G·20cm]</text_tag>",
-    f"<text_tag color='{R}'>龙版传媒 +9.99% [短剧·16天8板]</text_tag>",
+    f"<text_tag color='{R}'>南华生物 +10.0% [医药·2天2板]</text_tag>",
+    f"<text_tag color='{R}'>华纺股份 +9.94% [外贸·2天2板]</text_tag>",
+    f"<text_tag color='{R}'>三羊马 +10.01% [机器人]</text_tag>",
+    f"<text_tag color='{R}'>肯特催化 +9.99% [国产芯片]</text_tag>",
+    f"<text_tag color='{R}'>大亚圣象 +10.06% [PCB]</text_tag>",
+    f"<text_tag color='{R}'>锡华科技 +9.98% [风电·4天4板·最高板]</text_tag>",
+    f"<text_tag color='{R}'>祥鑫科技 +10.01% [液冷]</text_tag>",
+    f"<text_tag color='{R}'>经纬股份 +20.0% [20cm·2天2板]</text_tag>",
+    f"<text_tag color='{R}'>内蒙新华 +10.04% [3天3板]</text_tag>",
 ])
 elements.append(title("📡 核心标的"))
 elements.append(div(core))
 elements.append(hr())
 
-# 6 昨日涨停反馈
-fb = ("📊 昨日涨停反馈（09-07 涨停93）晋级 <text_tag color='green'>18.3%</text_tag>"
-      "｜连板晋级 53.8%｜昨涨停今均 2.59%｜高开率 68.5%｜核按钮 3"
-      "｜最高板 6→7｜情绪 4.1/10·<text_tag color='green'>分歧</text_tag>")
+# 6 昨日涨停反馈 (全卡唯一数据源·增量基线)
+fb = ("📊 昨日涨停反馈（09-17 涨停47）晋级 <text_tag color='green'>19.1%</text_tag>"
+      "｜连板晋级 33.3%｜昨涨停今均 +2.85%｜高开率 72.3%｜核按钮 1"
+      "｜最高板 <text_tag color='green'>5→4</text_tag>｜情绪 5.5/10·修复")
 elements.append(div(fb))
 elements.append(hr())
 
-# 7 板块资金流向 (fields 交替双列)
+# 7 板块资金流向 (fields 交替双列·Top5全量·⭐=focus)
 elements.append(title("💰 板块资金流向"))
-inflow = ["央国企改革 +31.0亿", "有色金属 +27.9亿", "工业金属 +27.8亿", "黄金概念 +25.8亿", "稀缺资源 +25.3亿"]
-outflow = ["新能源车 -52.1亿", "华为概念 -46.0亿", "电子 -45.7亿", "液冷服务器 -38.8亿⭐", "特斯拉概念 -35.6亿"]
+inflow = ["半导体 +75.7亿⭐", "国产芯片 +74.3亿⭐", "半导体概念 +55.3亿⭐", "专精特新 +49.1亿", "物联网 +43.0亿"]
+outflow = ["PCB -77.3亿⭐", "元件 -39.9亿", "印制电路板 -39.2亿⭐", "新材料 -31.8亿", "周期股 -31.1亿"]
 fields = []
 for i, o in zip(inflow, outflow):
     fields.append(fld(f"<text_tag color='{R}'>{i}</text_tag>"))
@@ -90,10 +88,10 @@ for i, o in zip(inflow, outflow):
 elements.append({"tag": "div", "fields": fields})
 
 card = {
-    "title": "盘中快照-1000·增量 10:02 | 大农业·涨停8",
+    "title": "盘中快照-1000·增量 10:11 | 医药·涨停5",
     "color": "red",
     "elements": elements,
-    "note": "📡 选股宝+东财 | 10:02\n⚠️ 本报告基于公开信息分析，投资需谨慎",
+    "note": "📡 选股宝+东财 | 10:11\n⚠️ 本报告基于公开信息分析，投资需谨慎",
 }
 
 with open("/tmp/limao_card.json", "w", encoding="utf-8") as f:

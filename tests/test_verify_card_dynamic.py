@@ -90,13 +90,40 @@ def test_no_expectation_still_judged_by_absolute_line():
 
 
 def test_ai_view_line_carries_dynamic_verdict():
-    """AI 判断行 = 盘后静态 view + 今日动态结论（同一行呈现转变）。"""
+    """AI 判断行 = 盘后静态 view + 今日动态结论（同一行呈现转变）。
+
+    ⛔ 终态去重（2026-09-18 用户「明明说观察又说放弃……这两个自己打架了」）：
+    动态结论已是终态「放弃」时，**不再并列盘后 label「观察」**（两个互斥终态同框）；
+    只留动态结论，行内仍可见涨幅与结论。
+    """
     it = _mk("000993", -9.96, [0.0, 2.0], status="reject")
     av = {"000993": {"view": "watch", "reason": "全场最高板（6板）"}}
     line = _ai_view_line(it, av)
-    assert "🤖 AI 判断：观察" in line
-    assert "放弃" in line            # 动态结论覆盖静态观感
+    assert "🤖 AI 判断：观察" not in line   # label 被抑制（与「放弃」互斥）
+    assert "放弃" in line                    # 动态结论覆盖静态观感
     assert "-9.96%" in line
+
+
+def test_ai_view_line_keeps_participate_label_against_dynamic_giveup():
+    """⛔ 抑制规则的**例外**：label == 参与 → 禁抑制。
+
+    语义：AI 盘后说「买」、今日竞价不及预期 → 这是**真分歧**（AI 判断被竞价否掉），
+    必须两个时点都展示；抑制会掩盖「AI 判错」这一最有价值的复盘信息。
+    """
+    it = _mk("000994", -9.96, [0.0, 2.0], status="reject")
+    av = {"000994": {"view": "participate", "reason": "依据：…"}}
+    line = _ai_view_line(it, av)
+    assert "🤖 AI 判断：参与" in line
+    assert "放弃" in line
+
+
+def test_ai_view_line_keeps_watch_label_when_verdict_not_giveup():
+    """⛔ 抑制**只针对「放弃」**：结论=符合预期/继续观察时，盘后「观察」照常展示。"""
+    it = _mk("000995", 2.0, [1.0, 3.0])          # 符合预期
+    av = {"000995": {"view": "watch", "reason": "依据：…"}}
+    line = _ai_view_line(it, av)
+    assert "🤖 AI 判断：观察" in line
+    assert "符合预期" in line
 
 
 def test_ai_view_line_no_ai_view_returns_empty():

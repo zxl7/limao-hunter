@@ -689,11 +689,16 @@ def run_eod(
     # 而 ztgc 只有静态行业(hy)。抓取后为每只候选回填 industry_sector(行业归属) +
     # core_theme(当前炒作题材) + core_theme_logic(逻辑) + core_theme_heat(热度H/M/L)。
     # 盘后接口关闭/抓取失败 → 降级空标注（不编造）；题材热度按所在板块涨停数评级。
+    # ⚠️ 2026-09-18 修：`_sector_zt` 原**赋值在 try 内**——一旦题材抓取失败
+    # （网络异常 / `common.stock_theme` 导入失败）→ except 只补 `_theme_map`，
+    # `_sector_zt` 保持未绑定 → 下一行 `UnboundLocalError` **整条 eod 链崩溃**，
+    # 与注释「抓取失败 → 降级空标注」的降级意图相反。它本身是**纯本地计算**
+    # （只依赖 relay+watch 的 ladder_health，不触网），故上提到 try 之外。
+    _sector_zt = {str(it.get("theme") or ""): int(it.get("ladder_health") or 0) for it in relay + watch}
     try:
         from common.stock_theme import ThemeFetcher, annotate_candidate
         _tf = ThemeFetcher()
         _theme_map = _tf.for_codes([str(it.get("dm") or it.get("code") or "") for it in relay + watch])
-        _sector_zt = {str(it.get("theme") or ""): int(it.get("ladder_health") or 0) for it in relay + watch}
     except Exception:
         _theme_map = {}
     for it in relay + watch:
