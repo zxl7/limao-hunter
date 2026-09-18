@@ -52,7 +52,7 @@ def _next_day(date10: str) -> str:
         return date10
 
 
-def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close: float | None, *, date10: str, regime: str | None = None, sector_support: dict[str, Any] | None = None, ai_decisions: dict[str, dict] | None = None) -> dict[str, Any]:
+def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close: float | None, *, date10: str, regime: str | None = None, sector_support: dict[str, Any] | None = None, ai_decisions: dict[str, dict] | None = None, valve_code: str | None = None) -> dict[str, Any]:
     """
     构建单条结算 record（含 performance.open_check / next_day）。
     regime: 情绪体制（P1-6 冰点禁买硬开关·signal_eval 消费）。
@@ -63,6 +63,9 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
       **非 None** → 启用 AI 口径：can_enter 由 AI 判定（participate ∧ 竞价≤自定上限），
       机械 signal_eval 结果保留为参考信号（mech_can_enter / decision_status 字段）。
       **None** → 该日无 AI 决策（缺失·非空仓）→ 回退机械口径，caliber 标 mechanical_fallback。
+    valve_code: hibernate 竞价逃生阀当日**唯一**放行标的（2026-09-18 用户拍板 A）——
+      由 `ai_caliber.pick_hibernate_valve` 全池挑出；命中该 code 的票即使 AI 判「观察」
+      也允许小仓试错（口径仍走 `decide(..., valve_hit=True)`·禁绕过）。
     """
     signal = evaluate_realtime_signal(cand, quote, regime=regime, sector_support=sector_support)
     decision = signal.get("decision_status")
@@ -114,17 +117,24 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
             caliber = "ai"
             _gap = signal.get("gap_pct")
             _gap = float(_gap) if isinstance(_gap, (int, float)) else None
+            _code = str(cand.get("code") or "").strip()
+            # hibernate 竞价逃生阀（2026-09-18 用户拍板 A）：当日唯一放行标的下，
+            # AI 判「观察」也允许小仓试错（其余口径不变·同调 decide）。
+            _valve_hit = bool(valve_code) and _code == str(valve_code)
             # 方案 A（2026-09-17）：把候选的**盘后预期区间**一并传入 → 账本执行
             # 「参与 ∧ ≤5% ∧ 落预期区间」三步裁决，与卡面动态结论同源（gap_zone）。
             can_enter, _ai_note, ai_meta = ai_caliber.decide(
-                ai_decisions.get(str(cand.get("code") or "").strip()), _gap,
+                ai_decisions.get(_code), _gap,
                 expected_range=(cand.get("expectation") or {}).get("expected_range"),
                 # 量能门（2026-09-17）：红开但量能 < 目标×0.7 → 降级观察（无量高开不追）
                 auction_amount_yi=signal.get("auction_amount_yi"),
-                need_yi=signal.get("auction_amount_need_yi"))
+                need_yi=signal.get("auction_amount_need_yi"),
+                valve_hit=_valve_hit)
             ai_meta["caliber"] = caliber
             ai_meta["ai_note"] = _ai_note
             ai_meta["caliber_changed"] = bool(can_enter != mech_can_enter)
+            if _valve_hit:
+                ai_meta["hibernate_valve"] = True
             if regime == "ice":
                 # 冰点禁买（P1-6）在本层不硬拦 AI 决策（AI 判断时已知情绪分·自会收敛），
                 # 但打标留痕：卡面/审计可追溯「冰点期 AI 仍参与」。
@@ -190,6 +200,9 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
                 "ai_declared_limit": ai_meta.get("ai_declared_limit"),
                 # 预期区间门判定（2026-09-17「A 计划」）：below/ok/above/unknown（留痕·供审计）
                 "zone": ai_meta.get("zone"),
+                # hibernate 竞价逃生阀（2026-09-18 用户拍板 A）：True = 该票为当日唯一
+                # 放行标的（AI 判观察仍小仓试错）；meta.via == "hibernate_valve" 同义。
+                "hibernate_valve": bool(ai_meta.get("hibernate_valve")),
                 "ai_note": ai_meta.get("ai_note"),
                 "caliber_changed": ai_meta.get("caliber_changed"),
                 "note": signal.get("note"),
@@ -254,6 +267,7 @@ def run_verify(
     # 本函数只做「按 AI 自定上限判定能否成交」，不引入当日新信息。
     trade_date10 = _next_day(date10)
     ai_decisions: dict[str, dict] | None = None
+    valve: dict[str, Any] | None = None
     if ai_caliber.AI_CALIBER_ACCOUNT:
         ai_decisions = ai_caliber.load_ai_decisions(trade_date10)
         if ai_decisions is None:
@@ -262,6 +276,22 @@ def run_verify(
         else:
             print(f"[VERIFY] 🤖 AI 口径生效：{trade_date10} 决策 {len(ai_decisions)} 只"
                   f"（成交集合与入场上限以 AI 为准）")
+        # ── hibernate 竞价逃生阀（2026-09-18 用户拍板「A」）──────────────────────
+        # 依据日 AI 定调 hibernate → 当日**唯一**满足「红开≤5% ∧ 带量 ∧ 方向内位置最高」
+        # 的票允许小仓试错（自评实证：两次 hibernate 空仓的机会成本 +3.60%）。
+        # ⛔ 未开阀（非 hibernate/开关关）→ valve=None，行为与旧版逐字一致。
+        _stance = ai_caliber.ai_stance(trade_date10)
+        if ai_decisions is not None:
+            # 只对 AI 判「观察」的票开阀（判「放弃」的不越权放行）
+            _views = {c: str((r or {}).get("view") or "") for c, r in ai_decisions.items()}
+            valve = ai_caliber.pick_hibernate_valve(candidates, quotes,
+                                                    stance=_stance, views=_views)
+        if valve:
+            print(f"[VERIFY] 🚪 hibernate 逃生阀开启：{valve['name']}({valve['code']}) "
+                  f"竞价 {valve['gap_pct']:+.2f}%·{valve['boards']}板·方向「{valve['theme_name']}」"
+                  f" → 小仓试错 {valve['position']}")
+        elif _stance:
+            print(f"[VERIFY] 依据日定调 = {_stance}｜逃生阀：{'未触发' if _stance == 'hibernate' else '不适用'}")
 
     records: list[dict[str, Any]] = []
     for cand in all_cands:
@@ -270,7 +300,8 @@ def run_verify(
         nc = (next_close_map or {}).get(code)
         rec = _build_record(cand, q, nc, date10=date10, regime=regime,
                             sector_support=(sector_support_map or {}).get(code),
-                            ai_decisions=ai_decisions)
+                            ai_decisions=ai_decisions,
+                            valve_code=(valve or {}).get("code"))
         records.append(rec)
 
     payload = {
@@ -309,6 +340,9 @@ def run_verify(
         "ai_decisions": len(ai_decisions) if ai_decisions else 0,
         "caliber_switched": sum(1 for r in records
                                 if r["performance"]["open_check"].get("caliber_changed")),
+        # hibernate 逃生阀（2026-09-18 用户拍板 A）：当日是否开阀 + 放行标的（留痕·供卡面/审计）
+        "ai_stance": ai_caliber.ai_stance(trade_date10) if ai_caliber.AI_CALIBER_ACCOUNT else None,
+        "hibernate_valve": valve,
         "hit_signals": len(hits),
         "covered": len(covered),
         "nav_latest": nav_rows[-1]["nav"] if nav_rows else None,

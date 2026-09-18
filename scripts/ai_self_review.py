@@ -201,10 +201,14 @@ def decision_outcome() -> dict:
             continue
         d = by_day.setdefault(x["exec_date"], {"exec_date": x["exec_date"], "participate": 0,
                                                "watch": 0, "skip": 0, "rets": [],
-                                               "part_rets": [], "part_filled": 0})
+                                               "part_rets": [], "part_filled": 0, "inband": []})
         d[x["view"]] = d.get(x["view"], 0) + 1
         if x["ret"] is not None:
             d["rets"].append(x["ret"])
+            # 「硬线内红开」口径（2026-09-18 加）：与 hibernate 逃生阀同一准入
+            # （0 < 竞价 ≤ 5%）→ 回答「空仓日开阀到底能买到什么」，比全池均值诚实。
+            if x["gap"] is not None and 0 < x["gap"] <= HARD_LINE:
+                d["inband"].append(x["ret"])
             if x["view"] == "participate":
                 d["part_rets"].append(x["ret"])
                 if x["gap"] is not None and x["gap"] <= HARD_LINE:
@@ -212,6 +216,9 @@ def decision_outcome() -> dict:
     for d in by_day.values():
         d["cand_avg_ret"] = round(statistics.mean(d.pop("rets")), 3) if d.get("rets") else None
         d["part_ret"] = round(statistics.mean(d.pop("part_rets")), 3) if d.get("part_rets") else None
+        _ib = d.pop("inband")
+        d["inband_n"] = len(_ib)
+        d["inband_avg_ret"] = round(statistics.mean(_ib), 3) if _ib else None
     return {"rows": out_rows, "by_tier": by_tier, "missed": mis, "unfilled": unfilled,
             "by_day": list(by_day.values()), "hard_line": HARD_LINE}
 
@@ -356,20 +363,27 @@ def main() -> int:
     print("D) 定调层复盘（AI 定调 × 执行日池均 × 出手数）")
     print("=" * 74)
     day_map = {d["exec_date"]: d for d in dec["by_day"]}
-    print(f"{'执行日':<12}{'定调':<12}{'参与':<6}{'候选池均值':<12}{'参票收益'}")
-    opp = 0.0
+    print(f"{'执行日':<12}{'定调':<12}{'参与':<6}{'全池均值':<11}{'红开≤5%均值':<14}{'参票收益'}")
+    opp_all, opp_in = 0.0, 0.0
+    n_hib = 0
     for s in st["days"]:
         dm = day_map.get(s["exec_date"]) or {}
-        cavg = dm.get("cand_avg_ret")
+        cavg, iavg = dm.get("cand_avg_ret"), dm.get("inband_avg_ret")
+        inb = dm.get("inband_n")
         pr = dm.get("part_ret")
         flag = ""
         if s["stance"] == "hibernate" and s["participate"] == 0 and cavg is not None and cavg > 0:
-            flag = "  ← 空仓·池均为正（机会成本）"
-            opp += cavg
+            flag = "  ← 空仓（全池正·但看红开列）"
+            opp_all += cavg
+            n_hib += 1
+            opp_in += (iavg or 0.0)
         print(f"{s['exec_date']:<12}{str(s['stance']):<12}{s['participate']:<6}"
-              f"{(str(cavg)+'%') if cavg is not None else '-':<12}"
+              f"{(str(cavg)+'%') if cavg is not None else '-':<11}"
+              f"{((str(iavg)+'% (n='+str(inb)+')') if iavg is not None else '-'):<14}"
               f"{(str(pr)+'%') if pr is not None else '-':<8}{flag}")
-    print(f"空仓日机会成本合计（按池均口径）：{opp:+.2f}%")
+    print(f"空仓日机会成本（{n_hib} 次**合计**）：「全池均」口径 {opp_all:+.2f}%｜"
+          f"「红开≤5% 可执行」口径 {opp_in:+.2f}%  ← 后者才是「开阀真能买到什么」")
+    print("  ⚠️ 两口径差距来自「低开反转票」（竞价绿开、当日大涨）——逃生阀只买红开，吃不到那部分。")
 
     print()
     print("=" * 74)

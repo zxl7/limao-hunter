@@ -455,6 +455,39 @@ def _verdict_tag(verdict: str) -> str:
     return f" <text_tag color='{color}'>{verdict}</text_tag>"
 
 
+def _today_open_read(rows: list[dict]) -> str:
+    """今日开盘实时读数（2026-09-18 用户「这是昨天的判断·今天集合竞价开出来应该不是这个东西吧」）。
+
+    卡的定调（regime/做多气氛）来自**前一日收盘**，而卡本身是今晨 09:26 推的 ——
+    两个时点必须拆开交代：标题给「昨天收盘定的」，本行给「今天开盘实际长什么样」。
+
+    ⛔ 只陈述**竞价事实**（高开/低开家数·平均涨幅），**禁给「今日做多气氛X分」**：
+    情绪分由晋级率/炸板率/核按钮合成，三者都要盘中数据，09:25 算不出（禁编造）。
+    ⛔ 样本是「本批候选」而非全市场 —— 候选已过滤，读数不代表全市场温度，文案须写明只数。
+    返回 ""（无报价）→ 调用方不渲染本行。
+    """
+    gaps: list[float] = []
+    for r in rows:
+        oc = (r.get("performance") or {}).get("open_check") or {}
+        g = oc.get("gap_pct")
+        if isinstance(g, (int, float)):
+            gaps.append(float(g))
+    if not gaps:
+        return ""
+    n = len(gaps)
+    up = sum(1 for g in gaps if g > 0.05)
+    dn = sum(1 for g in gaps if g < -0.05)
+    avg = sum(gaps) / n
+    # 定性标签走固定阈值（可解释·非黑盒）：2/3 以上同向 → 偏强/偏弱，否则分化
+    if up / n >= 2 / 3 and avg > 0:
+        tag = "开盘偏强"
+    elif dn / n >= 2 / 3 or avg < -1:
+        tag = "开盘偏弱"
+    else:
+        tag = "开盘分化"
+    return f"今天开盘：这 {n} 只里 {up} 只高开、{dn} 只低开，平均 {avg:+.2f}%（{tag}）"
+
+
 def _load_zt_snapshot() -> dict | None:
     """读昨日涨停快照，拿连板天梯 / 涨停数（eod 卡用）。"""
     p = ROOT.parent / "cache" / "yesterday_zt.json"
@@ -1201,11 +1234,26 @@ def _ai_view_line(it: dict, ai_view: dict) -> str:
     view = str(v.get("view") or "")
     label = {"participate": "参与", "skip": "放弃", "watch": "观察"}.get(view, view or "—")
     color = "red" if view == "participate" else ("green" if view == "skip" else "purple")
+    # 🚪 hibernate 逃生阀（2026-09-18 用户拍板 A）：AI 判「观察」但当日带量转强 → 已小仓买入。
+    #    ⛔ 必须改写标签，否则个股段仍显示「观察」而账本/持仓里有成交 → 卡面自相矛盾。
+    if view != "participate" and ((it.get("performance") or {}).get("open_check") or {}).get("hibernate_valve"):
+        label = f"{label} → 破例小仓买"
+        color = "red"
     reason = str(v.get("reason") or "").strip()
-    txt = f"　　<text_tag color='{color}'>🤖 AI 判断：{label}</text_tag>"
     _dyn = _ai_dyn_verdict(it)      # 今日竞价实况动态结论（2026-09-17·盘后静态判断 → 今日动态）
-    if _dyn:
-        txt += f" <text_tag color='{_dyn[1]}'>{_dyn[0]}</text_tag>"
+    # ⛔ 终态去重（2026-09-18 用户「明明说观察又说放弃·这两个自己打架了」）：
+    #   盘后 label 与今日竞价结论分属**两个时间层**；当动态结论已给出终态「放弃」时，
+    #   再并列一个「观察」= 两个互斥终态同框（实测 ⚪其余没达标段 4 只全中）。
+    #   · label ∈ (观察, 放弃) 且 动态结论含「放弃」 → 抑制 label，只留动态结论；
+    #   · label == 参与 → **禁抑制**（AI 说买 / 机械不买 = 真分歧，必须展示）；
+    #   · ⛔段（结论=符合预期）/ 🟡段（结论=继续观察）与「观察」语义一致 → 不受影响。
+    _dyn_txt = _dyn[0] if _dyn else ""
+    if _dyn and view != "participate" and "放弃" in _dyn_txt:
+        txt = f"　　🤖 <text_tag color='{_dyn[1]}'>{_dyn_txt.lstrip('→ ').strip()}</text_tag>"
+    else:
+        txt = f"　　<text_tag color='{color}'>🤖 AI 判断：{label}</text_tag>"
+        if _dyn:
+            txt += f" <text_tag color='{_dyn[1]}'>{_dyn[0]}</text_tag>"
     if reason and not it.get("narrative"):
         # 理由语义分段（2026-09-11）：依据一行、⚠️风险独立末行（不再一整段连写）
         txt += "\n" + _narr_render(reason)
@@ -1241,11 +1289,17 @@ def _ai_plan_block(raw: dict, records: list[dict]) -> list[dict]:
 
     buys: list[tuple[str, dict]] = []
     others: list[str] = []
+    # 🚪 hibernate 竞价逃生阀（2026-09-18 用户拍板「A」）：AI 判「观察」但因
+    #    「带量转强 ∧ 方向内板数最高」被**当日唯一**放行小仓试错的票 —— 必须与普通买入
+    #    **同列展示**，否则卡面会出现「AI 今天没有要买的」却在持仓/账本里真有成交
+    #    （自相矛盾·2026-09-18 用户刚批评过同类「观察又说放弃」打架）。
+    valve_codes = {str(r.get("code") or "") for r in records
+                   if ((r.get("performance") or {}).get("open_check") or {}).get("hibernate_valve")}
     for _code, _v in views.items():
         _v = _v or {}
         _view = str(_v.get("view") or "")
         _code = str(_code)
-        if _view == "participate":
+        if _view == "participate" or _code in valve_codes:
             buys.append((_code, _v))
         else:
             _r = by_code.get(_code) or {}
@@ -1264,21 +1318,34 @@ def _ai_plan_block(raw: dict, records: list[dict]) -> list[dict]:
     if note:
         blocks.append(_div(f"<font color='grey'>{note}</font>"))
 
+    if valve_codes and buys:
+        blocks.append(_div("　　<font color='grey'>⚠️ 今天本来是空仓日——只有下面这一只是破例小仓试错"
+                           "（它竞价带了量、是方向里板数最高的）</font>"))
     if not buys:
         blocks.append(_div("<font color='grey'>今天没有要买的（AI 自己空仓）</font>"))
     for code, v in buys:
         r = by_code.get(code) or {}
         oc = (r.get("performance") or {}).get("open_check") or {}
         gap = oc.get("gap_pct")
+        _valve = bool(oc.get("hibernate_valve"))
         # ⛔ 生效上限 = 用户 5% 硬线（2026-09-14）——⛔ 不再读 AI 自定 entry_max_gap，
         #    否则卡面会与账本/结算打架（AI 自定值仅留痕于 ai_view，不上卡）。
         limit = USER_ENTRY_MAX_GAP_PCT
         name_txt = _hl(f"{r.get('name') or v.get('name') or code}({code})", "violet")
         if isinstance(gap, (int, float)):
             gap_txt = f"竞价{gap:+.2f}%"
-            tag = (f"<text_tag color='red'>买入</text_tag>（高开{limit:g}%以内）"
-                   if gap <= limit else
-                   f"<text_tag color='green'>没买到</text_tag>（高开超{limit:g}%）")
+            if _valve:
+                # 逃生阀票：AI 盘后判「观察」→ 竞价带量转强后小仓试错（诚实标注来源差异）
+                # ⛔ 仓位文案换算：0.2 → 「2 成」（×10），不是 ×100（否则显示「20 成」）。
+                _pc = int(round(_ai_caliber.HIBERNATE_VALVE_POSITION * 10))
+                tag = (f"<text_tag color='orange'>小仓试错</text_tag>"
+                       f"<font color='grey'>（空仓日破例·只买 {_pc} 成）</font>"
+                       if gap <= limit else
+                       f"<text_tag color='green'>没买到</text_tag>（高开超{limit:g}%）")
+            else:
+                tag = (f"<text_tag color='red'>买入</text_tag>（高开{limit:g}%以内）"
+                       if gap <= limit else
+                       f"<text_tag color='green'>没买到</text_tag>（高开超{limit:g}%）")
         else:
             gap_txt, tag = "竞价数据未到", "<font color='grey'>待竞价</font>"
         blocks.append(_div(f"{name_txt}{_boards_txt(r)} {gap_txt} → {tag}"))
@@ -1838,7 +1905,20 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
     hit_rows = [r for r in records
                 if (r.get("performance") or {}).get("open_check", {}).get("decision_status") == "hit"]
     if hit_rows:
-        blocks.append(_div("<text_tag color='red'>⛔ 市场很冷·今天不买（做多气氛≤2分，一律空仓）</text_tag>"))
+        # ── 昨收定调 + 今日开盘实况（2026-09-18 修·用户「这是昨天的判断·这块是不是也要动态一点」）──
+        # 原句「⛔ 市场很冷·今天不买（做多气氛≤2分，一律空仓）」两处毛病：
+        #   ① 「≤2分」是 ice **阈值**、不是实际值 —— 以阈值冒充今日事实（连昨日实际 1.0 分都没写）；
+        #   ② 无时点标注 —— 昨日收盘档位被读成今日结论（今日实盘：09:38 1.9 分 → 11:00 已 7.5 分）。
+        # 改为「结论 + 昨收实际值 + 今晨竞价读数」三段式：**结论不变**（AI 盘后决策时序铁律，
+        # ⛔ 不因竞价转强就翻成买入），只把**时点**与**当日证据**交代清楚。
+        _ys = fb_env.get("sentiment_score") if isinstance(fb_env, dict) else None
+        _ys_txt = (f"做多气氛{float(_ys):.0f}分" if isinstance(_ys, (int, float))
+                   else "做多气氛≤2分")
+        blocks.append(_div(
+            f"<text_tag color='red'>⛔ 空仓待命（昨天收盘定的：{_ys_txt}·市场很冷）</text_tag>"))
+        _open_read = _today_open_read(records)
+        if _open_read:
+            blocks.append(_div(f"　　<font color='grey'>{_open_read}</font>"))
         for r in hit_rows:
             oc = (r.get("performance") or {}).get("open_check") or {}
             gap = oc.get("gap_pct")

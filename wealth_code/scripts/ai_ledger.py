@@ -292,6 +292,29 @@ def cmd_settle(args) -> int:
         print(f"[ai_ledger] {tdate} 无待结算 AI 决策")
         return 0
     quotes = _load_quotes(tdate)
+    # ── hibernate 竞价逃生阀（2026-09-18 用户拍板「A」）──────────────────────────
+    # 依据日 AI 定调 hibernate → 当日**唯一**满足「红开≤5% ∧ 带量 ∧ 方向内位置最高」的票
+    # 允许小仓试错：把它从「未选中(others)」搬进「待结算(todo)」，与账户账本同源同判
+    # （`ai_caliber.pick_hibernate_valve` + `decide(valve_hit=True)`）。
+    # ⛔ 未开阀 → valve=None，行为与旧版逐字一致。
+    valve: dict | None = None
+    if _ai_caliber is not None and due:
+        _ddate = sorted({str(r.get("decision_date") or "") for r in due})[-1]
+        try:
+            _cands = json.loads((CACHE / f"candidates-{_ddate}.json").read_text(encoding="utf-8"))
+        except Exception:
+            _cands = None
+        valve = _ai_caliber.pick_hibernate_valve(
+            _cands, quotes, stance=_ai_caliber.ai_stance(tdate),
+            views={str(r.get("code") or ""): str(r.get("view") or "") for r in due})
+        if valve:
+            _vc = str(valve.get("code") or "")
+            _mv = [r for r in others if str(r.get("code") or "") == _vc]
+            if _mv:
+                others = [r for r in others if str(r.get("code") or "") != _vc]
+                todo = todo + _mv
+            print(f"[ai_ledger] 🚪 hibernate 逃生阀：{valve.get('name')}({_vc}) "
+                  f"竞价 {valve.get('gap_pct'):+.2f}% → 小仓试错 {valve.get('position')}")
     traded, skipped = [], []
     for r in others:
         skipped.append((str(r.get("code")), f"AI 本次没选它（{r.get('view')}）·不参与收益统计"))
@@ -311,7 +334,8 @@ def cmd_settle(args) -> int:
             _can, _note, _ = _ai_caliber.decide(
                 r, gap, expected_range=r.get("expected_range"),
                 auction_amount_yi=q.get("auction_amount_yi"),
-                need_yi=r.get("amount_need_yi"))
+                need_yi=r.get("amount_need_yi"),
+                valve_hit=bool(valve) and str(valve.get("code")) == code)
             if not _can:
                 skipped.append((code, _note))
                 continue
