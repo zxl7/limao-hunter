@@ -94,6 +94,51 @@ def load_proposals() -> list[dict]:
     return load_json_lines(PROPOSAL_FILE)
 
 
+def load_learning_effect() -> dict | None:
+    """学习效果回看（PDCA · 2026-09-18 增强）：读 learning_history 最后一条带 `effect` 的记录。
+
+    周度方案展示「上轮自动学习改了什么 · 改后命中率是否改善」——迭代闭环的验证端。
+    """
+    p = CACHE / "learning_history.jsonl"
+    try:
+        rows = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+    except Exception:
+        return None
+    for r in reversed(rows):
+        if r.get("effect"):
+            return {"effect": r["effect"], "applied": r.get("applied_summary"),
+                    "ts": r.get("generated_at"), "range_hit_rate_avg": r.get("range_hit_rate_avg")}
+    return None
+
+
+def load_factor_attr() -> dict | None:
+    """因子有效性归因（R6 数据源 · 只读账本 + 候选快照·零新增抓取）。样本 <20 → None。"""
+    p = ROOT / "scripts" / "factor_attribution.py"
+    if not p.exists():
+        return None
+    try:
+        r = subprocess.run([sys.executable, str(p), "--json"],
+                           capture_output=True, text=True, timeout=90)
+        d = json.loads(r.stdout)
+    except Exception:
+        return None
+    return d if isinstance(d, dict) and int(d.get("n_all") or 0) >= 20 else None
+
+
+def load_card_quality(days: int = 7) -> dict | None:
+    """卡面质量自检（R7 数据源）：重复文案 / 黑话 / 结构异常。"""
+    p = ROOT / "scripts" / "card_quality_check.py"
+    if not p.exists():
+        return None
+    try:
+        r = subprocess.run([sys.executable, str(p), "--json", "--days", str(days)],
+                           capture_output=True, text=True, timeout=90)
+        d = json.loads(r.stdout)
+    except Exception:
+        return None
+    return d if isinstance(d, dict) else None
+
+
 def load_health() -> dict:
     """跑体检拿客观数据（六维）。"""
     try:
@@ -281,6 +326,52 @@ def render_card(plan: dict) -> dict:
         el.append(_div(f"{_tag(s['rule'], sc)} {s['evidence']} → {s['suggest']}"))
     el.append(_hr())
 
+    # 🔄 学习效果回看（PDCA·2026-09-18）——"上轮自动改了什么、改后有没有变好"
+    eff = plan.get("learning_effect")
+    if eff and eff.get("effect"):
+        e = eff["effect"]
+        imp = e.get("improved")
+        el.append(_div(f"**🔄 学习效果回看** {_tag('改善' if imp else '未改善', RED if imp else GREEN)}"))
+        el.append(_div(f"　上轮自动应用：{('、'.join(eff.get('applied') or []))[:80]}"))
+        el.append(_div(f"　区间命中率：{_tag(str(e.get('range_hit_rate')), rate_color(eff.get('range_hit_rate_avg')))}（自 {(e.get('since') or '')[:10]}）"))
+        if not imp:
+            el.append(_div("　⚠️ 效果未改善 → 可考虑 `learning.py --rollback <快照>` 回退该次改动"))
+        el.append(_hr())
+
+    # 📈 因子归因（R6·2026-09-18）——哪些因子在拖后腿
+    fa = plan.get("factor_attr")
+    if fa:
+        bb = fa.get("by_bucket") or {}
+        el.append(_div(f"**📈 因子归因**（样本 {fa.get('n_all')} 笔·胜率 {fa.get('win_rate_pct')}%）"))
+        for k, lbl in (("relay", "接力池"), ("watch", "观察池")):
+            b = bb.get(k) or {}
+            if b.get("win_rate_pct") is not None:
+                el.append(_div(f"　{lbl} {b.get('n')} 笔·胜率 {_tag(f'{b['win_rate_pct']}%', rate_color(b.get('win_rate_pct')))}"
+                               f"｜均收益 {b.get('avg_ret'):+.2f}%"))
+        rev = sorted([f for f in (fa.get("numeric") or [])
+                      if f.get("diff") is not None and float(f["diff"]) < 0
+                      and min(int(f.get("n_win") or 0), int(f.get("n_lose") or 0)) >= 10],
+                     key=lambda x: x["diff"])[:3]
+        if rev:
+            el.append(_div("　反向因子（值越高越易亏）："
+                           + "、".join(f"{f.get('label')} {f['diff']:+.2f}" for f in rev)))
+        el.append(_hr())
+
+    # 🔍 卡面质量（R7·2026-09-18）
+    cq = plan.get("card_quality")
+    if cq and cq.get("checked"):
+        _cards = cq.get("cards") or []
+        jar = sorted({j for c in _cards for j in (c.get("jargon") or [])})
+        rep = sum(len(c.get("repeat") or []) for c in _cards)
+        ok = not (rep or jar or sum(len(c.get("struct") or []) for c in _cards))
+        el.append(_div(f"**🔍 卡面质量**（近{cq.get('days')}天 {cq.get('checked')} 张·问题 {cq.get('issues')} 张）"
+                       + (_tag("干净", GREEN) if ok else "")))
+        if rep:
+            el.append(_div(f"　⚠️ 重复文案 {rep} 处"))
+        if jar:
+            el.append(_div(f"　🚫 黑话 {len(jar)} 个：{'、'.join(jar[:8])}"))
+        el.append(_hr())
+
     # 待审提案
     draft_props = [p for p in plan["proposals"] if p.get("status") == "draft"]
     el.append(_div(f"**📋 待审提案**（{len(draft_props)}）"))
@@ -333,6 +424,10 @@ def build_plan() -> dict:
         "health": {k: health.get(k) for k in ("run_health", "launchd", "cache", "upgrade_todo")},
         "health_issue_count": len([d for d in decisions if d.get("cat") == "体检"]),
         "decisions": decisions,
+        # 2026-09-18 增强（用户「做上去」）：PDCA 效果回看 + 因子归因 + 卡面质量
+        "learning_effect": load_learning_effect(),
+        "factor_attr": load_factor_attr(),
+        "card_quality": load_card_quality(7),
     }
     PLAN_JSON.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     write_md(plan)

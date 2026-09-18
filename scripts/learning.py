@@ -85,6 +85,12 @@ DEFAULT_LEARNING_CONFIG = {
         # R5 AI 判定质量（2026-09-17 用户「让 AI 学会自动学习」·语义类·仅建议不自动改）
         "R5_ai_quality":  {"enabled": True, "participate_hit_min": 40, "watch_miss_max": 40,
                            "suggest": "校准 AI 判定口径（参与门槛 / 观察降级规则）", "target": "ai_judge", "step": None},
+        # R6 因子有效性归因（2026-09-18·语义类·仅建议）：分池胜率差 + 反向因子（小样本只作观察）
+        "R6_factor_attr": {"enabled": True, "pool_gap_pp": 30, "reverse_diff": 3.0,
+                           "suggest": "复核因子权重（观察·小样本不直接改）", "target": "factor_weight", "step": None},
+        # R7 卡面质量（2026-09-18·语义类·仅建议）：重复文案/黑话/结构异常
+        "R7_card_quality": {"enabled": True, "days": 3,
+                            "suggest": "修卡面文案（重复段去重 / 黑话白话化 / 补齐结构）", "target": "card_copy", "step": None},
     },
 }
 
@@ -279,6 +285,66 @@ def detect_biases(hist: list[dict], cfg: dict) -> list[dict]:
                     "severity": "high",
                 })
 
+    # R6 因子有效性归因（2026-09-18·语义类·仅建议）：分池胜率差 + 反向因子
+    r6 = rules.get("R6_factor_attr", {})
+    if r6.get("enabled", True):
+        fa = _factor_attr_stats()
+        if fa:
+            msgs = []
+            bb = fa.get("by_bucket") or {}
+            _rl = bb.get("relay") or {}
+            _wa = bb.get("watch") or {}
+            if _rl.get("win_rate_pct") is not None and _wa.get("win_rate_pct") is not None:
+                gap = float(_rl["win_rate_pct"]) - float(_wa["win_rate_pct"])
+                if gap >= r6.get("pool_gap_pp", 30):
+                    msgs.append(f"relay 池胜率 {_rl['win_rate_pct']}% 高出 watch 池 "
+                                f"{_wa['win_rate_pct']}% 达 {gap:.0f}pp → watch 池宜收严/降权")
+            _rev = [f for f in (fa.get("numeric") or [])
+                    if f.get("diff") is not None and float(f["diff"]) <= -float(r6.get("reverse_diff", 3.0))
+                    and min(int(f.get("n_win") or 0), int(f.get("n_lose") or 0)) >= 10]
+            if _rev:
+                _rev.sort(key=lambda x: x["diff"])
+                msgs.append("反向因子（值越高越易亏·考虑降权）："
+                            + "、".join(f"{f.get('label')} {f['diff']:+.2f}" for f in _rev[:3]))
+            if msgs:
+                suggestions.append({
+                    "rule": "R6_factor_attr",
+                    "evidence": (f"样本 {fa.get('n_all')} 笔·胜率 {fa.get('win_rate_pct')}%；"
+                                 + "；".join(msgs)),
+                    "suggest": r6.get("suggest", "复核因子权重（观察·小样本不直接改）"),
+                    "target": "factor_weight",
+                    "step": None,          # 语义类·无参数可回写 → 仅建议
+                    "severity": "high",
+                })
+
+    # R7 卡面质量（2026-09-18·语义类·仅建议）：重复文案 / 黑话禁项 / 结构异常
+    r7 = rules.get("R7_card_quality", {})
+    if r7.get("enabled", True):
+        cq = _card_quality_stats(int(r7.get("days", 3)))
+        if cq:
+            _cards = cq.get("cards") or []
+            rep = sum(len(c.get("repeat") or []) for c in _cards)
+            jar_words = sorted({j for c in _cards for j in (c.get("jargon") or [])})
+            struct = sum(len(c.get("struct") or []) for c in _cards)
+            parts = []
+            if rep:
+                _samp = next((d["sentence"] for c in _cards for d in (c.get("repeat") or [])), "")
+                parts.append(f"{rep} 处重复文案（如「{_samp[:36]}…」）")
+            if jar_words:
+                parts.append(f"黑话词 {len(jar_words)} 个：{'、'.join(jar_words[:6])}")
+            if struct:
+                parts.append(f"{struct} 处结构异常")
+            if parts:
+                suggestions.append({
+                    "rule": "R7_card_quality",
+                    "evidence": f"近{cq.get('days')}天扫描 {cq.get('checked')} 张卡·{cq.get('issues')} 张有问题；"
+                                + "；".join(parts),
+                    "suggest": r7.get("suggest", "修卡面文案（重复段去重/黑话白话化/补齐结构）"),
+                    "target": "card_copy",
+                    "step": None,
+                    "severity": "high",
+                })
+
     return suggestions
 
 
@@ -351,7 +417,53 @@ RULE_RISK = {
     "R2_cand_low": "medium",
     "R3_sentiment_bias": "high",
     "R5_ai_quality": "high",       # AI 判定质量·语义类→仅建议
+    "R6_factor_attr": "high",      # 因子归因·语义类→仅建议
+    "R7_card_quality": "high",     # 卡面质量·语义类→仅建议
 }
+
+
+def _factor_attr_stats() -> dict | None:
+    """R6 数据源：**因子有效性归因**（2026-09-18 用户「做上去」·A 项）。
+
+    调用 `scripts/factor_attribution.py --json`（只读净值账本 + 候选快照·零新增抓取），
+    取：`by_bucket`（分池胜率）+ `numeric[].diff`（胜单−败单 因子均值差·负=反向拖后腿）。
+    ⛔ 诚实边界（脚本自述）：样本小 → 只作**观察**；本函数 `n_all < 20` 直接 None 不触发。
+    """
+    import subprocess
+    p = ROOT / "scripts" / "factor_attribution.py"
+    if not p.exists():
+        return None
+    try:
+        r = subprocess.run([sys.executable, str(p), "--json"],
+                           capture_output=True, text=True, timeout=90)
+        d = json.loads(r.stdout)
+    except Exception:
+        return None
+    if not isinstance(d, dict) or int(d.get("n_all") or 0) < 20:
+        return None
+    return d
+
+
+def _card_quality_stats(days: int = 3) -> dict | None:
+    """R7 数据源：**卡面质量自检**（2026-09-18 用户「做上去」·B 项）。
+
+    调用 `scripts/card_quality_check.py --json --days N`，取近 N 天卡的
+    重复文案 / 黑话禁项 / 结构异常。无问题 → None（不触发）。
+    ⛔ 只读：自检脚本本身不改卡，本规则也只出建议（语义类）。
+    """
+    import subprocess
+    p = ROOT / "scripts" / "card_quality_check.py"
+    if not p.exists():
+        return None
+    try:
+        r = subprocess.run([sys.executable, str(p), "--json", "--days", str(days)],
+                           capture_output=True, text=True, timeout=90)
+        d = json.loads(r.stdout)
+    except Exception:
+        return None
+    if not isinstance(d, dict) or not d.get("issues"):
+        return None
+    return d
 
 
 def _recent_applied_rules(days: int = 3) -> set[str]:
