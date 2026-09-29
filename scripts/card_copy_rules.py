@@ -70,7 +70,7 @@ PLAIN_HINT = {
     "孤军": "同方向只它1家", "弱转强": "重新走强", "溢价率": "第二天还能涨多少",
     "亢奋": "市场很热", "退潮": "市场转冷", "冰点": "市场很冷",
     "题材板块效应": "同板块一起涨", "严格主升": "只做强票", "冰点档": "市场很冷",
-    "反馈矩阵": "情绪反馈数据", "可信度": "预期可信度", "样本": "已记录",
+    "反馈矩阵": "情绪反馈数据", "可信度": "预期把握", "样本": "已记录",
     "已结算": "已记录", "情绪升温": "市场转暖", "情绪退潮": "市场转冷",
     "情绪中性": "市场平稳",
 }
@@ -121,6 +121,25 @@ def hint(term: str) -> str:
 def describe(term: str) -> str:
     h = hint(term)
     return f"{term}（建议改「{h}」）" if h else term
+
+
+# ── 渲染层白话化（Tier-1 自动替换·2026-09-18）───────────────────────────
+# 场景：Tier-1 阻断词来自**已落盘的旧文案**——代码改了，但 cache 里历史生成的
+#   evidence / 提案 / 建议文本不会自己变 → 卡面仍会被阻断期（09-21 起）拦死。
+#   实证：09-18 优化方案周报卡 elements[48..] 全是 09-02~09-14 的旧提案「样本」。
+# 处置：**渲染出口**统一过 `sanitize()`，用 PLAIN_HINT 的官方白话替换 Tier-1 词。
+# ⛔ 只替换**有官方白话映射**的词；无映射的一律不动（交给人改 → `scan()` 仍报 FAIL）。
+# ⛔ 这不等于绕过门禁：替换后的文案仍会被 card_lint 全量复扫（替换即消灭命中）。
+def sanitize(text: str) -> str:
+    """按 PLAIN_HINT 把 Tier-1 词替换为白话；无映射的词原样保留。模块名豁免同 scan()。"""
+    if not text:
+        return text
+    body = strip_labels(text)          # 只按「非豁免区」判定是否命中
+    out = text
+    for bad in PLAIN_FAIL:
+        if bad in body and bad in PLAIN_HINT:
+            out = out.replace(bad, PLAIN_HINT[bad])
+    return out
 
 
 # ── 自检：词表三组互斥（KEEP 不得同时出现在 FAIL/WARN，防自相矛盾）────────

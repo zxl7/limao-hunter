@@ -134,11 +134,19 @@ def main():
             turn_f = None
         reason = match_news(l, news) or (l.get("sector", "") + " 板块异动")
 
-        # 主板倾斜（用户 2026-08-04）：创业板20cm单日±20%回撤风险过大，
-        # pct 封顶 10（=一个主板涨停的涨幅当量）→ 不再奖励其额外涨幅；主板轻微优先
-        eff_pct = min(pct, 10.0)
+        # ── 板块属性偏置（2026-09-23 核对：与用户 2026-08-13 已确认需求冲突，暂不行为变更）──
+        # 历史：2026-08-04 用户因 20cm 单日回撤风险暂定「主板倾斜」；2026-08-13 用户已撤销
+        #   （原话「创业板权限打开，主板和创业板都有周期」）→ 主板/创业板按同一套封板质量 →
+        #   竞价溢价周期**对称参与，无板块属性加分/减分**，20cm 只保留「⚠️20cm波动大·紧止损」标注。
+        # 现状：下面两行仍是旧「主板倾斜」实现（pct 封顶 10 + 非主板 ×0.85），**与上述需求不一致**。
+        # ⛔ 改它=改变盘中候选排序（AI 盘中看到的票会变），属策略评分口径，须用户单独拍板。
+        #   一行开关切换：MAIN_BOARD_TILT=False + CAP_EXTRA_PCT_TO_10=False 即为对称参与。
+        MAIN_BOARD_TILT = True          # False=主板/创业板对称（按 2026-08-13 需求）
+        MAIN_BOARD_TILT_FACTOR = 0.85   # 仅 MAIN_BOARD_TILT=True 时对非主板生效
+        CAP_EXTRA_PCT_TO_10 = True      # True=20cm 涨幅按 10 封顶（旧倾斜配套）
+        eff_pct = min(pct, 10.0) if CAP_EXTRA_PCT_TO_10 else pct
         is_main = (code[:1] in ("6", "0")) and not code.startswith(("688", "300", "301"))
-        score = eff_pct * (1.0 if is_main else 0.85)
+        score = eff_pct * (1.0 if (is_main or not MAIN_BOARD_TILT) else MAIN_BOARD_TILT_FACTOR)
         score += boards * 6
         score += 3 if buyable else 0
         if turn_f is not None and 3 <= turn_f <= 25:

@@ -59,6 +59,42 @@ def test_record_writes_ai_view_with_plan_meta(monkeypatch, tmp_path):
     assert d["views"]["000993"]["view"] == "participate"
 
 
+def test_record_no_view_derivation_from_bias(monkeypatch, tmp_path):
+    """⛔ 2026-09-22「彻底不派」：盘后只写 bias，⛔ 不派生 view。
+
+    给定 bias=focus/normal/avoid（无 view）→ 落盘 view 恒为 None，预案档照写进 views；
+    `_effective_view` 回退口径按 bias 反推终态（focus→participate / avoid→skip /
+    normal→watch）——与旧派生口径逐字一致，且 ⛔ 不得提前拍板「买哪只」。
+    """
+    _isolate(monkeypatch, tmp_path)
+    f = tmp_path / "picks.json"
+    f.write_text(json.dumps({
+        "stance": "selective", "stance_label": "只做最强的一只",
+        "direction": "电力/绿电", "note": "t",
+        "picks": [
+            {"code": "000993", "name": "闽东电力", "bias": "focus", "reason": "3板·带动3家", "entry_max_gap": 3.0},
+            {"code": "000823", "name": "超声电子", "bias": "normal", "reason": "r"},
+            {"code": "603421", "name": "鼎信通讯", "bias": "avoid", "reason": "封板勉强"},
+        ],
+    }, ensure_ascii=False), encoding="utf-8")
+    rc = al.cmd_record(A(file=str(f), decision_date="2026-09-11", trade_date="2026-09-14"))
+    assert rc == 0
+    vp = tmp_path / "ai_view_2026-09-14.json"
+    assert vp.exists()
+    v = json.loads(vp.read_text(encoding="utf-8"))["views"]
+    # ⛔ 彻底不派：view 恒为 None（不派生），bias 照写
+    assert v["000993"]["view"] is None and v["000993"]["bias"] == "focus"
+    assert v["000823"]["view"] is None and v["000823"]["bias"] == "normal"
+    assert v["603421"]["view"] is None and v["603421"]["bias"] == "avoid"
+    # _effective_view 回退：按 bias 反推终态，与旧派生口径逐字一致
+    assert al._effective_view({"code": "000993", "bias": "focus"}, {}) == "participate"
+    assert al._effective_view({"code": "000823", "bias": "normal"}, {}) == "watch"
+    assert al._effective_view({"code": "603421", "bias": "avoid"}, {}) == "skip"
+    # 9:25 结论优先（池内裁决覆盖预案）
+    assert al._effective_view({"code": "000993", "bias": "focus"},
+                              {"000993": {"view": "skip"}}) == "skip"
+
+
 def _write_quotes(tmp_path, trade_date, rows):
     (tmp_path / f"auction_quotes-{trade_date}.json").write_text(
         json.dumps(rows, ensure_ascii=False), encoding="utf-8")
@@ -74,6 +110,21 @@ def test_record_requires_reason(monkeypatch, tmp_path):
     f.write_text(json.dumps([{"code": "000930", "name": "中粮科技", "reason": ""}]), encoding="utf-8")
     assert al.cmd_record(A(decision_date="2026-09-10", file=str(f))) == 0
     assert al._read_jsonl(al.DECISIONS) == []          # 无理由不落盘（数据即事实）
+
+
+def test_record_freezes_candidate_ranking_score(monkeypatch, tmp_path):
+    """台账评分必须取盘后冻结候选，不得在后续结算时重算。"""
+    _isolate(monkeypatch, tmp_path)
+    (tmp_path / "candidates-2026-09-10.json").write_text(json.dumps({
+        "relay": [{"code": "000930", "name": "中粮科技", "score": 88.6}],
+        "watch": [],
+    }), encoding="utf-8")
+    f = tmp_path / "picks.json"
+    f.write_text(json.dumps([{
+        "code": "000930", "name": "中粮科技", "reason": "排序靠前",
+    }], ensure_ascii=False), encoding="utf-8")
+    assert al.cmd_record(A(decision_date="2026-09-10", file=str(f))) == 0
+    assert al._read_jsonl(al.DECISIONS)[0]["ranking_score"] == 88.6
 
 
 def test_settle_return_and_nav(monkeypatch, tmp_path):
@@ -218,3 +269,168 @@ def test_compare_survives_empty_ai_ledger(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "AI 判断（我）" in out and "Python 脚本" in out
     assert "还没有结算记录" in out, "空账本必须给出人话提示，而不是崩掉"
+
+
+# ── 🛡️ 交易闸门三条 · 赔率/周期留痕（2026-09-23）回归锁 ────────────────
+# 依据 = `config/shared_rules.md`【🛡️ 交易闸门三条】：🛡️-1 赔率闸门（目标/止损 ≥ 2）·
+# 🛡️-2 周期闸门（兑现周期标签 intraday / swing / mainline）。
+# ⛔ 本组只锁**留痕**：三字段全可选、缺失即 None、不抛错、不阻断落盘、⛔ 不改 bias/view
+#    —— 闸门靠纪律与宪法约束，代码不做硬拦（硬拦会误杀真实机会）。
+def _views_of(tmp_path, trade_date):
+    return json.loads(
+        (tmp_path / f"ai_view_{trade_date}.json").read_text(encoding="utf-8"))["views"]
+
+
+def test_record_gate_fields_passthrough(monkeypatch, tmp_path):
+    """三字段原样透传： ① ai_view.views[code]（与 bias/reason 同级） ② 台账行。"""
+    _isolate(monkeypatch, tmp_path)
+    f = tmp_path / "picks.json"
+    f.write_text(json.dumps({
+        "stance_label": "只做最强的一只", "direction": "PCB板",
+        "picks": [{"code": "000910", "name": "大亚圣象", "bias": "focus",
+                   "reason": "4天4板纯连板", "entry_max_gap": 3.0,
+                   "target_pct": 25.0, "stop_pct": 8.0, "hold_horizon": "mainline"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    assert al.cmd_record(A(file=str(f), decision_date="2026-09-23", trade_date="2026-09-24")) == 0
+    row = al._read_jsonl(al.DECISIONS)[0]
+    assert row["target_pct"] == 25.0 and row["stop_pct"] == 8.0
+    assert row["hold_horizon"] == "mainline"
+    assert row["payoff_warning"] is None          # 25/8 = 3.13 ≥ 2 → 达标
+    assert row["hold_horizon_warning"] is None
+    v = _views_of(tmp_path, "2026-09-24")["000910"]
+    assert v["target_pct"] == 25.0 and v["stop_pct"] == 8.0
+    assert v["hold_horizon"] == "mainline"
+    assert v["bias"] == "focus"                   # 留痕不得动判断
+    assert v["payoff_warning"] is None and v["hold_horizon_warning"] is None
+
+
+def test_record_gate_fields_missing_is_none(monkeypatch, tmp_path):
+    """⛔ 缺失即 None：不做必填校验、不抛错、不阻断落盘（闸门不靠代码硬拦）。"""
+    _isolate(monkeypatch, tmp_path)
+    f = tmp_path / "picks.json"
+    f.write_text(json.dumps([{"code": "002285", "name": "世联行", "bias": "normal",
+                              "reason": "午后封板"}]), encoding="utf-8")
+    assert al.cmd_record(A(file=str(f), decision_date="2026-09-23", trade_date="2026-09-24")) == 0
+    row = al._read_jsonl(al.DECISIONS)[0]         # 未给闸门字段仍照常落盘
+    for k in ("target_pct", "stop_pct", "payoff_warning",
+              "hold_horizon", "hold_horizon_warning"):
+        assert row[k] is None, f"{k} 缺失应为 None"
+    v = _views_of(tmp_path, "2026-09-24")["002285"]
+    assert v["target_pct"] is None and v["stop_pct"] is None and v["hold_horizon"] is None
+    assert v["bias"] == "normal"
+
+
+def test_record_payoff_warning_below_two_keeps_bias(monkeypatch, tmp_path):
+    """🛡️-1 赔率 <2 → 出 payoff_warning；⛔ 只告警，⛔ 不改 bias / view 与 view 的终态。"""
+    _isolate(monkeypatch, tmp_path)
+    f = tmp_path / "picks.json"
+    f.write_text(json.dumps([{"code": "603396", "name": "金辰股份", "bias": "focus",
+                              "reason": "首板+10.02%", "target_pct": 6.5, "stop_pct": 5.0}]),
+                 encoding="utf-8")
+    assert al.cmd_record(A(file=str(f), decision_date="2026-09-23", trade_date="2026-09-24")) == 0
+    row = al._read_jsonl(al.DECISIONS)[0]
+    assert "赔率 1.3 不足 2" in row["payoff_warning"]
+    assert "不做" in row["payoff_warning"]        # 大白话给结论
+    assert row["bias"] == "focus" and row["view"] is None    # 判断原样
+    v = _views_of(tmp_path, "2026-09-24")["603396"]
+    assert v["bias"] == "focus" and v["view"] is None
+    assert "赔率 1.3 不足 2" in v["payoff_warning"]
+
+
+def test_record_payoff_warning_boundaries(monkeypatch, tmp_path):
+    """边界：赔率恰好 =2 达标；止损 0 / 缺一值 → 不判且**不崩**；止损可负（按绝对值比）。"""
+    _isolate(monkeypatch, tmp_path)
+    f = tmp_path / "picks.json"
+    f.write_text(json.dumps([
+        {"code": "000001", "name": "恰好2", "bias": "normal", "reason": "r",
+         "target_pct": 10.0, "stop_pct": 5.0},
+        {"code": "000002", "name": "止损0", "bias": "normal", "reason": "r",
+         "target_pct": 10.0, "stop_pct": 0},
+        {"code": "000003", "name": "缺止损", "bias": "normal", "reason": "r",
+         "target_pct": 10.0},
+        {"code": "000004", "name": "负止损", "bias": "normal", "reason": "r",
+         "target_pct": -5.0, "stop_pct": -3.0},
+        {"code": "000005", "name": "非数", "bias": "normal", "reason": "r",
+         "target_pct": "高", "stop_pct": 5.0},
+    ], ensure_ascii=False), encoding="utf-8")
+    assert al.cmd_record(A(file=str(f), decision_date="2026-09-23", trade_date="2026-09-24")) == 0
+    rows = {r["code"]: r for r in al._read_jsonl(al.DECISIONS)}
+    assert rows["000001"]["payoff_warning"] is None          # 恰好 2 → 达标
+    assert rows["000002"]["payoff_warning"] is None          # 止损 0 → 不判（⛔ 不除零崩）
+    assert rows["000003"]["payoff_warning"] is None          # 缺一值 → 不判
+    assert "赔率 1.67 不足 2" in rows["000004"]["payoff_warning"]   # |−5 / −3|
+    assert rows["000005"]["payoff_warning"] is None          # 非数 → None 不崩
+
+
+def test_record_invalid_hold_horizon_warns_without_raise(monkeypatch, tmp_path):
+    """🛡️-2 周期标签非法 → 原样留痕 + 告警字段；⛔ 不抛错、不阻断落盘、不改判断。"""
+    _isolate(monkeypatch, tmp_path)
+    f = tmp_path / "picks.json"
+    f.write_text(json.dumps([{"code": "000910", "name": "大亚圣象", "bias": "focus",
+                              "reason": "4天4板", "hold_horizon": "weekly"}]),
+                 encoding="utf-8")
+    assert al.cmd_record(A(file=str(f), decision_date="2026-09-23", trade_date="2026-09-24")) == 0
+    row = al._read_jsonl(al.DECISIONS)[0]
+    assert row["hold_horizon"] == "weekly"                   # 原样留痕（⛔ 不清空、不归一）
+    assert "不是标准档" in row["hold_horizon_warning"]
+    assert "weekly" in row["hold_horizon_warning"]
+    assert row["bias"] == "focus"                            # 判断不受影响
+    # 三个合法档逐一显式通过（无告警）——宪法 🛡️-2 的档位枚举即契约
+    assert al._horizon_of({"hold_horizon": "intraday"}) == ("intraday", None)
+    assert al._horizon_of({"hold_horizon": "swing"}) == ("swing", None)
+    assert al._horizon_of({"hold_horizon": "mainline"}) == ("mainline", None)
+    assert al._horizon_of({}) == (None, None)                # 缺失即 None·不告警
+    assert al._horizon_of({"hold_horizon": "MAINLINE"})[1] is not None   # 大小写不归一→告警
+
+
+def test_gate_warning_text_is_plain_language():
+    """⛔ 宪法【🗣️ 卡片话术铁律】：新增告警文案必须大白话（零 Tier-1 阻断词）。
+
+    直接拿**真实产出**的告警串过词表唯一源 `scripts/card_copy_rules.scan()`——
+    防「代码改了、文案带黑话」在后续上卡时被 card_lint 拦死整张卡。
+    """
+    import importlib.util as _u
+    p = Path(__file__).resolve().parents[1] / "scripts" / "card_copy_rules.py"
+    spec2 = _u.spec_from_file_location("card_copy_rules", p)
+    ccr = _u.module_from_spec(spec2)
+    spec2.loader.exec_module(ccr)
+    texts = [al._payoff_of({"target_pct": 6.5, "stop_pct": 5.0})[2],
+             al._horizon_of({"hold_horizon": "weekly"})[1]]
+    for t in texts:
+        assert t, "该场景必须产出告警文案"
+        fails, _ = ccr.scan(t)
+        assert fails == [], f"告警文案含机器黑话 {fails}：{t}"
+
+
+def test_settle_post_pool_call_plan_needs_frozen_verdict(monkeypatch, tmp_path, capsys):
+    """9:25 模式缺冻结件时，盘后重点预案不得被结算成实际成交。"""
+    _isolate(monkeypatch, tmp_path)
+    al._append_jsonl(al.DECISIONS, {
+        "decision_date": "2026-09-23", "code": "000001", "name": "样本股",
+        "reason": "盘后重点", "bias": "focus", "view": None,
+        "execution_mode": "pool_call_925", "settled": False,
+    })
+    _write_quotes(tmp_path, "2026-09-24", {"000001": {"prev_close": 10.0, "auction_price": 10.2}})
+    monkeypatch.setattr(al, "_close_of", lambda code, d: 10.8)
+    assert al.cmd_settle(A(trade_date="2026-09-24")) == 0
+    assert al._read_jsonl(al.AI_LEDGER) == []
+    row = al._read_jsonl(al.DECISIONS)[0]
+    assert row["settled"] is True and "冻结件缺失" in row["settlement_note"]
+    assert "冻结件缺失" in capsys.readouterr().out
+
+
+def test_settle_post_pool_call_plan_needs_frozen_verdict(monkeypatch, tmp_path, capsys):
+    """9:25 模式缺冻结件时，盘后重点预案不得被结算成实际成交。"""
+    _isolate(monkeypatch, tmp_path)
+    al._append_jsonl(al.DECISIONS, {
+        "decision_date": "2026-09-23", "code": "000001", "name": "样本股",
+        "reason": "盘后重点", "bias": "focus", "view": None,
+        "execution_mode": "pool_call_925", "settled": False,
+    })
+    _write_quotes(tmp_path, "2026-09-24", {"000001": {"prev_close": 10.0, "auction_price": 10.2}})
+    monkeypatch.setattr(al, "_close_of", lambda code, d: 10.8)
+    assert al.cmd_settle(A(trade_date="2026-09-24")) == 0
+    assert al._read_jsonl(al.AI_LEDGER) == []
+    row = al._read_jsonl(al.DECISIONS)[0]
+    assert row["settled"] is True and "冻结件缺失" in row["settlement_note"]
+    assert "冻结件缺失" in capsys.readouterr().out

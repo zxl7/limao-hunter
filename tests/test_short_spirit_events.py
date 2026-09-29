@@ -65,6 +65,8 @@ def test_scan_event_written_by_main(tmp_path, monkeypatch):
     monkeypatch.setattr(ss, "build_signals", lambda d, n, c: (
         [{"name": "股1", "code": "600001", "sector": "S", "type": "涨停", "strength": 9.0}],
         "morning", 1, 1))
+    # ⛔ 下跌支路（2026-09-21 新增）同样必须 mock —— 否则 main() 会去抓真实跌幅榜（触网）
+    monkeypatch.setattr(ss, "build_signals_down", lambda d, n, c: ([], "morning", 0, 0))
     monkeypatch.setattr(sys, "argv", ["short_spirit.py", "--dry-run"])
     monkeypatch.setattr(os, "system", lambda *a, **k: 0)
     ss.main()

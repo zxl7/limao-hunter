@@ -45,6 +45,14 @@ def test_short_label_not_counted_as_repeat(tmp_path):
     assert not r["repeat"], r
 
 
+def test_per_stock_pool_call_label_not_counted_as_repeat(tmp_path):
+    """9:25 逐票裁决标签可重复，但每行承载不同个股的独立结论，不应误报。"""
+    line = "🤖 今日9:25判：放弃 （昨日预案：一般）"
+    p = _write(tmp_path, {"title": "T", "elements": [_div(line), _div(line)]})
+    r = cq.check_card(p)
+    assert not r["repeat"], r
+
+
 def test_struct_values_not_treated_as_text(tmp_path):
     """结构字段值（`plain_text`）不得被当文案（曾误报 `plain_text x2`）。"""
     p = _write(tmp_path, {"title": "T", "elements": [{"tag": "plain_text", "text_size": "normal"}]})

@@ -196,7 +196,7 @@ def turn_signal(seq: list) -> dict:
     ma = ma3(seq)
     vals = [v for v in ma if v is not None]
     if len(vals) < 3:
-        return {"dir": "unknown", "label": "样本不足", "ma3_last": vals[-1] if vals else None}
+        return {"dir": "unknown", "label": "记录不足", "ma3_last": vals[-1] if vals else None}
     a, b, c = vals[-3], vals[-2], vals[-1]
     if b > a and c > b:
         d, label = "repair", "修复确认（3日窗连续上行）"

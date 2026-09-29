@@ -29,6 +29,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
+# launchd 以 scripts/live_signal.py 直接启动，后续机构行情等模块需从项目根目录导入 common。
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 CACHE = ROOT / "cache"
 SNAP = CACHE / "pulse_snapshots"
 PUSH = HERE / "push_card.py"
@@ -314,6 +317,11 @@ REFLOW_PHASES = {"re-entry-candidate", "cooling", "分歧", "watch"}
 # ⛔ 可逆开关：加入 "neutral" 即放宽为「无明确趋势也参与」；置空集合 = 关闭资金趋势门
 #   （不推荐·会退回"实时榜单判"的旧行为）。
 REFLOW_FLOW_TREND_ALLOW = {"inflow_rising"}
+
+# 回流分层：资金趋势只能说明「钱开始回来」，题材确认还必须有盘中扩散与核心票价格响应。
+# 不修改候选与资金趋势阈值，仅决定卡片所处阶段及阶段迁移时是否需要即时提示。
+REFLOW_CONFIRM_MIN_ZT = 2
+REFLOW_CONFIRM_LEADER_PCT = 5.0
 
 # ── P2-17 L2 机构票实时拉升事件层（2026-09-11 落地·可逆开关）──
 # 08:50 机构早盘卡点名池（institution_pool_{date}.json·70+ 只中军/趋势票）× 盘中即时响应：
@@ -972,27 +980,66 @@ def _reflow_flow_ok(c: dict) -> bool:
     return ft in REFLOW_FLOW_TREND_ALLOW
 
 
-def build_reflow_card(cands, hhmm: str) -> dict:
-    """回流前兆卡：引擎判定资金趋势向上的回流候选盘中弹出（指纹去重·无变化不重复推）。
+def _reflow_price_evidence(theme: str, top5: list) -> dict:
+    """题材回流的盘中价格确认：板块新晋/升温 + 至少两只涨停 + 核心票明显拉升。
 
-    2026-09-15 口径切换：主判据 = flow_trend（引擎 5 日资金趋势）；当日实时资金榜降级为
-    佐证 → 命中时在卡面追加「盘中入榜 X」标注（无命中则不显示，卡面更干净）。
+    未匹配到当前 top5 只表示尚无实时价格证据，不能据此编造成「回流失败」。
     """
-    lines = ["**🔔 回流前兆**（回流候选·资金趋势向上）："]
-    for c in cands[:6]:
-        theme = c.get("theme", "")
-        pool = "、".join(f"{s.get('name')}({s.get('code')})"
-                         for s in (c.get("watch_pool") or [])[:4] if s.get("name"))
-        trend = FLOW_TREND_EMOJI.get(c.get("flow_trend"), "—")
-        _lh = c.get("_reflow_live_hits") or []
-        live_tag = f"｜盘中入榜 {_lh[0]}" if _lh else ""
-        lines.append(f"　<font color='purple'>▸ {theme}｜资金{trend}{live_tag}｜跟踪池 {pool}</font>")
+    for sector in top5 or []:
+        if not _reflow_name_hit(theme, str(sector.get("name") or "")):
+            continue
+        zt = int(sector.get("zt_count") or 0)
+        leader = sector.get("leader") or {}
+        leader_pct = float(leader.get("pct") or 0)
+        active = str(sector.get("delta") or "") in {"new", "surging"}
+        confirmed = active and zt >= REFLOW_CONFIRM_MIN_ZT and leader_pct >= REFLOW_CONFIRM_LEADER_PCT
+        return {"matched": True, "confirmed": confirmed, "sector": sector.get("name") or theme,
+                "zt_count": zt, "leader": leader, "leader_pct": leader_pct, "active": active}
+    return {"matched": False, "confirmed": False}
+
+
+def _reflow_fail_reason(c: dict) -> str:
+    """只在已提示的回流阶段转弱时出风险状态，避免把数据缺失误写成失败。"""
+    trend = str(c.get("flow_trend") or "")
+    return {"inflow_fading": "资金转弱", "outflow_shrinking": "资金尚未转入",
+            "outflow_widening": "资金流出放大", "neutral": "资金未形成回流"}.get(trend, "资金趋势失效")
+
+
+def build_reflow_card(cands, hhmm: str) -> dict:
+    """回流监控卡：区分资金试探、题材确认和回流失效（阶段变化驱动，避免重复刷屏）。
+
+    资金趋势仍是入池前提；只有板块扩散与核心票拉升同时成立，才显示为「题材确认」。
+    """
+    grouped = {"题材确认": [], "资金试探": [], "回流失效": []}
+    for c in cands:
+        grouped.setdefault(c.get("_reflow_stage") or "资金试探", []).append(c)
+    lines = ["**🔔 回流监控**（资金试探需等题材价格确认）："]
+    for stage, icon, color in (("题材确认", "✅", "red"), ("资金试探", "🟣", "purple"), ("回流失效", "⚠️", "orange")):
+        rows = grouped.get(stage) or []
+        if not rows:
+            continue
+        lines.append(f"**{icon} {stage} {len(rows)}个**：")
+        for c in rows[:6]:
+            theme = c.get("theme", "")
+            pool = "、".join(f"{s.get('name')}({s.get('code')})"
+                             for s in (c.get("watch_pool") or [])[:4] if s.get("name"))
+            live = c.get("_reflow_price") or {}
+            if stage == "题材确认":
+                leader = live.get("leader") or {}
+                evidence = (f"{live.get('sector')} 涨停{live.get('zt_count')}只"
+                            f"｜{leader.get('name') or '核心票'} +{float(live.get('leader_pct') or 0):.2f}%")
+            elif stage == "回流失效":
+                evidence = c.get("_reflow_fail_reason") or "资金趋势失效"
+            else:
+                _lh = c.get("_reflow_live_hits") or []
+                evidence = f"盘中入榜 {_lh[0]}" if _lh else "等待板块扩散"
+            lines.append(f"　<font color='{color}'>▸ {theme}｜{evidence}｜跟踪池 {pool}</font>")
     lines.append("")
-    lines.append("<font color='purple'>资金开始进场，留意竞价高开/龙头回踩5日线企稳的确认动作</font>")
+    lines.append("<font color='purple'>资金试探不等于题材启动；仅扩散与核心票同步时升级为题材确认</font>")
     elements = [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}}]
     elements.append({"tag": "note", "elements": [
-        {"tag": "plain_text", "content": "🔔 回流前兆监测（机器检测·非AI判断）"}]})
-    return {"title": f"⚡短线精灵·回流前兆 {hhmm}", "color": "purple", "elements": elements}
+        {"tag": "plain_text", "content": "🔔 资金与题材回流监控（机器检测·非AI判断）"}]})
+    return {"title": f"⚡短线精灵·回流监控 {hhmm}", "color": "purple", "elements": elements}
 
 
 def build_card(new_nf, new_zt, new_surge, new_strong, hhmm: str, new_sector=None, new_charge=None) -> dict:
@@ -1245,7 +1292,7 @@ def _sector_money_txt(latest: dict, board_name: str, *, enabled: bool = True,
             # 别名/家族聚合 → 板块口径合计 + 成员明细前3
             clr = "red" if tot >= 0 else "green"
             sign = "+" if tot >= 0 else "-"
-            det = "·".join(f"{n}{v:+.1f}" for n, v in hits[:3])
+            det = "丨".join(f"{n}{v:+.1f}" for n, v in hits[:3])
             head = board_name if not family_members else str(board_name or "家族")
             return (f"💰{head}板块合计净额 <text_tag color='{clr}'>{sign}{abs(tot):.1f}亿</text_tag>"
                     f"（{det}…）")
@@ -1271,7 +1318,7 @@ def _sector_money_txt(latest: dict, board_name: str, *, enabled: bool = True,
         # 家族全 miss → 点名实际成员，避免"泛农业"给人无实体的错觉
         mem = [str(m.get("name") or "") if isinstance(m, dict) else str(m)
                for m in family_members][:3]
-        return "💤 资金未入榜（家族成员均无东财独立板块资金：{}）".format("·".join(mem))
+        return "💤 资金未入榜（家族成员均无东财独立板块资金：{}）".format("丨".join(mem))
     return "💤 资金未入榜（东财板块口径无此板块·题材聚合无独立资金）"
 
 
@@ -1378,14 +1425,9 @@ def build_sector_boost_card(sectors: list, hhmm: str, latest: dict) -> dict:
         # 格式对齐 🔥突发题材榜 跟涨行风格：全红·名(代码)+涨幅··分隔·单行自动折行。
         _zs = s.get("zt_stocks") or []
         if _zs:
-            _MAX_ZT_SHOW = 12
-            _shown = _zs[:_MAX_ZT_SHOW]
-            _zt_txt = "·".join(
-                f"{z.get('name')}({str(z.get('code') or '')[:6]})+{float(z.get('pct') or 0):.1f}%"
-                for z in _shown)
-            if len(_zs) > _MAX_ZT_SHOW:
-                _zt_txt += f"·等{len(_zs) - _MAX_ZT_SHOW}只"
-            lines.append(f"　<font color='red'>🔒 涨停{len(_zs)}家：{_zt_txt}</font>")
+            # 分段展示（2026-09-21 用户「个股太多堆了一堆·布局分割一下」）：
+            # 原 12 只平铺一行 → 视觉堆叠；现 20cm 分档 + 每行 5 只（信息不砍·超量记「等N只」）
+            lines.extend(_fmt_zt_stocks(_zs))
         # 板块卡纯板块级：不列个股龙头（防存量连板龙头被当个股旧闻推·2026-09-07 用户铁律
         # 「异动群推送必须当下增量·禁推存量」）；个股级即时推送归短线精灵（A 激活后连板龙头即时卡）
         # A：资金行补查（默认关；关时不加行，与改动前一致）
@@ -1401,6 +1443,56 @@ def build_sector_boost_card(sectors: list, hhmm: str, latest: dict) -> dict:
     elements = [block(*lines), {"tag": "hr"},
                 {"tag": "note", "elements": [md(f"📡 板块强势/加强 | {hhmm} | 机器检测·非AI判断")]}]
     return {"title": f"📊 短线精灵·板块加强 {hhmm}", "color": "red", "elements": elements}
+
+
+def _fmt_zt_stocks(zs: list, max_show: int = 12, per_line: int = 5) -> list:
+    """板块涨停成分清单 → **分段文本行**（2026-09-21 用户「个股太多堆了一堆·布局分割一下」）。
+
+    背景：涨停成分原平铺一行（12 只 × 约 20 字符 = 单行 240+ 字符）→ 飞书上视觉堆成一坨
+    （实证 13:31 医药板块 20 只涨停）。现按 **20cm 优先分档 + 每行 per_line 只**输出多行；
+    ⛔ 信息不砍（超出 max_show 记「等 N 只」），仅换行分割。
+
+    ⛔ 防御性过滤（2026-09-21 实证卡面出现 688 票）：剔除 **科创板 688**（用户无权限·铁律）
+    与 **ST**（风险标的）——上游若漏滤，卡面也不显示；家数口径与卡面展示一致（有效标的）。
+
+    返回 list[str]（每项一行·含全角缩进与红色标签）；[] = 无有效成分。
+    """
+    if not zs:
+        return []
+    # 防御性过滤：688 科创板（无权限）+ ST（风险）
+    zs = [z for z in zs
+          if not str(z.get("code") or "").strip().startswith("688")
+          and "ST" not in str(z.get("name") or "").upper()]
+    if not zs:
+        return []
+
+    def _one(z: dict) -> str:
+        return (f"{z.get('name')}({str(z.get('code') or '')[:6]})"
+                f"+{float(z.get('pct') or 0):.1f}%")
+
+    total = len(zs)
+    # 头部统计用**全量**分档计数（⛔ 非截断后数量——避免「主板7只」式误导，2026-09-21 修正）
+    n20 = len([z for z in zs if float(z.get("pct") or 0) >= 19.0])
+    n10 = total - n20
+    head = f"🔒 涨停{total}家"
+    if n20 and n10:
+        head += f"（20cm {n20}只 丨 主板 {n10}只）"
+    out = [f"　<font color='red'>{head}</font>"]
+    shown = zs[:max_show]
+    z20 = [z for z in shown if float(z.get("pct") or 0) >= 19.0]
+    z10 = [z for z in shown if float(z.get("pct") or 0) < 19.0]
+    groups = ([("20cm", z20), ("主板", z10)] if z20 and z10
+              else ([("20cm", z20)] if z20 else [("", z10)]))
+    for label, group in groups:
+        if not group:
+            continue
+        for i in range(0, len(group), per_line):
+            chunk = group[i:i + per_line]
+            prefix = f"{label}：" if (label and i == 0) else "　　"
+            out.append(f"　<font color='red'>{prefix}{'丨'.join(_one(z) for z in chunk)}</font>")
+    if total > max_show:
+        out.append(f"　<font color='red'>　　等{total - max_show}只…</font>")
+    return out
 
 
 def build_nuke_card(fb: dict, hhmm: str) -> dict:
@@ -1897,11 +1989,15 @@ def main():
     #    冷却到期但指纹未变 → 不重推（无变化不重复推=幂等底线）。
     _reflow_sig_raw = sig.get("reflow_sig_map", {})
     reflow_sig_map = dict(_reflow_sig_raw) if isinstance(_reflow_sig_raw, dict) else {}
+    # 阶段图只记录已告警对象：资金试探→题材确认可立即升级；转弱仅报一次，防高频轮询刷屏。
+    _reflow_stage_raw = sig.get("reflow_stage_map", {})
+    reflow_stage_map = dict(_reflow_stage_raw) if isinstance(_reflow_stage_raw, dict) else {}
     _reflow_cd = 1800 if HIGH_FREQ_INTRADAY else 10**12
     reflow_cands = []
     tr = None
     live_inflow: set = set()
     _st_phase = _st_pool = _st_cool = _st_nodup = _st_flow = 0   # P2-10 漏斗计数（初始化在此，防 try 早期异常未定义）
+    _st_probe = _st_confirm = _st_failed = 0
     try:
         tr = load(CACHE / "theme_rotation.json")
         inflow_names = {x.get("name") for x in (tr.get("market_context") or {}).get("inflow_top", [])}
@@ -1928,6 +2024,14 @@ def main():
             #    （见 `_reflow_flow_ok`）；实时榜降级为**盘中佐证**（不否决·见下方）。
             if not _reflow_flow_ok(c):
                 _st_flow += 1
+                # 已发过试探/确认、但资金趋势转弱：输出一次失效状态；未曾提示的候选不制造失败卡。
+                if reflow_stage_map.get(nm) in {"资金试探", "题材确认"}:
+                    failed = dict(c)
+                    failed["_reflow_stage"] = "回流失效"
+                    failed["_reflow_fail_reason"] = _reflow_fail_reason(c)
+                    reflow_cands.append(failed)
+                    reflow_stage_map[nm] = "回流失效"
+                    _st_failed += 1
                 continue
             # 实时榜命中 = **盘中佐证**（2026-09-15 降级·不再是否决门）：
             #   主判据已由引擎 flow_trend 承担；实测该榜为东财泛行业名（PCB/半导体/电子…），
@@ -1937,28 +2041,44 @@ def main():
             if not _hits:
                 _st_pool += 1          # 无盘中佐证计数（保留可观测性·不阻断）
             c["_reflow_live_hits"] = _hits
-            _sig_now = "|".join(_hits) + "#" + "|".join(
+            price = _reflow_price_evidence(nm, latest.get("top5") or [])
+            stage = "题材确认" if price.get("confirmed") else "资金试探"
+            c["_reflow_stage"] = stage
+            c["_reflow_price"] = price
+            _sig_now = stage + "#" + "|".join(_hits) + "#" + "|".join(
                 sorted(str(s.get("code") or "") for s in (c.get("watch_pool") or [])[:4]))
             _last = reflow_pushed.get(nm, "")
-            _ok = not _last
+            # 阶段升级（试探→确认）是新的盘面事实，不能被 30 分钟冷却延迟；
+            # 旧状态文件没有 stage 时只补状态、不补发历史卡，避免部署后集中重推。
+            _previous_stage = reflow_stage_map.get(nm)
+            _stage_changed = bool(_previous_stage) and _previous_stage != stage
+            _ok = not _last or _stage_changed
             if _last:
                 try:
-                    _ok = (datetime.now() - datetime.fromisoformat(_last)).total_seconds() > _reflow_cd
+                    _cool_ready = (datetime.now() - datetime.fromisoformat(_last)).total_seconds() > _reflow_cd
                 except Exception:
-                    _ok = False
+                    _cool_ready = False
                 # ⛔ 变化驱动（2026-09-15 修）：冷却到期只代表"允许再推"，还须**指纹变化**
                 #    （命中的资金榜板块 或 跟踪池成员变了）才算真变化。
                 #    反例：09-15「电子布」因短名误命中而持续"在榜"，指纹恒同，
                 #    冷却每到期就重弹一张 → 全天 6 次刷屏。
-                if _ok and reflow_sig_map.get(nm, "") == _sig_now:
+                if not _stage_changed and (_cool_ready and reflow_sig_map.get(nm, "") != _sig_now):
+                    _ok = True
+                elif not _stage_changed:
                     _ok = False
                     _st_nodup += 1
             if _ok:
                 reflow_cands.append(c)
                 reflow_pushed[nm] = datetime.now().isoformat()
                 reflow_sig_map[nm] = _sig_now
+                reflow_stage_map[nm] = stage
+                if stage == "题材确认":
+                    _st_confirm += 1
+                else:
+                    _st_probe += 1
             else:
                 _st_cool += 1
+                reflow_stage_map[nm] = stage
     except Exception as e:
         print(f"[live_signal] reflow detect ERR:{e}")
     # ⛔ 2026-09-14 修复（刷屏级·与上方 1713 同源故障的第二处）：原下一行
@@ -1970,6 +2090,7 @@ def main():
     #    后才暴露。现只保留带时间戳的 dict；load 侧 list 迁移分支保留（兼容历史文件）。
     sig["reflow_pushed"] = reflow_pushed
     sig["reflow_sig_map"] = reflow_sig_map   # ⛔ 必须与 reflow_pushed 同写入，否则指纹丢失=去重失效
+    sig["reflow_stage_map"] = reflow_stage_map
     # P2-10 审计（2026-09-11）：回流前兆判定留痕——每日首次记录**漏斗分解**
     # （phase 不匹配 / 资金榜未命中 / 冷却中 / 最终命中），零触发时可直接定位卡在哪一层。
     # ⛔ dry-run 不写（防污染真实诊断）。
@@ -1988,7 +2109,8 @@ def main():
                   phases=sorted({str(x.get("phase")) for x in ((tr or {}).get("candidates") or [])}),
                   skip_phase=_st_phase, skip_flow=_st_flow, skip_pool=_st_pool,
                   skip_cool=_st_cool,
-                  skip_nodup=_st_nodup, hits=len(reflow_cands), inflow_pool=len(live_inflow or set()))
+                  skip_nodup=_st_nodup, hits=len(reflow_cands), inflow_pool=len(live_inflow or set()),
+                  probe=_st_probe, confirmed=_st_confirm, failed=_st_failed)
             sig["reflow_eval_date"] = _reflow_today
             save_sig(sig)
         except Exception:

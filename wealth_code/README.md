@@ -80,6 +80,9 @@ python scripts/run_wealth_code.py verify --synthesize
 
 # 查看最新净值与指标
 python scripts/run_wealth_code.py status
+
+# 只读重建“候选 -> 竞价 -> 入场 -> 收盘收益”证据链
+python scripts/execution_audit.py
 ```
 
 > `verify --synthesize` 用候选的 price/pct 反推昨收并确定性合成竞价/收盘价，
@@ -88,6 +91,9 @@ python scripts/run_wealth_code.py status
 > ⚠️ **成绩数据永久维护**：`cache/` 下的 `account_nav_history.jsonl`（净值账本）、
 > `account_strategy_metrics.json`（胜率/收益）、`candidates-*.json`（候选）、`auction_quotes-*.json`
 > （竞价快照）是**长期统计的唯一依据，禁止清空/删除**（与用户"每月一票、长期统计"纪律一致）。
+>
+> `execution_audit.py` 只读取这些冻结件，输出独立的执行审计报告；候选命中、连板晋级和题材回流
+> 仍是解释性研究，不能替代账户已入场且有收盘收益的记录。
 
 ## 五、接入盯盘系统的下一步
 

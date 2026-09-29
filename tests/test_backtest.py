@@ -174,22 +174,72 @@ def test_learning_apply_requires_master_switch():
 
 
 def test_learning_apply_suggestion_backup(tmp_path, monkeypatch):
-    """apply_suggestion：改 base_range + 生成回滚快照 + 幅度受限。"""
-    # 用临时配置目录模拟
+    """⛔ L2 冻结（2026-09-18）：R1 的回写必须被拒绝、且**不得改盘**。
+
+    旧断言（applied=True）已被用户拍板推翻 —— `range_hit` 与赚钱无因果；
+    R1/R4 永久降级为「仅建议」，改由人工拍板。
+    """
     tmp_conf = tmp_path / "expectation_rules.json"
     tmp_conf.write_text(json.dumps({"base_range": [0.0, 2.5], "max_range_width": 2.0}), encoding="utf-8")
     monkeypatch.setattr(ln, "EXPECT_RULES", tmp_conf)
     monkeypatch.setattr(ln, "BACKUP_DIR", tmp_path / "backups")
+    before = tmp_conf.read_text(encoding="utf-8")
 
     sug = {"rule": "R1_range_low", "target": "expectation_rules.json.base_range", "step": 0.3,
            "suggest": "base_range 下移 0.3（预期系统性偏乐观）"}
     res = ln.apply_suggestion(sug, {"max_adjust_step": 0.3})
-    assert res["applied"] is True
-    assert res["before"] == [0.0, 2.5]
-    assert res["after"] == [-0.3, 2.2]
-    assert "learning_rollback_" in res["snapshot"]
-    # 快照文件确实生成
-    assert list((tmp_path / "backups").glob("learning_rollback_*"))
+    assert res["applied"] is False
+    assert "仅建议" in res["reason"]
+    assert tmp_conf.read_text(encoding="utf-8") == before, "冻结规则不得改盘"
+
+
+def test_learning_apply_backup_targets_real_file(tmp_path, monkeypatch):
+    """回写机制仍可用（唯一可写档 = R2 relay 门槛），且**快照必须备份真实目标文件**。
+
+    历史缺陷：`backup_snapshot` 无条件备份 expectation_rules.json → 改 relay 配置时
+    「备份了 A、改了 B」，`--rollback` 会还原错文件（可逆性失效）。本锁防复发。
+    """
+    exp = tmp_path / "expectation_rules.json"
+    exp.write_text(json.dumps({"base_range": [-0.6, 1.9]}), encoding="utf-8")
+    relay = tmp_path / "relay_score_config.json"
+    relay.write_text(json.dumps({"bands": {"first_choice_min": 80.0}}), encoding="utf-8")
+    monkeypatch.setattr(ln, "EXPECT_RULES", exp)
+    monkeypatch.setattr(ln, "RELAY_RULES", relay)
+    monkeypatch.setattr(ln, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ln, "audit", lambda *a, **k: None)     # ⛔ 测试不得污染真实 cache/audit.jsonl
+    # ⛔ R2 在生产已关死（RULE_RISK=high）→ 本测试在**放开 R2=medium** 的受控前提下，
+    #   验证 apply_suggestion 的写入/备份机制仍正确（可逆性锁防复发）。不影响生产冻结。
+    monkeypatch.setattr(ln, "RULE_RISK", {**ln.RULE_RISK, "R2_cand_low": "medium"})
+
+    sug = {"rule": "R2_cand_low", "target": "relay_score_config.json.bands.first_choice_min",
+           "step": 2, "suggest": "relay first_choice_min 门槛上调 2 分"}
+    res = ln.apply_suggestion(sug, {"max_adjust_step": 0.3})
+    assert res["applied"] is True and res["before"] == 80.0 and res["after"] == 80.3
+    # 改的是 relay、不是 expectation_rules
+    assert json.loads(relay.read_text(encoding="utf-8"))["bands"]["first_choice_min"] == 80.3
+    assert json.loads(exp.read_text(encoding="utf-8"))["base_range"] == [-0.6, 1.9]
+    # 快照存的是**被改那个文件**的原内容
+    snap = Path(res["snapshot"])
+    assert snap.name.endswith("__relay_score_config.json"), snap.name
+    assert json.loads(snap.read_text(encoding="utf-8"))["bands"]["first_choice_min"] == 80.0
+
+
+def test_learning_rollback_restores_correct_file(tmp_path, monkeypatch):
+    """`--rollback` 须按快照名复原到**正确文件**（relay），而非固定 expectation_rules。"""
+    exp = tmp_path / "expectation_rules.json"
+    exp.write_text('{"base_range": [-0.6, 1.9]}', encoding="utf-8")
+    relay = tmp_path / "relay_score_config.json"
+    relay.write_text('{"bands": {"first_choice_min": 80.0}}', encoding="utf-8")
+    snapdir = tmp_path / "backups"
+    snapdir.mkdir()
+    snap = snapdir / "learning_rollback_20260918_120000_relay_score_config__relay_score_config.json"
+    snap.write_text('{"bands": {"first_choice_min": 78.0}}', encoding="utf-8")
+    monkeypatch.setattr(ln, "EXPECT_RULES", exp)
+    monkeypatch.setattr(ln, "RELAY_RULES", relay)
+    monkeypatch.setattr(ln, "audit", lambda *a, **k: None)     # ⛔ 测试不得污染真实 cache/audit.jsonl
+    ln.rollback(str(snap))
+    assert json.loads(relay.read_text(encoding="utf-8"))["bands"]["first_choice_min"] == 78.0
+    assert json.loads(exp.read_text(encoding="utf-8"))["base_range"] == [-0.6, 1.9]   # 未被误改
 
 
 def test_learning_apply_step_capped():
@@ -311,3 +361,119 @@ def test_optimization_plan_decisions_structure(tmp_path, monkeypatch):
     for d in decs:
         for k in ("id", "cat", "sev", "title", "evidence", "action", "impact", "default"):
             assert k in d, f"{d['id']} 缺字段 {k}"
+
+
+def test_learning_effect_falls_back_to_effect_applied(tmp_path, monkeypatch):
+    """学习效果回看：「上轮自动应用」必须能取到值（2026-09-18 修）。
+
+    事故：`load_learning_effect()` 读顶层 `applied_summary`，而 learning.py **从不写**该字段
+    → 卡面「上轮自动应用：」长期渲染为空（真实数据在 `effect.applied`）。
+    """
+    import gen_optimization_plan as op
+    row = {"generated_at": "2026-09-18T17:50:38+08:00", "mode": "tiered",
+           "range_hit_rate_avg": 19.4,
+           "effect": {"since": "2026-09-17T21:52:46+08:00",
+                      "applied": ["expectation_rules.json.base_range: [-0.3, 2.2]→[-0.6, 1.9]"],
+                      "range_hit_rate": "19.6% → 19.4%", "improved": False}}
+    (tmp_path / "learning_history.jsonl").write_text(
+        json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+    monkeypatch.setattr(op, "CACHE", tmp_path)
+    eff = op.load_learning_effect()
+    assert eff is not None
+    assert eff["applied"] == ["expectation_rules.json.base_range: [-0.3, 2.2]→[-0.6, 1.9]"]
+    # 渲染出的那一行不得是空值
+    line = [e for e in op.render_card({"decisions": [], "health_issue_count": 0,
+                                       "learning_effect": eff, "suggestions": [],
+                                       "proposals": [], "factor_attr": None,
+                                       "card_quality": None, "week_label": "测试周",
+                                       "week_hist": []})["elements"]
+            if "上轮自动应用" in ((e.get("text") or {}).get("content") or "")]
+    assert line and "base_range" in line[0]["text"]["content"]
+
+
+def test_optimization_plan_render_sanitizes_legacy_copy():
+    """渲染出口白话化：**真实 plan（含旧落盘 evidence/提案文案）** 渲染出的卡零 Tier-1。
+
+    背景（2026-09-18 实证）：09-21 起 Tier-1 转阻断，而 plan 里的 evidence / 提案
+    是 09-02~09-14 生成的旧文案（含「样本」）→ 不做渲染层白话化就是**整卡推不出去**。
+    """
+    import gen_optimization_plan as op
+    import card_copy_rules as R
+    p = ROOT / "cache" / "optimization_plan_latest.json"
+    if not p.exists():
+        return
+    plan = json.loads(p.read_text(encoding="utf-8"))
+    card = op.render_card(plan)
+
+    def strings(o):
+        if isinstance(o, str):
+            yield o
+        elif isinstance(o, dict):
+            for k, v in o.items():
+                if k in ("tag", "template", "color", "msg_type", "type", "schema", "font"):
+                    continue
+                yield from strings(v)
+        elif isinstance(o, list):
+            for v in o:
+                yield from strings(v)
+
+    f, _ = R.scan("\n".join(strings(card)))
+    assert f == [], f"优化方案卡残留 Tier-1 禁项: {f}"
+
+
+# ────────────────── 沙盒审计不得写穿生产日志（2026-09-22 立） ──────────────────
+def test_is_prod_write_rejects_sandbox_paths(tmp_path):
+    """⛔ 测试/临时路径一律判为非生产 —— 否则 `apply_suggestion` 的 audit 会污染
+    `cache/audit.jsonl`（实测 197 条 auto_apply 中 194 条为 pytest 噪声，
+    会造成「谁改了参数」的误判）。"""
+    assert ln._is_prod_write(tmp_path / "expectation_rules.json") is False
+    assert ln._is_prod_write("/private/var/folders/xy/pytest-of-zxl/x/y.json") is False
+    assert ln._is_prod_write("/tmp/anything.json") is False
+    assert ln._is_prod_write(ln.EXPECT_RULES) is True          # 真实配置 → 生产
+    assert ln._is_prod_write(ln.RELAY_RULES) is True
+
+
+def test_apply_suggestion_skips_audit_in_sandbox(tmp_path, monkeypatch):
+    """沙盒内回写**不得**产生生产审计记录（代码层兜底·不依赖测试自觉 monkeypatch）。"""
+    calls: list[tuple] = []
+    exp = tmp_path / "expectation_rules.json"
+    exp.write_text(json.dumps({"base_range": [-0.6, 1.9]}), encoding="utf-8")
+    monkeypatch.setattr(ln, "EXPECT_RULES", exp)
+    monkeypatch.setattr(ln, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ln, "audit", lambda *a, **k: calls.append(a))
+    # 受控放开 R1（生产已冻结），只为验证「沙盒 → 不写审计」这条路径
+    monkeypatch.setattr(ln, "RULE_RISK", {**ln.RULE_RISK, "R1_range_low": "medium"})
+    sug = {"rule": "R1_range_low", "target": "expectation_rules.json.base_range",
+           "step": 0.3, "suggest": "base_range 下移 0.3"}
+    res = ln.apply_suggestion(sug, {"max_adjust_step": 0.3})
+    assert res["applied"] is True                     # 回写本身仍生效（可逆性不变）
+    assert calls == []                                # ⛔ 但审计不得写入生产日志
+
+
+# ────────────────── 沙盒审计不得写穿生产日志（2026-09-22 立） ──────────────────
+def test_is_prod_write_rejects_sandbox_paths(tmp_path):
+    """⛔ 测试/临时路径一律判为非生产 —— 否则 `apply_suggestion` 的 audit 会污染
+    `cache/audit.jsonl`（实测 197 条 auto_apply 中 194 条为 pytest 噪声，
+    会造成「谁改了参数」的误判）。"""
+    assert ln._is_prod_write(tmp_path / "expectation_rules.json") is False
+    assert ln._is_prod_write("/private/var/folders/xy/pytest-of-zxl/x/y.json") is False
+    assert ln._is_prod_write("/tmp/anything.json") is False
+    assert ln._is_prod_write(ln.EXPECT_RULES) is True          # 真实配置 → 生产
+    assert ln._is_prod_write(ln.RELAY_RULES) is True
+
+
+def test_apply_suggestion_skips_audit_in_sandbox(tmp_path, monkeypatch):
+    """沙盒内回写**不得**产生生产审计记录（代码层兜底·不依赖测试自觉 monkeypatch）。"""
+    calls: list[tuple] = []
+    exp = tmp_path / "expectation_rules.json"
+    exp.write_text(json.dumps({"base_range": [-0.6, 1.9]}), encoding="utf-8")
+    monkeypatch.setattr(ln, "EXPECT_RULES", exp)
+    monkeypatch.setattr(ln, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(ln, "audit", lambda *a, **k: calls.append(a))
+    # 受控放开 R1（生产已冻结），只为验证「沙盒 → 不写审计」这条路径
+    monkeypatch.setattr(ln, "RULE_RISK", {**ln.RULE_RISK, "R1_range_low": "medium"})
+    sug = {"rule": "R1_range_low", "target": "expectation_rules.json.base_range",
+           "step": 0.3, "suggest": "base_range 下移 0.3"}
+    res = ln.apply_suggestion(sug, {"max_adjust_step": 0.3})
+    assert res["applied"] is True                     # 回写本身仍生效（可逆性不变）
+    assert calls == []                                # ⛔ 但审计不得写入生产日志

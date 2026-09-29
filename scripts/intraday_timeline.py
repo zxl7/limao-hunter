@@ -88,6 +88,24 @@ def _is_zt(pct: float, is_20cm: bool) -> bool:
         return False
 
 
+def _limit_up_map(rows, total):
+    """校验完整涨停集合；缺字段、重码或数量不符一律视为不可采集。"""
+    if not isinstance(total, (int, float)) or not isinstance(rows, list) or len(rows) != int(total):
+        return None
+    out = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        code = str(row.get("code") or "").strip()
+        if not code or code in out:
+            return None
+        out[code] = {
+            "code": code, "name": str(row.get("name") or code).strip(),
+            "pct": row.get("pct"), "boards": row.get("boards"), "sector": row.get("sector"),
+        }
+    return out
+
+
 def collect(latest: dict, state: dict) -> tuple[list, dict]:
     """**纯函数**：本轮快照 + 上轮状态 → (本轮新事件, 新状态)。
 
@@ -95,7 +113,9 @@ def collect(latest: dict, state: dict) -> tuple[list, dict]:
     同样的快照连跑两次，第二次产出**空**。
     """
     st = {
+        # total 与集合必须来自同一次完整采集，才可作为下一轮差分基准。
         "total": state.get("total"),
+        "limit_up_stocks": list(state.get("limit_up_stocks") or []),
         "sector_up": dict(state.get("sector_up") or {}),
         "seen_zt": set(state.get("seen_zt") or []),
         "seen_ld": set(state.get("seen_ld") or []),
@@ -104,12 +124,25 @@ def collect(latest: dict, state: dict) -> tuple[list, dict]:
     }
     evs: list = []
 
-    # ── 涨停总数变化（全市场口径的「情绪温度」）──
+    # ── 涨停总数变化（必须有完整个股差分，采集不完整就不写节点）──
     total = latest.get("total_zt")
-    if isinstance(total, (int, float)) and total != st["total"]:
-        evs.append({"kind": "zt_total", "total": int(total),
-                    "delta": None if st["total"] is None else int(total - st["total"])})
+    current = _limit_up_map(latest.get("limit_up_stocks"), total)
+    previous = _limit_up_map(st["limit_up_stocks"], st["total"])
+    if current is not None:
+        if previous is not None:
+            added_codes = set(current) - set(previous)
+            removed_codes = set(previous) - set(current)
+            delta = int(total) - int(st["total"])
+            # 只接受单向且数量完全对齐的集合差分，避免漏采/切换造成伪归因。
+            valid = ((delta > 0 and len(added_codes) == delta and not removed_codes) or
+                     (delta < 0 and len(removed_codes) == -delta and not added_codes))
+            if valid:
+                evs.append({"kind": "zt_total", "total": int(total), "delta": delta,
+                            "added": [current[c] for c in sorted(added_codes)],
+                            "removed": [previous[c] for c in sorted(removed_codes)]})
+        # 仅完整集合可更新基准；缺失/不完整快照保留上一轮可靠集合。
         st["total"] = int(total)
+        st["limit_up_stocks"] = [current[c] for c in sorted(current)]
 
     # ── 板块走强（top5 涨停家数环比上升）──
     for s in (latest.get("top5") or []):
@@ -162,6 +195,7 @@ def collect(latest: dict, state: dict) -> tuple[list, dict]:
 
     new_state = {
         "total": st["total"],
+        "limit_up_stocks": st["limit_up_stocks"],
         "sector_up": st["sector_up"],
         "seen_zt": sorted(st["seen_zt"]),
         "seen_ld": sorted(st["seen_ld"]),

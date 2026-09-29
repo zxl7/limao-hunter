@@ -365,6 +365,23 @@ def mirror_push(card: dict, targets: list, card_path: str) -> None:
                    result="exception", detail=f"mirror:{t['name']} {e}"[:200])
 
 
+def _mask_url(url: str) -> str:
+    """⛔ 脱敏 webhook URL（2026-09-23）：完整 token 不得进日志、终端回显或对话。
+
+    只保留「路径前缀 + token 前后各 4 位」，足以核对“是不是这条 webhook”，
+    又不足以被滥用。dry-run 与任何报错输出都必须过这里。
+    """
+    s = str(url or "")
+    if not s:
+        return "(空)"
+    head, _, tail = s.rpartition("/")
+    if not head:                     # 无路径分隔符 → 整体当 token 处理
+        return (s[:4] + "…" + s[-4:]) if len(s) > 8 else "***"
+    tok = tail
+    masked = (tok[:4] + "…" + tok[-4:]) if len(tok) > 8 else "***"
+    return f"{head}/{masked}"
+
+
 def main():
     purge_stray_scripts()
     ap = argparse.ArgumentParser()
@@ -427,7 +444,7 @@ def main():
         else:
             mode, tag = "交易日自动(按星期)", "未设置"
         print(f"[dry-run] 选群策略: {mode} ({tag})")
-        print(f"[dry-run] 选用 key: {resolved} -> {wh}")
+        print(f"[dry-run] 选用 key: {resolved} -> {_mask_url(wh)}")
         print(f"[dry-run] msg_type: {card.get('msg_type')} | card keys: {list(card.get('card', {}).keys())}")
         _mt = mirror_targets(Path(args.card).name, resolved, card)
         print(f"[dry-run] 卡标题: {card_title(card) or '(空)'}")

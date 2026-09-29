@@ -85,6 +85,12 @@ def http_get(url, t=10):
     with urllib.request.urlopen(r, timeout=t) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
+def http_get_tx_index(url, t=10):
+    """腾讯 qt 指数接口返回 GBK 文本，交给 parse_tx_index 解析。"""
+    r = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(r, timeout=t) as resp:
+        return resp.read().decode("gbk")
+
 def http_post(url, body, t=10):
     d = json.dumps(body, ensure_ascii=False).encode("utf-8")
     r = urllib.request.Request(url, data=d, headers={"User-Agent": UA, "Content-Type": "application/json"})
@@ -176,7 +182,7 @@ class Fetcher:
                 "https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&"
                 "secids=1.000001,0.399001,0.399006&fields=f2,f3,f6,f12,f14,f104,f105,f106"),
             # 腾讯量能兜底源（东财挂时用：qt.gtimg.cn 指数成交额）——fetch_market 层双源切换
-            "tx_index":  lambda: http_get("http://qt.gtimg.cn/q=sh000001,sz399001,sz399006"),
+            "tx_index":  lambda: http_get_tx_index("http://qt.gtimg.cn/q=sh000001,sz399001,sz399006"),
             # 跌停池 / 炸板池（情绪双指标）
             "ld_pool":   lambda: http_get(f"{XGB_BASE}/pool/detail?pool_name=limit_down&_ts={ts()}"),
             "broken_pool": lambda: http_get(f"{XGB_BASE}/pool/detail?pool_name=limit_up_broken&_ts={ts()}"),
@@ -460,9 +466,12 @@ def _fetch_tx_selfchanged():
         if not _npx:
             print("[intraday_pulse] npx 不可用（changedist 兜底跳过）")
             return None
+        # launchd 的 PATH 可能没有 node；npx 的 shebang 通过 env 查找同目录 node。
+        _env = os.environ.copy()
+        _env["PATH"] = f"{Path(_npx).parent}{os.pathsep}{_env.get('PATH', '')}"
         r = subprocess.run(
             [_npx, "-y", "westock-data-skillhub@1.0.5", "changedist"],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True, timeout=30, env=_env)
         if r.returncode != 0:
             print(f"[intraday_pulse] changedist npx 失败 rc={r.returncode}: {r.stderr.strip()[:150]}")
             return None
@@ -633,24 +642,40 @@ def build_sector_risk(threshold=SECTOR_RISK_THRESHOLD):
     跌幅榜按 f3 排序抓前 100 足够；但资金流榜若也按 f3 排序，涨得好/大额流入的板块会落在 100 名外而被漏掉。
     因此资金流榜**独立按 f62(主力净额)排序抓取**（po=1 取净流入最大、po=0 取净流出最大），保证大额资金直接落第 1 页。
     """
-    # 60s 本地缓存：守护进程每 10 分钟刷一次，两次抓取间复用（东财段提速关键）
+    # 60s 缓存仅复用完整快照；不完整抓取不能覆盖最后一次可信数据。
+    cache_path = CACHE_DIR / "sector_risk_cache.json"
+    cached_data, cached_age = None, None
     try:
-        cache_path = CACHE_DIR / "sector_risk_cache.json"
-        if cache_path.exists():
-            try:
-                cb = json.loads(cache_path.read_text())
-                if (now() - datetime.fromtimestamp(cb.get("ts", 0), BJ_TZ)).total_seconds() < 60:
-                    return cb.get("data")
-            except Exception:
-                pass
+        cb = json.loads(cache_path.read_text())
+        age = (now() - datetime.fromtimestamp(cb.get("ts", 0), BJ_TZ)).total_seconds()
+        if 0 <= age and isinstance(cb.get("data"), dict) and cb["data"].get("complete") is True:
+            cached_data, cached_age = cb["data"], age
+            if age < 60:
+                return cached_data
     except Exception:
         pass
+
+    def unavailable(reason, partial=None):
+        # 只允许同交易日、10 分钟内的完整快照回退，并明确标为旧数据。
+        if cached_data and cached_age is not None and cached_age <= 600 and \
+                str(cached_data.get("asof", ""))[:10] == now().strftime("%Y-%m-%d"):
+            return {**cached_data, "ok": False, "stale": True, "error": reason}
+        return {**(partial or {}), "ok": False, "complete": False, "error": reason,
+                "declining": (partial or {}).get("declining", []),
+                "focus_declining": (partial or {}).get("focus_declining", []),
+                "count": (partial or {}).get("count"),
+                "inflow_top": (partial or {}).get("inflow_top", []),
+                "outflow_top": (partial or {}).get("outflow_top", [])}
+
     try:
         allsec = {}
         def fetch_all(host):
-            res = {}
+            res, received = {}, set()
             for _label, fs in EM_BOARD_FS:
-                for it in _em_board_get(host, fs):
+                rows = _em_board_get(host, fs)
+                if rows:
+                    received.add(fs)
+                for it in rows:
                     nm = it.get("f14", "")
                     pct = it.get("f3")
                     if nm and isinstance(pct, (int, float)):
@@ -659,13 +684,15 @@ def build_sector_risk(threshold=SECTOR_RISK_THRESHOLD):
                             res[nm] = {"name": nm, "pct": round(pct, 2),
                                        "main_inflow": it.get("f62"),
                                        "is_focus": any(k in nm for k in SECTOR_FOCUS_KEYWORDS)}
-            return res
-        # 双源并行抓取
+            return res, received
+        # 双源并行抓取；同一类别至少有一个 host 返回才算采集完整。
         with ThreadPoolExecutor(max_workers=2) as ex:
             r0 = ex.submit(fetch_all, EM_BOARD_HOSTS[0])
             r1 = ex.submit(fetch_all, EM_BOARD_HOSTS[1])
-            allsec.update(r0.result())
-            for nm, v in r1.result().items():
+            all0, received0 = r0.result()
+            all1, received1 = r1.result()
+            allsec.update(all0)
+            for nm, v in all1.items():
                 cur = allsec.get(nm)
                 if cur is None or v["pct"] < cur["pct"]:
                     allsec[nm] = v
@@ -684,10 +711,13 @@ def build_sector_risk(threshold=SECTOR_RISK_THRESHOLD):
         def _is_noise(nm):
             return any(k in nm for k in SECTOR_FLOW_NOISE)
         def fetch_flow(host):
-            out = {}
+            out, received = {}, set()
             for fs in ("m:90+t:2", "m:90+t:3"):
                 for po in (1, 0):  # po=1 净流入最大在前；po=0 净流出最大在前
-                    for it in _em_board_get(host, fs, po=po, pz=100, fid="f62"):
+                    rows = _em_board_get(host, fs, po=po, pz=100, fid="f62")
+                    if rows:
+                        received.add((fs, po))
+                    for it in rows:
                         nm = it.get("f14", "")
                         if not nm:
                             continue
@@ -698,13 +728,14 @@ def build_sector_risk(threshold=SECTOR_RISK_THRESHOLD):
                                        "pct": round(_num(it.get("f3")), 2),
                                        "main_inflow": f62,
                                        "is_focus": any(k in nm for k in SECTOR_FOCUS_KEYWORDS)}
-            return out
+            return out, received
         # 双源并行抓资金流（两 host 取并集，保留绝对值更大的 f62）
         with ThreadPoolExecutor(max_workers=2) as ex:
             ff0 = ex.submit(fetch_flow, EM_BOARD_HOSTS[0])
             ff1 = ex.submit(fetch_flow, EM_BOARD_HOSTS[1])
-            flow_sec = ff0.result()
-            for nm, v in ff1.result().items():
+            flow_sec, flow_received0 = ff0.result()
+            flow1, flow_received1 = ff1.result()
+            for nm, v in flow1.items():
                 cur = flow_sec.get(nm)
                 if cur is None or abs(v["main_inflow"]) > abs(cur["main_inflow"]):
                     flow_sec[nm] = v
@@ -738,10 +769,17 @@ def build_sector_risk(threshold=SECTOR_RISK_THRESHOLD):
         declining = sorted([v for v in allsec.values() if v["pct"] <= threshold],
                            key=lambda x: x["pct"])[:12]
         focus_decl = [v for v in declining if v["is_focus"]]
+        breadth_complete = len(received0 | received1) == len(EM_BOARD_FS) and bool(allsec)
+        flow_complete = len(flow_received0 | flow_received1) == 4 and bool(flow_sec)
+        complete = breadth_complete and flow_complete
         result = {"threshold": threshold, "declining": declining,
                   "focus_declining": focus_decl, "count": len(declining),
                   "inflow_top": inflow_top, "outflow_top": outflow_top,
-                  "ok": len(allsec) > 0}
+                  "ok": complete, "complete": complete, "stale": False,
+                  "asof": now().isoformat()}
+        if not complete:
+            # 东财一侧超时也可能只返回流出榜；部分结果不能写进可信缓存或资金池。
+            return unavailable("板块涨跌幅或资金流接口返回不完整", result)
         # ── 盘中全量板块资金池（2026-09-08 用户「板块流入流出数据本地数据池积累」）──
         # 短线精灵资金行原只查 sector_risk top10 → 强势板块涨停多但资金排不进前10时
         # 一律「💤资金未入榜」（实证 09-08 大消费 zt=6 但资金榜全被通信/有色占满）。
@@ -757,13 +795,12 @@ def build_sector_risk(threshold=SECTOR_RISK_THRESHOLD):
         except Exception:
             pass
         try:
-            cache_path.write_text(json.dumps({"ts": now().timestamp(), "data": result},
-                                            ensure_ascii=False))
+            _save_json(cache_path, {"ts": now().timestamp(), "data": result})
         except Exception:
             pass
         return result
     except Exception as e:
-        return {"ok": False, "error": str(e), "declining": [], "focus_declining": [], "count": 0}
+        return unavailable(str(e))
 
 def build_sector_flow_snapshot(threshold=SECTOR_RISK_THRESHOLD):
     """板块主力资金流全量快照（日级沉淀用）。
@@ -1456,9 +1493,31 @@ def _sector_status(name, cur_zt, prev_map):
         return "surging"
     return "ongoing"
 
+def build_limit_up_stocks(stocks, total_zt):
+    """构造本轮完整涨停集合，供时间轴精确核对涨停家数变化的个股归因。"""
+    rows = []
+    for stock in stocks.values():
+        if not stock.get("up"):
+            continue
+        code = str(stock.get("code") or "").strip()
+        if not code:
+            return None
+        plates = [str(p.get("name") or "").strip() for p in (stock.get("plates") or [])
+                  if isinstance(p, dict) and str(p.get("name") or "").strip()]
+        rows.append({
+            "code": code,
+            "name": str(stock.get("name") or code).strip(),
+            "pct": stock.get("pct"),
+            "boards": stock.get("boards") or None,
+            "sector": "、".join(plates[:3]) or None,
+        })
+    # 集合不完整时不落盘，时间轴不得把未知明细伪装成空名单。
+    return rows if len(rows) == total_zt and len({r["code"] for r in rows}) == total_zt else None
+
+
 def build_summary_json(sectors, plates, diagnoses, total_zt, zt_count, risks, positives, stocks, newsflash, tomorrow,
                        index=None, ld_pool=None, broken_pool=None, ladder=None, early=None, leaders=None, hot_spots=None,
-                       prev_data=None, em_market=None, rising=None):
+                       prev_data=None, em_market=None, rising=None, limit_up_stocks=None):
     # Filter: skip "其他" and sectors with no description + zt < 5
     def keep(pid, sec):
         if sec["name"] == "其他": return False
@@ -1528,7 +1587,7 @@ def build_summary_json(sectors, plates, diagnoses, total_zt, zt_count, risks, po
         stk = [s[0] for s in nf.get("stocks", [])][:3]
         if rel or stk:
             nf_hits.append({"title": nf.get("title", "")[:60], "plates": rel, "stocks": stk})
-    return {"ts": now().isoformat(), "total_zt": zt_count,
+    summary = {"ts": now().isoformat(), "total_zt": zt_count,
             "sentiment": senti["label"], "sentiment_detail": senti,
             "index": index,
             "limit_down": ld_pool, "broken": broken_pool,
@@ -1557,6 +1616,9 @@ def build_summary_json(sectors, plates, diagnoses, total_zt, zt_count, risks, po
             "sector_delta": {"new": [s["name"] for s in top5 if s["delta"]=="new"],
                              "surging": [f'{s["name"]}({s["zt_prev"]}→{s["zt_count"]})' for s in top5 if s["delta"]=="surging"],
                              "ongoing": [f'{s["name"]}({s["zt_prev"]}→{s["zt_count"]})' for s in top5 if s["delta"]=="ongoing"]}}
+    if limit_up_stocks is not None:
+        summary["limit_up_stocks"] = limit_up_stocks
+    return summary
 
 # ── 飞书卡片构建 ─────────────────────────────────────
 
@@ -2058,8 +2120,10 @@ def run_mode(mode, dry_run=False, json_only=False):
     prev_path = CACHE_DIR / "prev.json"
     # 读上一次快照，用于板块增量对比（走统一容错读，坏文件不中断主流程）
     prev_data = _load_json(prev_path)
+    limit_up_stocks = build_limit_up_stocks(stocks, total_zt)
     summary = build_summary_json(sectors, plates, diagnoses, total_market_zt, total_zt, risks, positives, stocks, newsflash, tomorrow,
-                                 index=index, ld_pool=ld_pool, broken_pool=broken_pool, ladder=ladder, early=early, leaders=leaders, hot_spots=hot_spots, prev_data=prev_data, em_market=em_market, rising=rising)
+                                 index=index, ld_pool=ld_pool, broken_pool=broken_pool, ladder=ladder, early=early, leaders=leaders, hot_spots=hot_spots, prev_data=prev_data, em_market=em_market, rising=rising,
+                                 limit_up_stocks=limit_up_stocks)
     # Shift: latest → prev（先原子落 latest 到临时副本再替换 prev，避免 prev 读到半截文件）
     if latest_path.exists():
         _save_json(prev_path, _load_json(latest_path) or {})

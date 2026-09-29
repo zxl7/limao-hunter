@@ -17,7 +17,7 @@
       "enabled": true,
       "hit_rate_threshold": 40,
       "suggest": "relay score 门槛上调 2 分",
-      "target": "relay_score_config.json.score_gate",
+      "target": "relay_score_config.json.bands.first_choice_min",
       "step": 2
     },
     "R3_sentiment_bias": {

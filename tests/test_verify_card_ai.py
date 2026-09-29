@@ -59,8 +59,27 @@ def test_verify_card_has_ai_view(monkeypatch, tmp_path):
     card = bc.build_verify_card(_vr("2099-01-02", [_rec("000759", "中百集团", "buy", 0.4),
                                                    _rec("000930", "中粮科技", "pending", 2.2)]))
     s = _text(card)
-    assert "🤖 AI 昨日判断：放弃" in s and "冰点中位断板风险" in s
-    assert "🤖 AI 昨日判断：参与" in s
+    assert "🤖 AI 昨日判断：回避" in s and "冰点中位断板风险" in s
+    assert "🤖 AI 昨日判断：重点看" in s
+
+
+def test_pool_call_card_shows_yesterday_logic_not_generic_plan_label(monkeypatch):
+    """9:25 裁决卡：昨日预案必须展示逐票逻辑，不能退化为“昨日预案：一般”。"""
+    row = _rec("000759", "中百集团", "reject", -0.65)
+    row["performance"]["open_check"].update({
+        "pool_reason": "昨天定的是空仓待命 → 今天不主动买",
+        "ai_view": "watch",
+        "plan_bias": "normal",
+    })
+    ai_view = {"000759": {
+        "bias": "normal",
+        "reason": "今天是2板且早早封住，带动2只同方向股票。\n⚠️风险：市场很冷，继续涨停的把握不高。",
+    }}
+    shown = bc._ai_view_line(row, ai_view)
+    assert "昨日预案：一般" not in shown
+    assert "**昨日逻辑**：昨天是2板且早早封住，带动2只同方向股票。" in shown
+    assert "⚠️ 风险" in shown
+    assert "🤖 今日9:25判：观察" in shown
 
 
 def test_verify_card_no_data_graceful(monkeypatch, tmp_path):
@@ -96,7 +115,7 @@ def test_verify_card_reject_section_has_gene_and_ai(monkeypatch, tmp_path):
     s = _text(card)
     assert "其余没达标" in s
     assert "📈 历史基因" in s and "近一年" in s      # 2026-09-10 白话化：近250日→近一年
-    assert "🤖 AI 昨日判断：放弃" in s and "首板魔咒" in s
+    assert "🤖 AI 昨日判断：回避" in s and "首板魔咒" in s
 
 
 def test_boards_txt_and_stock_label():
@@ -307,9 +326,10 @@ def test_eod_mid_carry_line_no_jargon():
     blob = _json.dumps(card, ensure_ascii=False)
     hit = [b for b in _TAG_BAD + ["中位没人接"] if b in blob]
     assert hit == [], f"eod 卡残留术语 {hit}"
+    assert blob.count("缺中间跟随票") == 1, "同一市场结构提示不得随每只候选重复渲染"
 
 
-# ── 2026-09-11：竞价卡「🤖 AI 昨日买入计划」段 ──
+# ── 2026-09-11：竞价卡「🤖 AI 昨日预案」段 ──
 # 用户需求原话：「AI 在每天 9:25 竞价的时候，在那张卡片里面要告诉我今天买什么，
 # 然后我们再来统计它的收益。不要因为我的买动，而是要 AI 做出它自己的买入和操作方向。」
 # 机制：AI 昨日盘后写 ai_view（stance/direction + views）→ 次日卡上按竞价 gap 判成交 + 展示 AI 独立轨成绩。
@@ -319,7 +339,7 @@ _PLAN_BAD = ["已结算", "样本", "承接", "孤军", "弱转强", "容量核�
 
 
 def test_verify_card_ai_plan_block(monkeypatch, tmp_path):
-    """有 ai_view（含攻守定调）→ 渲染「🤖 AI 昨日买入计划」：买到/没买到 + 其余不买 + 战绩。"""
+    """有 ai_view（含攻守定调）→ 渲染「🤖 AI 昨日预案」：买到/没买到 + 其余不买 + 战绩。"""
     monkeypatch.setattr(bc, "_core_reversal_block", lambda: None)
     monkeypatch.setattr(bc, "_nav_drawdown_block", lambda m: None)
     d = tmp_path / "cache"
@@ -342,7 +362,7 @@ def test_verify_card_ai_plan_block(monkeypatch, tmp_path):
     r3 = _rec("603421", "鼎信通讯", "reject", 1.2)
     r3["boards"] = 3
     s = _text(bc.build_verify_card(_vr("2099-02-01", [r1, r2, r3])))
-    assert "🤖 AI 昨日买入计划" in s and "01-30" in s       # 决策日（execution-1）显式标注
+    assert "🤖 AI 昨日预案" in s and "01-30" in s       # 决策日（execution-1）显式标注
     assert "只做最强的一只" in s and "电力/绿电" in s and "市场不冷不热" in s
     assert "买入" in s and "高开5%以内" in s               # 000993 竞价+2.10% ≤ 5% → 买到
     assert "没买到" in s and "高开超5%" in s               # 000823 竞价+6.80% > 5% → 没买到
@@ -396,7 +416,7 @@ def _ai_view_file(d, trade_date, views, **extra):
 
 
 def test_verify_card_buy_signal_uses_ai_caliber(monkeypatch, tmp_path):
-    """AI 有判断 → 卡头「AI 买入信号」= AI 判「参与」只数；机械达标降为灰字参考；✅ 段标机械。"""
+    """AI 有判断 → 卡头「AI 买入信号」= AI 实际入场只数；机械量价仅作参考。"""
     monkeypatch.setattr(bc, "_core_reversal_block", lambda: None)
     monkeypatch.setattr(bc, "_nav_drawdown_block", lambda m: None)
     d = tmp_path / "cache"
@@ -414,8 +434,8 @@ def test_verify_card_buy_signal_uses_ai_caliber(monkeypatch, tmp_path):
     card = bc.build_verify_card(_vr_buys("2099-03-02", recs, 3))
     s = _text(card)
     assert "AI 买入信号" in s and ">1<" in s                     # AI 口径 = 1
-    assert "（机械达标 3 只）" in s                                # 机械口径降为灰字参考
-    assert "✅ 竞价达标·机械参考" in s                              # ✅ 段明确标注口径
+    assert "（机械量价参考 3 只）" in s                                # 机械口径降为灰字参考
+    assert "📊 机械量价参考（仅作核对，不构成 AI 买入）" in s                              # ✅ 段明确标注口径
     assert "达标买入信号" not in s                                 # 旧标题不再出现
     assert "AI 只买1只·精选" in card["title"]                       # 定调同口径
 
@@ -444,7 +464,7 @@ def test_verify_card_ai_caliber_empty_participate(monkeypatch, tmp_path):
     monkeypatch.setattr(bc, "ROOT", tmp_path / "wealth_code")
     card = bc.build_verify_card(_vr_buys("2099-03-04", [_rec("000993", "闽东电力", "buy", 1.0)], 1))
     s = _text(card)
-    assert "AI 买入信号" in s and ">0<" in s and "（机械达标 1 只）" in s
+    assert "AI 买入信号" in s and ">0<" in s and "（机械量价参考 1 只）" in s
     assert "AI 空仓·观望" in card["title"]
     hit = [b for b in _PLAN_BAD if b in s]
     assert hit == [], f"AI 口径卡残留术语: {hit}"
@@ -468,18 +488,20 @@ def test_ai_caliber_switch_off_restores_old(monkeypatch, tmp_path):
     assert "个别达标·精选" in card["title"]                         # 回退后定调按机械只数(2)
 
 
-def test_ai_participate_count_unit():
-    """计数口径：只认 view=="participate"；watch/skip/空/非 dict 一律不计。"""
-    assert bc._ai_participate_count({}) == 0
-    assert bc._ai_participate_count({"views": {}}) == 0
-    assert bc._ai_participate_count({"views": {"a": {"view": "participate"},
-                                               "b": {"view": "watch"},
-                                               "c": {"view": "skip"},
-                                               "d": {}, "e": None}}) == 1
+def test_ai_focus_count_unit():
+    """计数口径：只认 bias=="focus"（重点看）；旧口径 view=="participate" 兜底；
+    normal/avoid/空/非 dict 一律不计。"""
+    assert bc._ai_focus_count({}) == 0
+    assert bc._ai_focus_count({"views": {}}) == 0
+    assert bc._ai_focus_count({"views": {"a": {"bias": "focus"},
+                                         "b": {"bias": "normal"},
+                                         "c": {"bias": "avoid"},
+                                         "d": {"view": "participate"},   # 旧口径兜底
+                                         "e": {}, "f": None}}) == 2       # a(focus) + d(participate 兜底)
 
 
 # ── 2026-09-15 用户「个股下的话术重复了」：同源 reason 禁两处渲染 ──
-# 背景：`views[code].reason` 被「🤖 AI 昨日买入计划」块（买入票）+ 个股段
+# 背景：`views[code].reason` 被「🤖 AI 昨日预案」块（买入票）+ 个股段
 # `_ai_view_line`（🤖 AI 判断行）各渲染一次 → 同一段逐字重复。
 # 09-15 超声电子(000823) 实证：整卡扫描该段 4 句全部 x2（唯一逐字重复项）。
 # 修复：计划块仅在**下方不会渲染该票 AI 判断行**时才补出理由（信息不丢）。
@@ -495,7 +517,7 @@ def test_ai_reason_rendered_once(monkeypatch, tmp_path):
     monkeypatch.setattr(bc, "ROOT", tmp_path / "wealth_code")
     r = _rec("000823", "超声电子", "buy", 1.63)      # decision_status=buy → 个股段渲染 AI 判断行
     s = _text(bc.build_verify_card(_vr_buys("2099-04-01", [r], 1)))
-    assert "🤖 AI 昨日买入计划" in s and "电子布涨价链最强" in s
+    assert "🤖 AI 昨日预案" in s and "电子布涨价链最强" in s
     assert s.count("电子布涨价链最强") == 1, "同源 AI 理由被重复渲染（计划块 + 个股段）"
 
 
@@ -512,3 +534,25 @@ def test_ai_reason_kept_when_no_per_stock_line(monkeypatch, tmp_path):
     s = _text(bc.build_verify_card(_vr_buys("2099-04-02", [r], 0)))
     assert "报价缺失" in s
     assert s.count("电子布涨价链最强") == 1, "报价缺失时理由应保留一次（不得丢失）"
+
+
+def test_pool_call_reason_rendered_once(monkeypatch, tmp_path):
+    """9:25 实判理由只由逐票判断行渲染，顶部「今日买入」名单不得重复正文。"""
+    monkeypatch.setattr(bc, "_core_reversal_block", lambda: None)
+    monkeypatch.setattr(bc, "_nav_drawdown_block", lambda m: None)
+    d = tmp_path / "cache"
+    d.mkdir()
+    _ai_view_file(d, "2099-04-03", {
+        "000823": {"bias": "focus", "reason": "盘后预案理由不应替代实判理由"},
+    })
+    monkeypatch.setattr(bc, "ROOT", tmp_path / "wealth_code")
+    r = _rec("000823", "超声电子", "pending", 1.63)
+    r["performance"]["open_check"].update({
+        "ai_view": "participate", "plan_bias": "focus",
+        "pool_reason": "竞价量价达标，按池内名额买入",
+    })
+    vr = _vr_buys("2099-04-03", [r], 1)
+    vr["summary"].update({"pool_call": {"participate": ["000823"], "quota": 1, "pool_size": 1}})
+    s = _text(bc.build_verify_card(vr))
+    assert "🤖 今日9:25判：买入" in s
+    assert s.count("竞价量价达标，按池内名额买入") == 1, "9:25 实判理由被顶部与逐票段重复渲染"

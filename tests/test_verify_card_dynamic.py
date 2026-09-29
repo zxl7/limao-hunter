@@ -113,7 +113,7 @@ def test_ai_view_line_keeps_participate_label_against_dynamic_giveup():
     it = _mk("000994", -9.96, [0.0, 2.0], status="reject")
     av = {"000994": {"view": "participate", "reason": "依据：…"}}
     line = _ai_view_line(it, av)
-    assert "🤖 AI 昨日判断：参与" in line
+    assert "🤖 AI 昨日判断：重点看" in line
     assert "放弃" in line
 
 
@@ -122,7 +122,7 @@ def test_ai_view_line_keeps_watch_label_when_verdict_not_giveup():
     it = _mk("000995", 2.0, [1.0, 3.0])          # 符合预期
     av = {"000995": {"view": "watch", "reason": "依据：…"}}
     line = _ai_view_line(it, av)
-    assert "🤖 AI 昨日判断：观察" in line
+    assert "🤖 AI 昨日判断：一般" in line
     assert "符合预期" in line
 
 
@@ -142,7 +142,7 @@ def test_ai_reason_deduped_when_narrative_present():
     it["narrative"] = "今日走势：…\n⚠️风险：点评里的风险段"
     av = {"000006": {"view": "watch", "reason": "依据：…\n⚠️风险：AI理由里的风险段"}}
     line = _ai_view_line(it, av)
-    assert "🤖 AI 昨日判断：观察" in line
+    assert "🤖 AI 昨日判断：一般" in line
     assert "点评里的风险段" not in line          # 理由正文整体不渲染
     assert "AI理由里的风险段" not in line
     # 无 narrative → 理由兜底（信息不丢）

@@ -26,30 +26,162 @@ from typing import Any
 
 from core.signal_eval import evaluate_realtime_signal
 from core import ai_caliber
+from core import pool_call
 from core.nav_ledger import sync_account_nav_ledger
 from core.strategy_metrics import build_account_strategy_metrics, sync_account_strategy_metrics
 from adapters.input_auction import load_auction_quotes
+from core.market_open import build_market_open
+from common.trading_calendar import next_a_share_trading_day
 
 ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = ROOT / "cache"
+# 生产缓存目录（导入期快照·⛔ 不随 monkeypatch 变化）——供测试期写穿守卫比对基准用。
+_PROD_CACHE_DIR = Path(__file__).resolve().parent.parent / "cache"
 # 持仓展示文件 holdings.json 的权威位置：项目根 cache/（与 ma5_check.py / gen_dashboard.py 共用，
 # 非 wealth_code/cache）。ROOT=wealth_code → ROOT.parent=狸猫猎手（项目根）。
 HOLDINGS_PATH = ROOT.parent / "cache" / "holdings.json"
 BJ_TZ = timezone(timedelta(hours=8))
 
 
+def pool_call_path(trade_date: str) -> Path:
+    """9:25 池内裁决结论落盘路径（`wealth_code/cache/pool_call-<执行日>.json`）。
+
+    ⛔ 为什么必须落盘冻结：结论要被**四处**同源消费——① 09:26 竞价卡渲染、
+    ② 账户账本（`_finalize_prev_batch` 盘后重跑 run_verify）、③ AI 独立轨
+    （`ai_ledger settle`）、④ 事后审计。若各处各算一次，竞价快照被覆盖
+    （该文件当天会被后续运行重写，见 skill 铁律 15 注）就会出现「卡上买 A、账本买 B」。
+    """
+    return CACHE_DIR / f"pool_call-{trade_date}.json"
+
+
+def load_pool_call(trade_date: str) -> dict[str, Any] | None:
+    """读已冻结的 9:25 池内裁决结论；缺失/损坏 → None（调用方重算或回退旧口径）。"""
+    if not trade_date:
+        return None
+    try:
+        d = json.loads(pool_call_path(trade_date).read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) and d.get("views") else None
+    except Exception:
+        return None
+
+
+def save_pool_call(trade_date: str, result: dict[str, Any]) -> None:
+    """冻结 9:25 池内裁决结论（幂等：已存在则不覆盖，保证当日结论唯一）。
+
+    ⛔ **测试期禁止写生产路径**（2026-09-21 血案防线·沿用 `scripts/zt_archive._guard_test_write`
+    的模式）：本函数是「写盘」型公共入口，若单测直接调 `run_verify` 而未注入临时目录，
+    夹具数据会被冻结进真实 `wealth_code/cache/pool_call-<date>.json` —— 09-21 实测：
+    `test_hibernate_valve` / `test_ai_caliber_account` 两个用例把「甲票 / 示例A」写成了
+    `pool_call-2026-09-14.json`、`pool_call-2026-09-18.json`，随后被 `load_pool_call`
+    当成"当日已冻结快照"读回 → 后续所有判定跟着跑偏。守卫把「静默写穿」变成「当场报错」，
+    强制调用方 monkeypatch `CACHE_DIR` 注入 tmp_path。
+    """
+    import os
+    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("POOL_CALL_ALLOW_TEST_WRITE"):
+        # ⚠️ 比对基准必须是**导入期算出的生产目录**（`_PROD_CACHE_DIR`），⛔ 不能用
+        #    `CACHE_DIR`——测试 monkeypatch 后两者会相等，守卫反而误杀正常隔离的用例。
+        try:
+            if pool_call_path(trade_date).resolve().parent == _PROD_CACHE_DIR.resolve():
+                raise RuntimeError(
+                    f"测试期禁止写生产缓存目录 {_PROD_CACHE_DIR} —— 请 monkeypatch "
+                    f"`pipeline_verify.CACHE_DIR` 注入 tmp_path")
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+    p = pool_call_path(trade_date)
+    if p.exists():
+        return
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"trade_date": trade_date, **result},
+                                ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception as _e:                                  # noqa: BLE001
+        print(f"[VERIFY] ⚠️ 池内裁决结论落盘失败（{_e}）——不影响本次判定")
+
+
+def _load_full_zt_rows(date10: str) -> list[dict[str, Any]]:
+    """读取候选依据日的完整涨停池；缺失时返回空，竞价回暖闸自然不放宽。"""
+    try:
+        p = ROOT.parent / "cache" / "zt_history" / f"zt_{date10}.json"
+        rows = json.loads(p.read_text(encoding="utf-8")).get("zt_list") or []
+        return [row for row in rows if isinstance(row, dict)]
+    except Exception:
+        return []
+
+
+def _load_plan(trade_date: str) -> dict[str, Any]:
+    """读盘后**预案**（`狸猫猎手/cache/ai_view_<执行日>.json`·项目根 cache，非 wealth_code）。
+
+    2026-09-21 语义变更：该文件的 `views[code].view` 不再是「买不买」的终态（旧口径），
+    9:25 池内裁决只从这里读 `stance`（攻守基调·定当日可买只数）与 `views[code].bias`（预案档）。
+    文件缺失 → {}（诚实降级：按 DEFAULT_QUOTA 走，不编造）。
+    """
+    if not trade_date:
+        return {}
+    try:
+        p = ROOT.parent / "cache" / f"ai_view_{trade_date}.json"
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _inject_pool_views(ai_decisions: dict[str, dict] | None,
+                       pool_res: dict[str, Any],
+                       candidates: dict[str, Any] | None = None) -> dict[str, dict]:
+    """把 9:25 池内裁决结论注入决策行（`view` 覆写为**今日实判**）。
+
+    · 决策行原生 `view`（盘后预案的旧口径终态）保留为 `plan_view` 留痕；
+    · 池内票若**没有**盘后决策行 → 补一条壳行（池＝当日可交易范围，9:25 才是拍板时点）；
+    · 池外票不动（无 9:25 结论 → `decide()` 仍按原行 `view` 走，行为不变）。
+    """
+    out: dict[str, dict] = {str(k): dict(v or {}) for k, v in (ai_decisions or {}).items()}
+    marks = pool_res.get("views") or {}
+    for code, m in marks.items():
+        r = out.get(code)
+        if r is None:
+            r = {"code": code, "name": m.get("name") or "", "source": "pool_call",
+                 "reason": m.get("reason") or ""}
+            out[code] = r
+        if not r.get("plan_view"):
+            r["plan_view"] = r.get("view")
+        r["view"] = m.get("view")
+        r["plan_bias"] = m.get("bias")
+        r["pool_reason"] = m.get("reason")
+        r["line_is_core"] = bool(m.get("line_is_core"))
+        r["line_core"] = m.get("line_core")
+        r["follower_gate"] = bool(m.get("follower_gate"))
+        # 机械强龙融合留痕：盘后 bias 仍是原始预案，09:25 名额排序可由此复核。
+        r["mechanical_leader"] = bool(m.get("mechanical_leader"))
+        r["mechanical_leader_note"] = m.get("mechanical_leader_note")
+        r["leader_role"] = m.get("leader_role")
+        r["leader_evidence"] = m.get("leader_evidence")
+    # 池内票的预期区间/量能目标：优先用候选（最新），缺则用决策行（record 时补写的）
+    if candidates:
+        _by = {str(c.get("code")): c for c in
+               list(candidates.get("relay") or []) + list(candidates.get("watch") or [])}
+        for code, m in marks.items():
+            c = _by.get(code)
+            if not isinstance(c, dict):
+                continue
+            exp = c.get("expectation") or {}
+            r = out.get(code) or {}
+            if isinstance(exp.get("expected_range"), (list, tuple)) and len(exp["expected_range"]) == 2:
+                r.setdefault("expected_range", [float(exp["expected_range"][0]),
+                                                float(exp["expected_range"][1])])
+            need = exp.get("auction_amount_min_yi")
+            if isinstance(need, (int, float)) and need > 0:
+                r.setdefault("amount_need_yi", float(need))
+            out[code] = r
+    return out
+
+
 def _next_day(date10: str) -> str:
     """
-    次一交易日（最小日历修正：跳过周六/周日，保证 trade_date 落在交易日）。
-    注意：法定节假日未覆盖（无交易日历），长假仍会错位；周末是最常见场景，先修掉。
+    次一A股交易日。统一走法定休市日历，长假不再仅靠跳周末猜测。
     """
-    try:
-        d = datetime.strptime(date10, "%Y-%m-%d") + timedelta(days=1)
-        while d.weekday() >= 5:  # 5=周六 6=周日 → 跳到周一
-            d += timedelta(days=1)
-        return d.strftime("%Y-%m-%d")
-    except Exception:
-        return date10
+    return next_a_share_trading_day(date10) or date10
 
 
 def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close: float | None, *, date10: str, regime: str | None = None, sector_support: dict[str, Any] | None = None, ai_decisions: dict[str, dict] | None = None, valve_code: str | None = None) -> dict[str, Any]:
@@ -62,14 +194,14 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
     ai_decisions: 该执行日的 AI 决策映射 {code: 决策行}（2026-09-14 用户「全量以 AI 为唯一口径」）。
       **非 None** → 启用 AI 口径：can_enter 由 AI 判定（participate ∧ 竞价≤自定上限），
       机械 signal_eval 结果保留为参考信号（mech_can_enter / decision_status 字段）。
-      **None** → 该日无 AI 决策（缺失·非空仓）→ 回退机械口径，caliber 标 mechanical_fallback。
-    valve_code: hibernate 竞价逃生阀当日**唯一**放行标的（2026-09-18 用户拍板 A）——
-      由 `ai_caliber.pick_hibernate_valve` 全池挑出；命中该 code 的票即使 AI 判「观察」
-      也允许小仓试错（口径仍走 `decide(..., valve_hit=True)`·禁绕过）。
+      **None** → 该日无 AI 决策（缺失）→ 账户不交易，机械结果仅作展示与审计。
+    valve_code: 保留旧调用签名；AI 决策为唯一入场授权，不再放行观察票。
     """
     signal = evaluate_realtime_signal(cand, quote, regime=regime, sector_support=sector_support)
     decision = signal.get("decision_status")
     sig_status = signal.get("signal_status")
+    # 🎯 9:25 池内裁决留痕（2026-09-21）：该票的「昨日预案 → 今日实判」两个时点都要能上卡。
+    _plan_row = (ai_decisions or {}).get(str(cand.get("code") or "").strip()) or {}
 
     # P1-6 冰点禁买·命中打标（2026-08-19 用户澄清）：regime=ice 时命中判定照算
     # （signal_eval 已正常产出 buy 档），但一律不进场——buy → hit（can_enter=False、
@@ -110,9 +242,10 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
     ai_meta: dict[str, Any] = {}
     if ai_caliber.AI_CALIBER_ACCOUNT:
         if ai_decisions is None:
-            caliber = "mechanical_fallback"
+            caliber = "ai_missing_no_trade"
+            can_enter = False
             ai_meta = {"caliber": caliber,
-                       "caliber_note": "该执行日无 AI 决策行 → 诚实回退机械口径（勿读成 AI 空仓）"}
+                       "caliber_note": "该执行日无 AI 决策行 → AI 口径缺失，账户不交易；机械结果仅供参考"}
         else:
             caliber = "ai"
             _gap = signal.get("gap_pct")
@@ -120,7 +253,6 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
             _code = str(cand.get("code") or "").strip()
             # hibernate 竞价逃生阀（2026-09-18 用户拍板 A）：当日唯一放行标的下，
             # AI 判「观察」也允许小仓试错（其余口径不变·同调 decide）。
-            _valve_hit = bool(valve_code) and _code == str(valve_code)
             # 方案 A（2026-09-17）：把候选的**盘后预期区间**一并传入 → 账本执行
             # 「参与 ∧ ≤5% ∧ 落预期区间」三步裁决，与卡面动态结论同源（gap_zone）。
             can_enter, _ai_note, ai_meta = ai_caliber.decide(
@@ -128,17 +260,15 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
                 expected_range=(cand.get("expectation") or {}).get("expected_range"),
                 # 量能门（2026-09-17）：红开但量能 < 目标×0.7 → 降级观察（无量高开不追）
                 auction_amount_yi=signal.get("auction_amount_yi"),
-                need_yi=signal.get("auction_amount_need_yi"),
-                valve_hit=_valve_hit)
+                need_yi=signal.get("auction_amount_need_yi"))
             ai_meta["caliber"] = caliber
             ai_meta["ai_note"] = _ai_note
             ai_meta["caliber_changed"] = bool(can_enter != mech_can_enter)
-            if _valve_hit:
-                ai_meta["hibernate_valve"] = True
-            if regime == "ice":
-                # 冰点禁买（P1-6）在本层不硬拦 AI 决策（AI 判断时已知情绪分·自会收敛），
-                # 但打标留痕：卡面/审计可追溯「冰点期 AI 仍参与」。
-                ai_meta["ice_warn"] = "⚠️冰点期（做多气氛≤2分）·AI 仍判参与"
+            if regime == "ice" and can_enter:
+                # 冰点禁买是账户硬闸：AI/池内裁决保留为复盘证据，但不能形成真实入场。
+                can_enter = False
+                ai_meta["ice_ban"] = True
+                ai_meta["ice_warn"] = "冰点期AI预案命中，但账户硬闸禁止入场"
     # 隔日收益
     if can_enter and next_close is not None and quote is not None:
         auction_price = float(quote.get("auction_price") or 0.0)
@@ -205,6 +335,22 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
                 "hibernate_valve": bool(ai_meta.get("hibernate_valve")),
                 "ai_note": ai_meta.get("ai_note"),
                 "caliber_changed": ai_meta.get("caliber_changed"),
+                # 冰点期即使 AI 预案命中，也必须保留硬闸与冲突原因，供账本和审计复核。
+                "ice_ban": bool(ai_meta.get("ice_ban") or signal.get("ice_ban")),
+                "ice_warn": ai_meta.get("ice_warn"),
+                # 🎯 9:25 池内裁决（2026-09-21 用户「接力池＝提前缩范围，不是提前拍板」）：
+                # plan_view/plan_bias = 昨日预案（旧口径终态/预案档）；pool_reason = 今日实判理由；
+                # line_is_core/line_core = 同线身位（核心 vs 跟风）；follower_gate = 跟风闸是否命中。
+                "plan_view": _plan_row.get("plan_view"),
+                "plan_bias": _plan_row.get("plan_bias"),
+                "pool_reason": _plan_row.get("pool_reason"),
+                "line_is_core": _plan_row.get("line_is_core"),
+                "line_core": _plan_row.get("line_core"),
+                "follower_gate": bool(_plan_row.get("follower_gate")),
+                "mechanical_leader": bool(_plan_row.get("mechanical_leader")),
+                "mechanical_leader_note": _plan_row.get("mechanical_leader_note"),
+                "leader_role": _plan_row.get("leader_role"),
+                "leader_evidence": _plan_row.get("leader_evidence"),
                 "note": signal.get("note"),
                 "gap_pct": signal.get("gap_pct"),
                 "auction_price": signal.get("auction_price"),
@@ -268,6 +414,7 @@ def run_verify(
     trade_date10 = _next_day(date10)
     ai_decisions: dict[str, dict] | None = None
     valve: dict[str, Any] | None = None
+    pool_res: dict[str, Any] | None = None
     if ai_caliber.AI_CALIBER_ACCOUNT:
         ai_decisions = ai_caliber.load_ai_decisions(trade_date10)
         if ai_decisions is None:
@@ -276,22 +423,44 @@ def run_verify(
         else:
             print(f"[VERIFY] 🤖 AI 口径生效：{trade_date10} 决策 {len(ai_decisions)} 只"
                   f"（成交集合与入场上限以 AI 为准）")
-        # ── hibernate 竞价逃生阀（2026-09-18 用户拍板「A」）──────────────────────
-        # 依据日 AI 定调 hibernate → 当日**唯一**满足「红开≤5% ∧ 带量 ∧ 方向内位置最高」
-        # 的票允许小仓试错（自评实证：两次 hibernate 空仓的机会成本 +3.60%）。
-        # ⛔ 未开阀（非 hibernate/开关关）→ valve=None，行为与旧版逐字一致。
-        _stance = ai_caliber.ai_stance(trade_date10)
-        if ai_decisions is not None:
-            # 只对 AI 判「观察」的票开阀（判「放弃」的不越权放行）
-            _views = {c: str((r or {}).get("view") or "") for c, r in ai_decisions.items()}
-            valve = ai_caliber.pick_hibernate_valve(candidates, quotes,
-                                                    stance=_stance, views=_views)
-        if valve:
-            print(f"[VERIFY] 🚪 hibernate 逃生阀开启：{valve['name']}({valve['code']}) "
-                  f"竞价 {valve['gap_pct']:+.2f}%·{valve['boards']}板·方向「{valve['theme_name']}」"
-                  f" → 小仓试错 {valve['position']}")
-        elif _stance:
-            print(f"[VERIFY] 依据日定调 = {_stance}｜逃生阀：{'未触发' if _stance == 'hibernate' else '不适用'}")
+        # ── 🎯 9:25 池内裁决（2026-09-21 用户「接力池＝提前缩范围，不是提前拍板」）──
+        # 竞价已落地 → **只在池内**（relay+watch）用当日实况判命中，定「今天买哪只」。
+        # 优先读**当日已冻结**的结论（09:26 首次判定时落盘），保证盘后重跑
+        # （`_finalize_prev_batch`）与 AI 轨结算读到的都是同一份（卡面＝账本＝决策）。
+        # ⛔ 前置条件＝**该执行日有盘后预案**（`ai_decisions` 非 None）。池内裁决取代的是
+        #    「盘后定买哪只」，不是「无预案也能凭空开仓」——无预案时保持旧的诚实降级
+        #    （caliber=mechanical_fallback + 显式告警），⛔ 不得让池内裁决把降级悄悄升级成 AI 口径。
+        # ⛔ persist 门（2026-09-21 实测 bug·必修）：dry-run / `--synthesize` 走 persist=False，
+        #    其语义是"只计算不落盘"（见函数 docstring）。原实现在此处**无条件** `save_pool_call`
+        #    → 一次离线重渲染就把结论冻进生产 `wealth_code/cache/pool_call-<date>.json`，
+        #    随后被 `cmd_settle` / `_finalize_prev_batch` 当"当日真实裁决"读回（09-21 11:00 实测）。
+        #    故 read+write **一并**受 persist 约束：
+        #      · persist=True（真实 09:25 运行）→ 读已冻结快照，缺失才计算并冻结；
+        #      · persist=False（离线重渲染/合成）→ 一律**用传入 quotes 现算**，既不读也不写
+        #        （避免读到真实冻结结论、让 dry-run 输出与所传数据不自洽）。
+        if pool_call.POOL_CALL_ENABLED and ai_decisions is not None:
+            pool_res = load_pool_call(trade_date10) if persist else None
+            if pool_res:
+                print(f"[VERIFY] 🎯 池内裁决（当日已冻结快照）→ 买入 "
+                      f"{len((pool_res.get('meta') or {}).get('participate') or [])} 只")
+            else:
+                # 09:25 首次抓取时同步冻结昨日完整涨停池；不能只用已筛选的候选池，
+                # 否则红开比例会被选股结果高估。全市场报价不足则闸门自然不放宽。
+                full_zt_rows = _load_full_zt_rows(date10)
+                market_open_read = build_market_open(full_zt_rows, quotes)
+                pool_res = pool_call.call_pool(
+                    candidates, quotes, plan=_load_plan(trade_date10),
+                    stance=ai_caliber.ai_stance(trade_date10),
+                    market_open=market_open_read)
+                if persist:
+                    save_pool_call(trade_date10, pool_res)
+                _pm = pool_res.get("meta") or {}
+                print(f"[VERIFY] 🎯 9:25 池内裁决：池内 {_pm.get('pool_size')} 只 · "
+                      f"定调 {_pm.get('stance') or '—'} · 当日可买 {_pm.get('quota')} 只 → "
+                      f"买入 {len(_pm.get('participate') or [])} 只 {_pm.get('participate') or ''}"
+                      + ("" if persist else "（dry-run·不落盘）"))
+            ai_decisions = _inject_pool_views(ai_decisions, pool_res, candidates)
+        # AI 定调只影响 AI 预案本身；观察/放弃票不能由机械逃生阀改写为成交。
 
     records: list[dict[str, Any]] = []
     for cand in all_cands:
@@ -310,7 +479,7 @@ def run_verify(
         "records": records,
         # 口径标注（2026-09-14）：ai / mechanical / mechanical_fallback
         "caliber": ("ai" if ai_decisions else
-                    ("mechanical_fallback" if ai_caliber.AI_CALIBER_ACCOUNT else "mechanical")),
+                    ("ai_missing_no_trade" if ai_caliber.AI_CALIBER_ACCOUNT else "mechanical")),
         # 环境透传（2026-08-16）：feedback 10 分制情绪，供卡片渲染层做规则层风险标记
         "environment": candidates.get("environment"),
     }
@@ -329,7 +498,7 @@ def run_verify(
     # 冰点命中数（2026-08-19 用户澄清）：ice 期 buy→hit 不进场，但命中票照常统计供卡片展示
     hits = [r for r in records if r["performance"]["open_check"]["decision_status"] == "hit"]
     _caliber = ("ai" if ai_decisions else
-                ("mechanical_fallback" if ai_caliber.AI_CALIBER_ACCOUNT else "mechanical"))
+                ("ai_missing_no_trade" if ai_caliber.AI_CALIBER_ACCOUNT else "mechanical"))
     summary = {
         "date10": date10,
         "trade_date10": trade_date10,
@@ -345,6 +514,9 @@ def run_verify(
         "hibernate_valve": valve,
         "hit_signals": len(hits),
         "covered": len(covered),
+        # 🎯 9:25 池内裁决（2026-09-21）：当日可买只数 / 池内逐票结论（留痕·供卡面与审计）
+        "pool_call": (pool_res or {}).get("meta"),
+        "pool_views": (pool_res or {}).get("views"),
         "nav_latest": nav_rows[-1]["nav"] if nav_rows else None,
         "nav_rows": len(nav_rows),
     }

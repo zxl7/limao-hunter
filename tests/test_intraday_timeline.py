@@ -16,8 +16,8 @@ it = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(it)
 
 
-def _snap(total=30, top5=None, leaders=None, broken=None, ld=None, decl=None):
-    return {
+def _snap(total=30, top5=None, leaders=None, broken=None, ld=None, decl=None, limit_up_stocks=None):
+    snap = {
         "total_zt": total,
         "top5": top5 or [],
         "leaders": leaders or [],
@@ -25,10 +25,13 @@ def _snap(total=30, top5=None, leaders=None, broken=None, ld=None, decl=None):
         "limit_down": {"names": ld or []},
         "sector_risk": {"declining": decl or []},
     }
+    if limit_up_stocks is not None:
+        snap["limit_up_stocks"] = limit_up_stocks
+    return snap
 
 
 def test_first_round_records_up_and_down():
-    """首轮：涨停总数 + 板块走强 + 个股涨停 + 炸板 + 跌停 + 杀跌板块（双向齐备）。"""
+    """首轮无可核对前序集合：只记录其他事实，不生成涨停总数节点。"""
     snap = _snap(
         total=33,
         top5=[{"name": "机器人", "zt_count": 6, "leader": "科森科技"}],
@@ -38,12 +41,12 @@ def test_first_round_records_up_and_down():
     )
     evs, st = it.collect(snap, {})
     kinds = sorted(e["kind"] for e in evs)
-    assert kinds == ["broken_new", "limit_down_new", "sector_down", "sector_up", "stock_up", "zt_total"]
+    assert kinds == ["broken_new", "limit_down_new", "sector_down", "sector_up", "stock_up"]
     up = next(e for e in evs if e["kind"] == "stock_up")
     assert up["code"] == "603626" and up["sector"] == "机器人"
     down = next(e for e in evs if e["kind"] == "sector_down")
     assert down["name"] == "白银" and down["pct"] == -6.49
-    assert st["total"] == 33
+    assert st["total"] is None
 
 
 def test_same_snapshot_twice_yields_nothing():
@@ -65,9 +68,44 @@ def test_incremental_new_events_only():
                   decl=[{"name": "黄金", "pct": -5.9}])
     evs, _ = it.collect(snap2, st)
     kinds = sorted(e["kind"] for e in evs)
-    assert kinds == ["broken_new", "limit_down_new", "sector_down", "sector_up", "stock_up", "zt_total"]
+    assert kinds == ["broken_new", "limit_down_new", "sector_down", "sector_up", "stock_up"]
     su = next(e for e in evs if e["kind"] == "sector_up")
     assert su["delta"] == 1, "家数从 5→6 应记 delta=1"
+
+
+def test_zt_total_only_when_full_sets_prove_added_stocks():
+    first, state = it.collect(_snap(total=2, limit_up_stocks=[
+        {"code": "A", "name": "甲"}, {"code": "B", "name": "乙"},
+    ]), {})
+    assert not [e for e in first if e["kind"] == "zt_total"]
+    evs, _ = it.collect(_snap(total=3, limit_up_stocks=[
+        {"code": "A", "name": "甲"}, {"code": "B", "name": "乙"}, {"code": "C", "name": "丙"},
+    ]), state)
+    total = next(e for e in evs if e["kind"] == "zt_total")
+    assert total["delta"] == 1 and [s["code"] for s in total["added"]] == ["C"] and total["removed"] == []
+
+
+def test_zt_total_only_when_full_sets_prove_removed_stocks():
+    _, state = it.collect(_snap(total=3, limit_up_stocks=[
+        {"code": "A", "name": "甲"}, {"code": "B", "name": "乙"}, {"code": "C", "name": "丙"},
+    ]), {})
+    evs, _ = it.collect(_snap(total=2, limit_up_stocks=[
+        {"code": "A", "name": "甲"}, {"code": "C", "name": "丙"},
+    ]), state)
+    total = next(e for e in evs if e["kind"] == "zt_total")
+    assert total["delta"] == -1 and total["added"] == [] and [s["code"] for s in total["removed"]] == ["B"]
+
+
+def test_zt_total_skips_missing_or_inconsistent_sets():
+    _, state = it.collect(_snap(total=2, limit_up_stocks=[
+        {"code": "A", "name": "甲"}, {"code": "B", "name": "乙"},
+    ]), {})
+    missing, state = it.collect(_snap(total=3), state)
+    assert not [e for e in missing if e["kind"] == "zt_total"]
+    inconsistent, _ = it.collect(_snap(total=3, limit_up_stocks=[
+        {"code": "A", "name": "甲"}, {"code": "C", "name": "丙"}, {"code": "D", "name": "丁"},
+    ]), state)
+    assert not [e for e in inconsistent if e["kind"] == "zt_total"]
 
 
 def test_20cm_threshold_respected():

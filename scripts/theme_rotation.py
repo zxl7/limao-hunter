@@ -16,6 +16,7 @@
 - 第一周数据不足时只产 boom 跟踪基线，不强行预测回流；攒满 5 天后模式才生效。
 """
 import json
+import urllib.request
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -572,8 +573,132 @@ def _avoidance_sweep(mctx, flow_board, today_hot_names, today_theme_names):
     return out[:AVOID_TOP_N]
 
 
-def _confidence(phase, cooled_days, t_boom, mctx, flow_trend="neutral", flow_vals=None):
-    """0-1 置信度。四因子加权：催化0.3 + 大盘0.15 + 资金0.35 + 相位0.2（P2-8·2026-08-17）。
+# ── K线止跌（2026-09-22 用户定：「监听板块消息、资金流和K线是否止跌，确定是否回流」）──
+# 本文件 v1 曾明确跳过这一维（见文件头「龙头破五日线需逐票拉日K，v1 不做（成本高）」），
+# 结果回流判定只有「催化(消息) + 资金」两维 —— 用户点出缺的正是**价格**这一维。
+# 口径：以**题材龙头个股**的日K代表该题材（eruption 的 `stocks[].dragon`，缺失则取首只）。
+ENABLE_KLINE_STOPFALL = True   # 可逆开关：False = 不拉K线、kline 因子恒 no_data（回退 v1 行为）
+KLINE_LMT = 30                 # 日K根数（够算 MA5 / 近7日低点 / 5日均量）
+KLINE_WEIGHT = 0.15            # kline 因子权重（从 catalyst 0.30→0.20、market 0.15→0.10 匀出）
+KLINE_MIN_BARS = 8             # 少于 8 根不算（MA5 + 近2日 + 前5日最低 + 前5日均量）
+_KLINE_CACHE: dict = {}        # code → (state, hits)：同题材共享龙头时不重复拉
+
+
+def _secid(code: str) -> str:
+    """`600000` / `600000.SH` → 东财 secid（`1.` 沪 / `0.` 深）。空则返回 ''。"""
+    c = (code or "").split(".")[0].strip()
+    if not c or not c[0].isdigit():
+        return ""
+    return ("1." if c[0] in "69" else "0.") + c
+
+
+def _fetch_kline(code: str, lmt: int = KLINE_LMT) -> list:
+    """东财日K（klt=101·前复权）→ `[{date, close, low, vol}]`。任何失败返回 []（⛔ 不抛）。"""
+    sid = _secid(code)
+    if not sid:
+        return []
+    url = ("https://push2his.eastmoney.com/api/qt/stock/kline/get"
+           f"?secid={sid}&klt=101&fqt=1&lmt={lmt}&end=20500101"
+           "&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        raw = json.loads(urllib.request.urlopen(req, timeout=8).read().decode("utf-8"))
+    except Exception:
+        return []
+    out = []
+    for row in ((raw.get("data") or {}).get("klines") or []):
+        p = str(row).split(",")
+        if len(p) < 6:
+            continue
+        try:
+            out.append({"date": p[0], "close": float(p[2]), "low": float(p[4]), "vol": float(p[5])})
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _kline_stop_fall(code: str):
+    """题材**龙头个股**日K的「止跌」判定。返回 `(state, hits)`。
+
+    四条判据（**命中 ≥2 视为止跌成立**）：
+
+    | 判据 | 含义 |
+    |---|---|
+    | ① 收盘站上 MA5 | 短期均线压制解除 |
+    | ② 近 2 日不创新低 | `min(low 近2) > min(low 前5)` —— 止跌的最直接形态 |
+    | ③ 跌幅收窄 | 今日涨跌幅 > 昨日涨跌幅（还在跌但跌得少了） |
+    | ④ 缩量 | 今日量 < 前 5 日均量 × 0.8（恐慌盘衰竭） |
+
+    ⛔ **无数据一律 `no_data`，绝不当「未止跌」** —— 缺数据 ≠ 价格没止跌
+    （与「无数据不编结论」铁律一致）。
+    """
+    if not ENABLE_KLINE_STOPFALL:
+        return "off(开关关闭)", 0
+    c = (code or "").split(".")[0]
+    if not c:
+        return "no_data(无K线)", 0
+    if c in _KLINE_CACHE:
+        return _KLINE_CACHE[c]
+    bars = _fetch_kline(code)
+    if len(bars) < KLINE_MIN_BARS:
+        _KLINE_CACHE[c] = ("no_data(无K线)", 0)
+        return _KLINE_CACHE[c]
+    closes = [b["close"] for b in bars]
+    lows = [b["low"] for b in bars]
+    vols = [b["vol"] for b in bars]
+    c1 = closes[-1] > (sum(closes[-5:]) / 5)
+    c2 = min(lows[-2:]) > min(lows[-7:-2])
+    r_today = (closes[-1] / closes[-2] - 1) if closes[-2] else 0.0
+    r_prev = (closes[-2] / closes[-3] - 1) if closes[-3] else 0.0
+    c3 = r_today > r_prev
+    avg5 = (sum(vols[-6:-1]) / 5) if any(vols[-6:-1]) else 0.0
+    c4 = bool(avg5) and vols[-1] < avg5 * 0.8
+    hits = sum(1 for x in (c1, c2, c3, c4) if x)
+    state = f"stop_fall(止跌{hits}/4)" if hits >= 2 else f"not_yet(未止跌{hits}/4)"
+    _KLINE_CACHE[c] = (state, hits)
+    return _KLINE_CACHE[c]
+
+
+def _leader_code(stocks) -> str:
+    """从 eruption 的 `stocks` 里挑「龙头」代码：`dragon=True` 优先，其次首只。无则 ''。"""
+    for s in (stocks or []):
+        if s.get("dragon"):
+            return s.get("code") or ""
+    return ((stocks or [{}])[0] or {}).get("code") or ""
+
+
+def _kline_state_of(nm, t_boom, series=None) -> str:
+    """取该题材**代表龙头**的 K 线止跌状态。
+
+    龙头优先级（⛔ 逐级回落，全都没有才 `no_data`）：
+
+    1. 当日 boom 的 `stocks[].dragon`
+    2. 当日 boom 的 `stocks[0]`
+    3. **历史 eruption（近 5 交易日）里该题材最近一次出现的** dragon / 首只
+       —— `watch` / `cooling` 类候选**没有当日 boom 数据**（实测 5/8 条），
+       不回落这一层它们会全部落到 `no_data`，而「待回流候选的K线有没有止跌」
+       恰恰是最该看的部分（2026-09-22 用户口径）。
+    """
+    leader = _leader_code((t_boom or {}).get("stocks"))
+    if not leader and series:
+        for _d, mp in reversed(series):
+            t = mp.get(nm)
+            if t:
+                leader = _leader_code(t.get("stocks"))
+                if leader:
+                    break
+    state, _ = _kline_stop_fall(leader)
+    return state
+
+
+def _confidence(phase, cooled_days, t_boom, mctx, flow_trend="neutral", flow_vals=None,
+                kline_state=None):
+    """0-1 置信度。**五因子**加权：催化0.20 + 大盘0.10 + 资金0.35 + 相位0.20 + **K线止跌0.15**。
+
+    ⚠️ 2026-09-22 新增第 5 维「K线止跌」（用户：「监听板块消息、资金流和**K线是否止跌**，
+    确定是否回流」）—— `catalyst` 0.30→0.20、`market` 0.15→0.10 让出 0.15 给 `kline`。
+    ⛔ 资金 0.35 / 相位 0.20 **不动**（P2-8 已实证校准的核心项）。效果：消息与资金都 OK、
+    但**价格没止跌**的候选，置信度直接少 0.15 —— 对齐「没止跌就不算真回流」。
 
     资金因子 0.2→0.35（用户思路：资金是回流判定的核心证据）：
     8/14 实证——PCB 单靠催化(0.3)+大盘(0.3) 撑到 conf0.8 但近3日资金未回流被证伪。
@@ -583,19 +708,19 @@ def _confidence(phase, cooled_days, t_boom, mctx, flow_trend="neutral", flow_val
     # 催化新鲜度
     title = (t_boom or {}).get("title") or ""
     factors["catalyst"] = bool(title)
-    cat = 0.3 if title else 0.0
-    # 大盘非退潮（P2-8 降权 0.3→0.15：大盘是环境分不是回流证据）
+    cat = 0.2 if title else 0.0   # 2026-09-22 0.30→0.20（让 0.10 给 kline：催化只决定「热度」）
+    # 大盘非退潮（P2-8 降权 0.3→0.15；2026-09-22 再 0.15→0.10 让 0.05 给 kline）
     sent = mctx.get("sentiment_score")
     nuke = mctx.get("nuke_count") or 0
     if sent is not None and sent >= 5 and nuke < 3:
         factors["market"] = True
-        mkt = 0.15
+        mkt = 0.10
     elif sent is not None and sent < 5:
         factors["market"] = False
-        mkt = 0.05
+        mkt = 0.03
     else:
         factors["market"] = None
-        mkt = 0.1
+        mkt = 0.07
     # 资金边际趋势（主，权重 0.35）/ outflow 榜二值（回退）
     if flow_trend == "inflow_rising":
         factors["capital"] = "inflow_rising"
@@ -625,6 +750,10 @@ def _confidence(phase, cooled_days, t_boom, mctx, flow_trend="neutral", flow_val
         else:
             factors["capital"] = "outflow(无趋势)"
             cap = 0.0
+    # K线止跌（2026-09-22 用户口径·第 5 维）—— 0.15 全额 = 止跌成立；否则 0
+    _ks = kline_state or "no_data(无K线)"
+    factors["kline"] = _ks
+    kln = KLINE_WEIGHT if str(_ks).startswith("stop_fall") else 0.0
     # 相位
     if phase == "re-entry-candidate":
         ph = 0.2
@@ -643,14 +772,19 @@ def _confidence(phase, cooled_days, t_boom, mctx, flow_trend="neutral", flow_val
     factors["phase"] = phase
     # ⛔ 2026-08-27 C档：资金 neutral/转弱 时 conf 封顶 0.6——催化不再单点拉满。
     #   六氟化钨实证：资金 neutral(无趋势) 靠催化0.3+大盘+相位撑到 0.85，回流证据不足。
-    raw = cat + mkt + cap + ph
+    raw = cat + mkt + cap + ph + kln
     if factors.get("capital") in ("neutral(无趋势)", "inflow_fading(流入转弱)"):
         raw = min(raw, 0.6)
     return round(raw, 2), factors
 
 
-def build():
+def build(*, live_day=None, live_themes=None, live_codes=None):
     series = _load_series()
+    # 盘中题材仅注入本次计算窗口，同日替换，绝不覆写盘后历史档。
+    if live_day is not None:
+        series = [(day, themes) for day, themes in series if day < live_day]
+        series.append((live_day, {item["name"]: item for item in (live_themes or []) if item.get("name")}))
+        series = series[-TRADING_LOOKBACK:]
     mctx = _market_context()
     # P0-孤岛打通（2026-08-17）：sector_delta 板块增量进轮动判定。
     # 此前 latest.json sector_delta 产出零消费；现读取今日盘中 top5 活跃板块名，
@@ -673,6 +807,8 @@ def build():
         _c = str(_it.get("code") or "").strip()
         if _c:
             today_zt_codes.add(_c.split(".")[0])
+    if live_codes is not None:
+        today_zt_codes = set(live_codes)
     if not series:
         return {"date": datetime.now().strftime("%Y-%m-%d"),
                 "generated_ts": datetime.now().isoformat(),
@@ -744,8 +880,10 @@ def build():
             if not active_vals or max(active_vals) < 1:
                 continue                   # 窗口内无任何涨停活动，不沉淀
             flow_trend, flow_vals, tx10_yi, tx5_yi = _flow_trend(nm, flow_series)
+            # 「观察沉淀」类（无当日 boom）→ K线止跌回落到**历史 eruption 的龙头**
             conf, factors = _confidence("watch", None, None, mctx,
-                                        flow_trend=flow_trend, flow_vals=flow_vals)
+                                        flow_trend=flow_trend, flow_vals=flow_vals,
+                                        kline_state=_kline_state_of(nm, None, series))
             if conf < SURFACE_CONFIDENCE:
                 continue
             # 跟踪池：取最近一次现身日的成分股（主板优先·创限席·不补位）
@@ -846,8 +984,13 @@ def build():
                 and flow_trend != "inflow_rising":
             continue
 
+        # K线止跌（2026-09-22 用户口径）：用该题材 **代表龙头** 的日K
+        # （当日 boom 的 dragon → boom 首只 → **历史 eruption 最近一次**的龙头；
+        #   同一龙头跨题材命中 `_KLINE_CACHE` 不重复拉）
+        _kl_state = _kline_state_of(nm, t_boom, series)
         conf, factors = _confidence(phase, cooled_days, t_boom, mctx,
-                                     flow_trend=flow_trend, flow_vals=flow_vals)
+                                     flow_trend=flow_trend, flow_vals=flow_vals,
+                                     kline_state=_kl_state)
 
         # 跟踪股票池：取 boom 当日成分股，按铁律剔除科创/北交所，主板优先重排
         raw = []

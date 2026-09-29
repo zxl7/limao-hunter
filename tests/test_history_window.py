@@ -99,6 +99,9 @@ def test_residual_archive_self_heal(tmp_path, monkeypatch):
     spec.loader.exec_module(cd)
 
     monkeypatch.setattr(cd, "ZT_DIR", tmp_path)
+    # 归档改为双目录同写（2026-09-18）→ 镜像目录也必须注入 tmp，
+    # 否则自愈会写穿到生产 wealth_code 归档（zt_archive._guard_test_write 会当场报错）
+    monkeypatch.setattr(cd, "ZT_MIRROR_DIR", tmp_path / "mirror")
     pool = [{"code": "000001", "name": "平安银行", "boards": 1}]
     f_ok = tmp_path / "zt_2026-09-11.json"
     f_ok.write_text(_json.dumps({"date": "2026-09-11", "intraday_only": True,

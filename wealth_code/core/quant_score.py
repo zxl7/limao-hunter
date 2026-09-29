@@ -518,6 +518,21 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
             out = out[:cap]
         return out
 
+    def _leader_preference_key(row: dict[str, Any]) -> tuple[float, ...]:
+        """龙头优先：先锁定题材第一，再在同级比较综合质量。
+
+        此键只决定 relay/watch 的展示和执行优先级，不改变四档入池资格、AI 预案或量化权重。
+        """
+        cand = row.get("_cand") if isinstance(row.get("_cand"), dict) else {}
+        return (
+            float(bool(cand.get("is_sector_dragon"))),
+            _to_num(row.get("lbc")),
+            _to_num(cand.get("carry_cnt")),
+            _to_num(cand.get("theme_mates_cnt")),
+            _to_num(row.get("leaderFactorScore")),
+            _to_num(row.get("_raw")),
+        )
+
     # 2) 四档（严格）集合
     by_raw = sorted(mapped, key=lambda m: _to_num(m.get("_raw")), reverse=True)
     height = _tier(by_raw, _relay_height_breakout_ok)
@@ -550,13 +565,15 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
     else:
         relay_mapped, mode = _relay_fallback(by_raw)
 
+    # 四档决定“能否入池”；池内按龙头战法聚焦第一，避免低位高分压过题材龙与空间高度。
+    relay_mapped = sorted(relay_mapped, key=_leader_preference_key, reverse=True)
     relay_codes = {str(m.get("code")) for m in relay_mapped}
     relay_names = {str(m.get("name")) for m in relay_mapped}
 
     # 3) 观察池：排除接力，按 raw_score 排序，容量/高标分组，最多 8
     watch_cands = [m for m in by_raw if str(m.get("code")) not in relay_codes]
     # 梯队必须观察（题材龙一若未进接力，纳入）——保留 spec watch 完整性
-    watch_sorted = sorted(watch_cands, key=lambda m: _to_num(m.get("_raw")), reverse=True)
+    watch_sorted = sorted(watch_cands, key=_leader_preference_key, reverse=True)
     watch_mapped = watch_sorted[:8]
 
     # 4) 还原为原始候选并附 rank/bucket
@@ -571,6 +588,8 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
 
     for idx, it in enumerate(relay, start=1):
         it["relay_rank"] = idx
+        it["leader_preference_rank"] = idx
+        it["leader_preference_note"] = "板块龙→连板高度→带动性→题材广度→综合分"
         it["relay_selection_mode"] = mode
         it["is_broad_fallback"] = mode in ("broad", "emergency")
         it["bucket"] = "relay"
@@ -588,6 +607,8 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
         it["hit_rules"] = hits
     for idx, it in enumerate(watch, start=1):
         it["watch_rank"] = idx
+        it["leader_preference_rank"] = idx
+        it["leader_preference_note"] = "板块龙→连板高度→带动性→题材广度→综合分"
         it["bucket"] = "watch"
         it["bucket_label"] = "观察池"
         style = it.get("style_tag")

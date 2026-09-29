@@ -793,6 +793,8 @@ def run_eod(
         "diagnostics": diagnostics,
         "global_narrative": global_narrative,
     }
+    from core.leader_cycle import enrich_payload
+    enrich_payload(payload, ROOT.parent)
     out_path = out_path or (CACHE_DIR / f"candidates-{zt['date'] or 'latest'}.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

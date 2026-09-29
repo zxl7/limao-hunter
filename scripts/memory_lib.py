@@ -52,6 +52,9 @@ def empty_mem(d: str = None) -> dict:
         "pushed_topics": [],
         "event_log": [],
         "last_push_by_task": {},
+        # 当日已报过「新主线崛起」的题材（2026-09-21 新增）。
+        # ⛔ 不加这个去重会每轮重复报（事件文案含涨停家数，逐轮都在变 → `(topic,event)` 去重拦不住）。
+        "rose_topics": [],
     }
 
 def load_memory(d: str = None) -> dict:
@@ -149,6 +152,16 @@ def detect_events(latest, prev=None, mem=None) -> list:
     # 2) 新板块崛起 / 龙头切换
     prev_top5 = {b.get("name", ""): b for b in (mem.get("prev_top5") or [])}
     baseline = bool(prev_top5)  # 首日/首轮仅建基线，不误报"新主线"
+    # ⛔ 2026-09-21 修（用户抓包「医药爆发这么猛，时间轴上居然没有医药题材」）
+    #    原判据把 rise 挂在 `elif`（= **上一轮 top5 里没有**）之下，于是：
+    #      **一开盘就是主线、全天霸榜的题材反而不发声** —— 它从首轮就在 top5、`prev_top5`
+    #      里也有（既不满足「新面孔」），龙头又没换（连「龙头切换」也没有）
+    #      → 事件日志对它**零记录**。实证：09-21 医药 top1 涨停 19 只（第 2 名仅 6 只）、
+    #      `dominant_sector=医药`、推送台账 10:06 就首推，而 `event_log` 医药 **0 条**
+    #      → 时间轴上完全不可见（时间轴的题材层唯一来源就是 event_log）。
+    #    现判据 = **当日首次达到强度阈值（涨停 ≥3）即记一次**，与「是否新面孔」无关；
+    #    `rose_topics` 保证每个题材每天只报一次（随日文件天然重置）。
+    rose = set(mem.get("rose_topics") or [])
     for b in (latest.get("top5") or []):
         name = b.get("name", "")
         L = b.get("leader") or {}
@@ -162,13 +175,14 @@ def detect_events(latest, prev=None, mem=None) -> list:
                     "severity": "high",
                     "topic": name,
                 })
-        elif baseline and b.get("zt_count", 0) >= 3:
+        if baseline and b.get("zt_count", 0) >= 3 and name not in rose:
             events.append({
                 "time": now,
                 "event": f"新主线崛起：{name} 涨停{b.get('zt_count')}只，龙头 {lname}",
                 "severity": "high",
                 "topic": name,
             })
+            rose.add(name)
 
     # 3) 涨停数骤变（广度剧烈变化）
     cur_zt = latest.get("total_zt", 0)
@@ -207,6 +221,7 @@ def detect_events(latest, prev=None, mem=None) -> list:
     events = [e for e in events if (e.get("topic"), e.get("event")) not in existing]
     mem["event_log"].extend(events)
     mem["prev_top5"] = latest.get("top5") or []
+    mem["rose_topics"] = sorted(rose)
     return events
 
 # ───────────────────────────── 推送决策 ─────────────────────────────

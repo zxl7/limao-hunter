@@ -1,8 +1,8 @@
-# Runtime dependencies for the wealth_code pipeline.
-# Keep this file synchronized with the isolated production venv.
-akshare
-pandas
-numpy
-requests
-PyYAML
-pytest
+# Python runtime dependencies for the wealth_code pipeline.
+# Verified against the isolated managed venv on 2026-09-29.
+akshare==1.18.64
+pandas==3.0.3
+numpy==2.4.6
+requests==2.34.2
+PyYAML==6.0.3
+pytest==9.1.1

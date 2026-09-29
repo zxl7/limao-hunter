@@ -158,3 +158,35 @@ def test_real_review_card_20260917():
     assert {"容量核心", "梯队", "承接", "研判"} <= set(w), w
     for keep in ("亢奋", "退潮", "冰点"):
         assert keep not in w, f"体系情绪词不该误报: {keep}"
+
+
+# ── ⑥ 渲染层白话化 sanitize（2026-09-18·旧落盘文案自愈）─────────────────
+
+def test_sanitize_replaces_tier1_with_official_hint():
+    """Tier-1 词 → 按 PLAIN_HINT 官方白话替换（卡面渲染出口用）。"""
+    out = R.sanitize("样本 44 笔·已结算 3 只｜反馈矩阵 缺失")
+    for bad in ("样本", "已结算", "反馈矩阵"):
+        assert bad not in out, (bad, out)
+    assert "已记录 44 笔" in out
+
+
+def test_sanitize_keeps_unmapped_and_exempt_label_words():
+    """⛔ 无官方白话映射的 Tier-1 词**原样保留**（交给人改）；豁免模块名内的词不动。"""
+    assert R.sanitize("MA5 跌破") == "MA5 跌破"          # 无映射 → 不猜
+    assert R.sanitize("AI综合研判 无异常") == "AI综合研判 无异常"   # 仅存在于豁免标签内
+
+
+def test_sanitize_output_passes_scan():
+    """替换即消灭命中：sanitize 后的文本必须零 Tier-1（否则等于假修复）。"""
+    for raw in ("样本 44 笔·胜率 50%", "已结算 3 只", "可信度 高", "情绪升温 明显"):
+        f, _ = R.scan(R.sanitize(raw))
+        assert f == [], (raw, f)
+
+
+def test_hint_never_self_contains_fail_term():
+    """词表自洽：白话映射本身不得再含该 Tier-1 词（否则替换后扫描仍命中）。
+
+    实测踩坑（2026-09-18）：`可信度 → 预期可信度` 自含 → sanitize 后仍 FAIL。
+    """
+    bad = {k: v for k, v in R.PLAIN_HINT.items() if k in v}
+    assert bad == {}, f"白话映射自含禁项: {bad}"

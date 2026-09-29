@@ -41,6 +41,10 @@ def _dec(view="participate", limit=3.0):
 def _isolate_ledgers(monkeypatch, tmp_path):
     monkeypatch.setattr(nav_ledger, "LEDGER_PATH", tmp_path / "nav.jsonl")
     monkeypatch.setattr(strategy_metrics, "METRICS_PATH", tmp_path / "metrics.json")
+    # ⛔ 2026-09-21：`run_verify` 新增「9:25 池内裁决结论冻结」写盘（pool_call-<date>.json）
+    #    → 必须把 pv.CACHE_DIR 也指向 tmp，否则夹具数据写穿真实 wealth_code/cache
+    #    （save_pool_call 的测试期守卫会当场报错）。
+    monkeypatch.setattr(pv, "CACHE_DIR", tmp_path)
 
 
 # ── 1) 裁决函数（纯逻辑）─────────────────────────────────────────────
@@ -235,14 +239,14 @@ def test_record_ai_zone_ok_lets_ai_buy():
     assert rec["performance"]["next_day"]["status"] == "covered"
 
 
-def test_record_falls_back_when_ai_decisions_missing():
-    """该执行日无 AI 决策行 → 诚实回退机械口径（caliber=mechanical_fallback）。"""
+def test_record_blocks_trade_when_ai_decisions_missing():
+    """该执行日无 AI 决策行 → AI 口径缺失，不得由机械信号开仓。"""
     rec = pv._build_record(_cand("000001"), _q(10.0, 2.0), 10.5, date10="2026-09-11",
                            ai_decisions=None)
     oc = rec["performance"]["open_check"]
-    assert oc["caliber"] == "mechanical_fallback"
-    assert oc["can_enter"] is True                       # 机械口径结论保留
-    assert "回退机械口径" in oc["caliber_note"]
+    assert oc["caliber"] == "ai_missing_no_trade"
+    assert oc["can_enter"] is False
+    assert "账户不交易" in oc["caliber_note"]
 
 
 def test_record_switch_off_restores_mechanical(monkeypatch):
@@ -294,17 +298,17 @@ def test_ledger_only_counts_ai_filled(monkeypatch, tmp_path):
     assert led[0]["avg_return_pct"] == 2.94   # (10.5/10.2-1)*100
 
 
-def test_run_verify_falls_back_without_ai(monkeypatch, tmp_path):
-    """无 AI 决策文件 → summary 标 mechanical_fallback（不静默按空仓结算）。"""
+def test_run_verify_blocks_trade_without_ai(monkeypatch, tmp_path):
+    """无 AI 决策文件 → 明确标为缺失且不交易。"""
     _isolate_ledgers(monkeypatch, tmp_path)
     monkeypatch.setattr(ai_caliber, "ROOT", tmp_path)
     cand = {"date": "2026-09-11", "relay": [_cand("000001", "甲票")], "watch": [],
             "environment": {"regime": "neutral"}}
     quotes = {"000001": _q(10.0, 2.0)}
     res = pv.run_verify(candidates=cand, quotes=quotes, next_close_map={"000001": 10.5})
-    assert res["summary"]["caliber"] == "mechanical_fallback"
-    assert res["summary"]["buy_signals"] == 1     # 机械口径仍在结算
-    assert res["payload"]["caliber"] == "mechanical_fallback"
+    assert res["summary"]["caliber"] == "ai_missing_no_trade"
+    assert res["summary"]["buy_signals"] == 0
+    assert res["payload"]["caliber"] == "ai_missing_no_trade"
 
 
 # ── 5) 卡面口径：卡头 = 实买（与账本同源），计划/机械降为括注 ─────────────
@@ -343,13 +347,13 @@ def test_verify_card_head_uses_filled_count(monkeypatch, tmp_path):
                     "caliber": "ai", "hit_signals": 0, "covered": 14,
                     "nav_latest": 0.932762, "trade_date10": "2099-03-02"}})
     s = _card_text(card)
-    assert "AI 买入信号" in s and "计划 1 只" in s and "机械达标 5 只" in s
+    assert "AI 买入信号" in s and "重点看 1 只" in s and "机械量价参考 5 只" in s
     # 定调同口径：实买 0 → 空仓观望（不得写「AI 买1只」）
     assert "AI 空仓·观望" in card["title"]
 
 
 def test_verify_card_mech_section_uses_mech_flag(monkeypatch, tmp_path):
-    """「✅ 竞价达标·机械参考」段按 mech_can_enter 筛选——AI 放弃的机械达标票仍可见。"""
+    """「📊 机械量价参考」段按 mech_can_enter 筛选——AI 放弃的机械达标票仍可见。"""
     bc = _load_bc()
     monkeypatch.setattr(bc, "_core_reversal_block", lambda: None)
     monkeypatch.setattr(bc, "_nav_drawdown_block", lambda m: None)
@@ -372,7 +376,8 @@ def test_verify_card_mech_section_uses_mech_flag(monkeypatch, tmp_path):
                     "caliber": "ai", "hit_signals": 0, "covered": 14,
                     "nav_latest": 1.0, "trade_date10": "2099-03-03"}})
     s = _card_text(card)
-    assert "✅ 竞价达标·机械参考" in s and "双星新材" in s
+    assert "📊 机械量价参考（仅作核对，不构成 AI 买入）" in s and "📊 <text_tag color='purple'>双星新材" in s
+    assert "✅ <text_tag color='purple'>双星新材" not in s and "达标买入信号" not in s
     # 机械参考段与账本口径解耦：该票 can_enter=False（AI 只观察），但机械达标照常列出
     assert "🤖 AI 判断" not in s or "观察" in s
 

@@ -30,6 +30,9 @@ sys.path.insert(0, str(ROOT / "scripts"))     # import intraday_pulse
 CACHE = ROOT / "cache"
 ERUPT_DIR = CACHE / "eruption_history"
 ZT_DIR = CACHE / "zt_history"
+# 归档**镜像目录**（双目录同写·2026-09-18）：题材沉淀副本，消费方在 wealth_code 侧。
+# ⛔ 写入一律走 `_archive_dirs()` + `zt_archive.write_archives`，不得各自拼路径。
+ZT_MIRROR_DIR = ROOT / "wealth_code" / "data" / "zt_history"
 FLOW_DIR = CACHE / "sector_flow_history"   # 板块资金流日级时间序列（回流趋势用）
 NEWSFLASH_DIR = CACHE / "newsflash_history"  # 外部新闻（快讯）日归档
 # 涨停池/爆发快照/资金流保留天数。
@@ -47,6 +50,11 @@ STOCKS_PER_THEME = 8     # 每题材最多存前 8 只成分股
 
 def _today():
     return datetime.now().strftime("%Y-%m-%d")
+
+
+def _archive_dirs() -> tuple[Path, ...]:
+    """涨停池归档目录（主 + 镜像）。调用时求值 → 测试注入 `ZT_DIR`/`ZT_MIRROR_DIR` 生效。"""
+    return (ZT_DIR, ZT_MIRROR_DIR)
 
 
 def _guard_trading_day(today: str) -> bool:
@@ -184,7 +192,8 @@ def _heal_residual_archives(heal_date: str, pool: list, limit: int = 5) -> list:
         z = dict(z)
         z.update({"zt_list": pool, "zt_count": len(pool), "tc": len(pool),
                   "healed_ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
-        p.write_text(json.dumps(z, ensure_ascii=False))
+        import zt_archive
+        zt_archive.write_archives(z, dirs=_archive_dirs())   # 自愈同样双目录同写（防两边不一致）
         healed.append(p.name)
         print(f"[capture_daily] 🩹 残缺历史日已自愈 {p.name}｜补 zt_list {len(pool)} 只")
     return healed
@@ -209,19 +218,13 @@ def capture_zt():
         return None
     date_str = data.get("date") or _today()
     target = ZT_DIR / f"zt_{date_str}.json"
-    intraday_pts = []
-    if target.exists():
-        try:
-            old = json.loads(target.read_text())
-            intraday_pts = old.get("intraday_points") or []
-        except Exception:
-            pass
-    if intraday_pts:
-        data = dict(data)
-        data["intraday_points"] = intraday_pts
-    target.write_text(json.dumps(data, ensure_ascii=False))
     if not (data.get("zt_list") or []):
         print(f"[capture_daily] ⚠️ 缺 zt_list：{target.name}（yesterday_zt 无涨停池·盘后链时序?）")
+    # ⛔ 双目录同写 + 合并保留 intraday_points（单一出口 = scripts/zt_archive.py·2026-09-18）
+    #    此前本函数只写 cache/zt_history，而 record_zt_snapshot 只写 wealth_code/data/zt_history
+    #    → 「双路径分裂」（15:30 theme_roll 读到的当日归档是无 zt_list 的盘中空壳）。
+    import zt_archive
+    zt_archive.write_archives(data, dirs=_archive_dirs())
     # ⛔ 盘后仍拿不到今日池 = 上游补齐失败 → 当日归档注定缺料，必须显式告警（勿静默）
     if date_str != _today() and datetime.now().hour >= 15:
         print(f"[capture_daily] ⚠️ 盘后未拿到今日涨停池：本次归档口径={date_str}"

@@ -73,8 +73,8 @@ NAV_DRAWDOWN_HINT_PCT = 5.0
 #     = AI 实际买到的票（AI 判 participate ∧ 竞价 ≤ AI 自定 entry_max_gap）。
 #   ②显示层（本开关）：卡头 / 标题定调按 AI 口径，机械达标降为灰字参考。
 # True  = 卡头「AI 买入信号」= AI 口径**实际能成交**的只数（= 账本口径 = summary.buy_signals），
-#         并括注「计划 N 只」（AI 判参与）与「机械达标 M 只」；✅ 段按 mech_can_enter 筛选
-#         （段名「✅ 竞价达标·机械参考」——与账本口径解耦，机械信息不丢）。
+#         并括注「重点看 N 只」（AI 昨日预案）与「机械量价参考 M 只」；📊 段按 mech_can_enter 筛选
+#         （段名明确为「机械量价参考」，与 AI 买入和账本口径严格区分）。
 # False = 一键回退旧显示行为（买入信号 = 机械 can_enter 只数）。
 # ⛔ 显示层只读不写：不改 can_enter（由 core/ai_caliber 决定）、不改 signal_eval。
 AI_CALIBER_BUY_SIGNAL = True
@@ -687,6 +687,7 @@ _NARR_LABEL_ALIAS = {
     "盘面": "今日盘面", "盘面环境": "今日盘面", "今日盘面": "今日盘面", "环境": "今日盘面",
     "市场": "今日盘面", "大盘": "今日盘面",
     "操作": "操作思路", "操作思路": "操作思路",
+    "昨日逻辑": "昨日逻辑",
 }
 _NARR_LINE_TARGET = 56          # 单行目标字数（折行阈值 = 56×1.35 ≈ 76 字）
 _NARR_SEG_ORDER = ("今日走势", "题材催化", "历史股性", "⚠️ 风险")
@@ -1130,16 +1131,9 @@ def _load_ai_view(trade_date: str | None) -> dict:
 
 
 def _next_trade_day_inline(date10: str) -> str:
-    """次一交易日（跳周末）——与 pipeline_verify._next_day / ai_caliber.next_trade_day 同口径。
-    本地复制以免渲染层反向依赖 core（build_cards 可被独立 importlib 加载·测试沙箱无 sys.path）。"""
-    from datetime import datetime as _dt, timedelta as _td
-    try:
-        d = _dt.strptime(str(date10), "%Y-%m-%d") + _td(days=1)
-        while d.weekday() >= 5:
-            d += _td(days=1)
-        return d.strftime("%Y-%m-%d")
-    except Exception:
-        return str(date10)
+    """卡面读取AI视图时与执行链共用A股法定休市日历。"""
+    from common.trading_calendar import next_a_share_trading_day
+    return next_a_share_trading_day(date10) or str(date10)
 
 
 def _ai_decision_limits(trade_date: str | None) -> dict[str, float]:
@@ -1182,15 +1176,56 @@ def _ai_decision_limits(trade_date: str | None) -> dict[str, float]:
     return out
 
 
-def _ai_participate_count(raw: dict) -> int:
-    """AI 判「参与」的只数 —— 买入口径唯一基准（2026-09-14 用户「我想统一为AI口径」）。
+_BIAS_LABEL = {"focus": "重点看", "normal": "一般", "avoid": "回避"}
+_VIEW_LABEL = {"participate": "重点看", "watch": "一般", "skip": "回避"}
 
-    与 `_ai_plan_block` 的买入名单同源同判：只数 = views 里 view=="participate" 的条目数。
+
+def _bias_of(v: dict | None) -> str:
+    """取预案档 bias（重点看/一般/回避），缺省空串。"""
+    return str((v or {}).get("bias") or "").strip()
+
+
+def _plan_label(v: dict | None) -> str:
+    """预案档标签：bias 优先，旧口径 view 兜底（participate→重点看 / watch→一般 / skip→回避）。"""
+    b = _bias_of(v)
+    if b in _BIAS_LABEL:
+        return _BIAS_LABEL[b]
+    return _VIEW_LABEL.get(str((v or {}).get("view") or "").strip(),
+                           str((v or {}).get("view") or "") or "—")
+
+
+def _plan_color(v: dict | None) -> str:
+    """预案档配色：focus→红(优先) / avoid→绿(回避) / normal→紫(一般)；缺 bias 回退 view 配色。"""
+    b = _bias_of(v)
+    if b == "focus":
+        return "red"
+    if b == "avoid":
+        return "green"
+    if b == "normal":
+        return "purple"
+    _view = str((v or {}).get("view") or "").strip()
+    return ("red" if _view == "participate" else
+            "green" if _view == "skip" else "purple")
+
+
+def _is_focus(v: dict | None) -> bool:
+    """预案档＝重点看（focus）；旧口径 view=participate 兜底。买入口径「计划只数」基准。"""
+    b = _bias_of(v)
+    if b:
+        return b == "focus"
+    return str((v or {}).get("view") or "").strip() == "participate"
+
+
+def _ai_focus_count(raw: dict) -> int:
+    """AI 判「重点看」(bias=focus) 的只数 —— 买入口径「计划只数」基准（2026-09-14 用户「统一为AI口径」）。
+
+    与 `_ai_plan_block` 的买入名单同源同判：只数 = views 里 bias=="focus" 的条目数
+    （旧口径 view=="participate" 兜底·兼容真·历史数据）。⛔ 2026-09-22「彻底不派」：
+    盘后**不派生** view，故不再数 view，直接数预案档 focus = 昨日重点看的票。
     无视图/空视图 → 0（调用方须先判 views 是否存在，缺失时回退机械口径，不编造）。
     """
     views = raw.get("views") or {}
-    return sum(1 for v in views.values()
-               if str((v or {}).get("view") or "") == "participate")
+    return sum(1 for v in views.values() if _is_focus(v))
 
 
 def _load_ai_stats() -> dict | None:
@@ -1275,12 +1310,41 @@ def _ai_view_line(it: dict, ai_view: dict) -> str:
     v = (ai_view or {}).get(code)
     if not v:
         return ""
+    _oc = (it.get("performance") or {}).get("open_check") or {}
     view = str(v.get("view") or "")
-    label = {"participate": "参与", "skip": "放弃", "watch": "观察"}.get(view, view or "—")
-    color = "red" if view == "participate" else ("green" if view == "skip" else "purple")
+    # ⛔ 2026-09-22「彻底不派」：盘后只写 bias（重点看/一般/回避），view 不再派生。
+    #    若无 9:25 实判（旧口径回退），以**预案档** label/color 呈现（bias 优先·view 兜底）。
+    label = _plan_label(v)
+    color = _plan_color(v)
+
+    # ── 🎯 9:25 池内实判（2026-09-21 用户「接力池＝提前缩范围，不是提前拍板」）──────────
+    # 该票有今日 9:25 结论 → 单层渲染：**今日实判**（label 即 9:25 判的，不再有"两个时间层
+    # 互斥终态同框"的问题）+ 昨日预案档 + 实判理由。⛔ 不再叠加 `_ai_dyn_verdict`（同一判断
+    # 的第二次表述＝重复），也不再走旧口径的「终态去重」抑制（已无冲突源）。
+    if _oc.get("pool_reason"):
+        # ⛔ 标签必须取 **9:25 实判**（`open_check.ai_view`），⛔ 不是 ai_view 文件里的
+        #    盘后预案档——否则会出现「判：观察」+ 理由「→ 买入」自相矛盾（2026-09-21 实测）。
+        view = str(_oc.get("ai_view") or view or "")
+        _label = {"participate": "买入", "watch": "观察", "skip": "放弃"}.get(view, label)
+        color = "red" if view == "participate" else ("green" if view == "skip" else "purple")
+        # 昨夜的预案必须展示“为什么”，不能把每只票压缩成“重点看/一般/回避”三个
+        # 标签。空仓只是当日名额结论，不抹去逐票的强弱、带动与风险信息。
+        # 优先读盘后 AI 原因；缺失时诚实省略，不用档位名占位。
+        _plan_reason = str(v.get("reason") or "").strip()
+        _tags = [f"<text_tag color='{color}'>🤖 今日9:25判：{_label}</text_tag>"]
+        txt = "　　" + " ".join(_tags)
+        txt += "\n" + f"　　<font color='grey'>{_oc.get('pool_reason')}</font>"
+        if _plan_reason:
+            _plan_text = _narr_render(_plan_reason, indent="　　", prev=True)
+            # 标题是读卡时点，不参与跨日平移；只平移盘后写下的正文。
+            if _plan_text:
+                _plan_text = _plan_text.replace("　　", "　　**昨日逻辑**：", 1)
+                txt += "\n" + _plan_text
+        return txt
+
     # 🚪 hibernate 逃生阀（2026-09-18 用户拍板 A）：AI 判「观察」但当日带量转强 → 已小仓买入。
     #    ⛔ 必须改写标签，否则个股段仍显示「观察」而账本/持仓里有成交 → 卡面自相矛盾。
-    if view != "participate" and ((it.get("performance") or {}).get("open_check") or {}).get("hibernate_valve"):
+    if view != "participate" and _oc.get("hibernate_valve"):
         label = f"{label} → 破例小仓买"
         color = "red"
     reason = str(v.get("reason") or "").strip()
@@ -1307,31 +1371,30 @@ def _ai_view_line(it: dict, ai_view: dict) -> str:
     return txt
 
 
-def _ai_plan_block(raw: dict, records: list[dict]) -> list[dict]:
-    """🤖 AI 昨日买入计划（2026-09-11 立项·2026-09-18 时点口径修正）。
+def _oc_of(r: dict | None) -> dict:
+    """取 record 的 open_check（缺省 {}）。"""
+    return ((r or {}).get("performance") or {}).get("open_check") or {}
 
-    用户原话（2026-09-11）：「竞价卡要告诉我今天买什么，并统计 AI 自己的收益」。
-    ⛔ 时点（2026-09-18）：「毕竟是上一个交易日的结论」——标题写**昨日**买入计划，
-    段内所有时点词按「撰写日→读卡日」+1 天平移（今天→昨天），
-    只保留「今日竞价」指代当日实况读数（见 `_shift_day_words`）。
 
-    数据源 cache/ai_view_{trade_date}.json —— AI 在**上一交易日盘后**自定（不看今日盘面，
-    故不存在用未来信息作弊）：
-      · stance/stance_label/direction/note → 攻守定调与方向
-      · views[code].view → participate 买入 / watch 观察 / skip 放弃 + reason + entry_max_gap
-    成交判定：取当日竞价 gap_pct 与**用户 5% 硬线**比较 → 买到 / 没买到（高开超上限·诚实标注）。
-    收益：AI 独立轨 ai_nav_history.jsonl 聚合；⛔ 不写 holdings、与真人持仓无关（观点层）。
+def _ai_plan_block(raw: dict, records: list[dict],
+                   pool_summary: dict | None = None) -> list[dict]:
+    """🤖 今日买入（**9:25 竞价落地后定**）＋ AI 独立成绩。
+
+    ⏱️ 两个时点（2026-09-21 用户「接力池＝提前缩范围，不是提前拍板」）：
+      · **昨日预案**（上一交易日盘后写·`cache/ai_view_<今日>.json`）：攻守基调 + 方向 + 逐票
+        `bias`（重点看 / 一般 / 回避）——⛔ **不含"买哪只"**。
+      · **今日实判**（今日 09:25 竞价落地后·`core/pool_call` 在池内判命中）：买哪只在**今天**
+        才定，结论随 record 的 `open_check.ai_view` 上来（与账本/结算同源）。
+    ⛔ 时点词：实判段一律写「今日」，预案段一律写「昨日」；note 由昨日撰写 → `_shift_day_words` 平移。
+    ⛔ 数据源优先级：record 的 9:25 结论 → 无（旧数据 / 开关回退）时退回旧口径（读 views 终态）。
     """
     views = raw.get("views") or {}
-    if not views:
+    _by_code: dict[str, dict] = {str(r.get("code") or ""): r for r in records}
+    # 走 9:25 口径的判据：summary 有池内结论，或任一 record 带 9:25 实判理由
+    _has_pool = bool((pool_summary or {}).get("participate") is not None) or any(
+        _oc_of(r).get("pool_reason") for r in records)
+    if not views and not _has_pool:
         return []
-    by_code: dict[str, dict] = {}
-    for r in records:
-        by_code[str(r.get("code") or "")] = r
-    _mg = raw.get("entry_max_gap")
-    max_gap = float(_mg) if isinstance(_mg, (int, float)) else 3.0
-    # 逐票上限兜底（2026-09-14）：views 缺字段时回查 AI 决策台账，保证卡面判定与账本同值
-    limits = _ai_decision_limits(str(raw.get("date") or ""))
     dd = str(raw.get("decision_date") or "")
     mmdd = dd[5:] if len(dd) >= 10 else dd
     stance_label = (str(raw.get("stance_label") or "")
@@ -1339,60 +1402,78 @@ def _ai_plan_block(raw: dict, records: list[dict]) -> list[dict]:
     direction = str(raw.get("direction") or "")
     note = str(raw.get("note") or "").strip()
 
-    buys: list[tuple[str, dict]] = []
-    others: list[str] = []
-    # 🚪 hibernate 竞价逃生阀（2026-09-18 用户拍板「A」）：AI 判「观察」但因
-    #    「带量转强 ∧ 方向内板数最高」被**当日唯一**放行小仓试错的票 —— 必须与普通买入
-    #    **同列展示**，否则卡面会出现「AI 昨日没有要买的」却在持仓/账本里真有成交
-    #    （自相矛盾·2026-09-18 用户刚批评过同类「观察又说放弃」打架）。
-    valve_codes = {str(r.get("code") or "") for r in records
-                   if ((r.get("performance") or {}).get("open_check") or {}).get("hibernate_valve")}
-    for _code, _v in views.items():
-        _v = _v or {}
-        _view = str(_v.get("view") or "")
-        _code = str(_code)
-        if _view == "participate" or _code in valve_codes:
-            buys.append((_code, _v))
-        else:
-            _r = by_code.get(_code) or {}
-            others.append(str(_r.get("name") or _v.get("name") or _code))
+    blocks: list[dict] = []
+    if _has_pool:
+        _q = (pool_summary or {}).get("quota")
+        _n = (pool_summary or {}).get("pool_size")
+        blocks.append(_div(
+            "**🤖 今日买入**<font color='grey'>（9:25 竞价开出来后定的；昨天只出预案）</font>"))
+        head = []
+        if stance_label:
+            head.append(f"昨日预案：{stance_label}")
+        if direction:
+            head.append(f"方向：{direction}")
+        if head:
+            blocks.append(_div("｜".join(head)))
+        if note:
+            blocks.append(_div(f"<font color='grey'>{_shift_day_words(note)}</font>"))
+        if isinstance(_n, (int, float)):
+            blocks.append(_div(
+                f"　　<font color='grey'>今天池内 {int(_n)} 只，按开盘竞价实况定下买 "
+                f"{0 if _q is None else int(_q)} 只以内</font>"))
+        # 买入名单 = 9:25 实判 participate（= 账本口径）
+        buys = [r for r in records if str(_oc_of(r).get("ai_view") or "") == "participate"]
+        others = [str(r.get("name") or r.get("code") or "") for r in records
+                  if str(_oc_of(r).get("ai_view") or "") != "participate"]
+    else:
+        # ── 旧口径回退（无 9:25 结论：历史数据 / POOL_CALL_ENABLED=False）──────────
+        # ⛔ 2026-09-22「彻底不派」：盘后只出预案（重点看/一般/回避），⛔ 不提前拍板「买哪只」。
+        blocks.append(_div(
+            f"**🤖 AI 昨日预案**<font color='grey'>（{mmdd} 盘后定 · 重点看/一般/回避 · 买哪只今日竞价定）</font>"))
+        head = []
+        if stance_label:
+            head.append(f"AI 昨日判断：{stance_label}")
+        if direction:
+            head.append(f"方向：{direction}")
+        if head:
+            blocks.append(_div("｜".join(head)))
+        if note:
+            blocks.append(_div(f"<font color='grey'>{_shift_day_words(note)}</font>"))
+        valve_codes = {str(r.get("code") or "") for r in records
+                       if _oc_of(r).get("hibernate_valve")}
+        buys = []
+        others = []
+        for _code, _v in views.items():
+            _v = _v or {}
+            _code = str(_code)
+            # ⛔ 2026-09-22：旧口径回退时，买哪只由**预案档 bias=focus** 决定（view 不再派生）；
+            #    真·历史数据（只有 view=participate）走 _is_focus 兜底。
+            if _is_focus(_v) or _code in valve_codes:
+                buys.append(_by_code.get(_code) or {"code": _code, "name": _v.get("name")})
+            else:
+                _r = _by_code.get(_code) or {}
+                others.append(str(_r.get("name") or _v.get("name") or _code))
 
-    blocks: list[dict] = [_div(
-        # ⛔ 时点（2026-09-18 用户「毕竟是上一个交易日的结论·不要用今日·改成昨日」）：
-        #    这份计划由**上一交易日盘后**定死，⛔ 标题禁写「AI 今日买入计划」；
-        #    括注同时交代两个时点：昨日（盘后定）↔ 今日（竞价定成交）。
-        f"**🤖 AI 昨日买入计划**<font color='grey'>（{mmdd} 盘后定 · 今日竞价定成交）</font>"
-    )]
-    head = []
-    if stance_label:
-        head.append(f"AI 昨日判断：{stance_label}")   # ⛔ 禁写「AI 判断」（无时点会被读成当日）
-    if direction:
-        head.append(f"方向：{direction}")
-    if head:
-        blocks.append(_div("｜".join(head)))
-    if note:
-        # note 由上一交易日盘后撰写 → 时点词 +1 天平移（今天→昨天），否则次日读成当日盘面。
-        blocks.append(_div(f"<font color='grey'>{_shift_day_words(note)}</font>"))
-
-    if valve_codes and buys:
+    _valve_codes = {str(r.get("code") or "") for r in records if _oc_of(r).get("hibernate_valve")}
+    if _valve_codes and buys:
         blocks.append(_div("　　<font color='grey'>⚠️ 昨日收盘定的是空仓——只有下面这一只是今日竞价破例小仓试错"
                            "（它带了量、是方向里板数最高的）</font>"))
     if not buys:
-        blocks.append(_div("<font color='grey'>昨日没有选出要买的（AI 自己空仓）</font>"))
-    for code, v in buys:
-        r = by_code.get(code) or {}
-        oc = (r.get("performance") or {}).get("open_check") or {}
+        blocks.append(_div("<font color='grey'>今天池内没有一只够条件买（AI 空仓）</font>"
+                           if _has_pool else
+                           "<font color='grey'>昨日没有选出要买的（AI 自己空仓）</font>"))
+    for r in buys:
+        code = str(r.get("code") or "")
+        oc = _oc_of(r)
         gap = oc.get("gap_pct")
         _valve = bool(oc.get("hibernate_valve"))
-        # ⛔ 生效上限 = 用户 5% 硬线（2026-09-14）——⛔ 不再读 AI 自定 entry_max_gap，
-        #    否则卡面会与账本/结算打架（AI 自定值仅留痕于 ai_view，不上卡）。
+        # ⛔ 生效上限 = 用户 5% 硬线（2026-09-14）——⛔ 不再读 AI 自定 entry_max_gap
         limit = USER_ENTRY_MAX_GAP_PCT
+        v = views.get(code) or {}
         name_txt = _hl(f"{r.get('name') or v.get('name') or code}({code})", "violet")
         if isinstance(gap, (int, float)):
             gap_txt = f"竞价{gap:+.2f}%"
             if _valve:
-                # 逃生阀票：AI 盘后判「观察」→ 竞价带量转强后小仓试错（诚实标注来源差异）
-                # ⛔ 仓位文案换算：0.2 → 「2 成」（×10），不是 ×100（否则显示「20 成」）。
                 _pc = int(round(_ai_caliber.HIBERNATE_VALVE_POSITION * 10))
                 tag = (f"<text_tag color='orange'>小仓试错</text_tag>"
                        f"<font color='grey'>（空仓日破例·只买 {_pc} 成）</font>"
@@ -1404,25 +1485,50 @@ def _ai_plan_block(raw: dict, records: list[dict]) -> list[dict]:
                        f"<text_tag color='green'>没买到</text_tag>（高开超{limit:g}%）")
         else:
             gap_txt, tag = "竞价数据未到", "<font color='grey'>待竞价</font>"
-        blocks.append(_div(f"{name_txt}{_boards_txt(r)} {gap_txt} → {tag}"))
-        reason = str(v.get("reason") or "").strip()
-        if reason:
-            # ⛔ 去重（2026-09-15 用户「个股下的话术重复了」）：同源 `views[code].reason` 已由
-            #    下方个股段 `_ai_view_line` 渲染为「🤖 AI 判断：X + 理由」——计划块再整段渲染即
-            #    逐字重复（09-15 实证：超声电子同一段在计划块与达标段各出现一次）。
-            #    仅当下方**不会**渲染该票 AI 判断行时才补出，保证信息不丢：
-            #      · 该票无对应 record（计划块票不在候选里）；或
-            #      · 报价缺失（unavailable 段只出行、不渲染 🤖 AI 判断行）。
-            _oc_r = (r.get("performance") or {}).get("open_check") or {}
-            _rendered_below = bool(r) and _oc_r.get("decision_status") != "unavailable"
-            if not _rendered_below:
-                # prev=True：理由写于上一交易日盘后 → 时点词平移（今天→昨天）。
-                blocks.append(_div(_narr_render(reason, prev=True)))  # 语义分段（风险独立末行）
+        _core_tag = ""
+        if oc.get("line_is_core"):
+            _core_tag = "<text_tag color='red'>这条线最高板</text_tag>"
+        elif isinstance(oc.get("line_core"), dict) and (oc["line_core"] or {}).get("name"):
+            _lc = oc["line_core"]
+            _core_tag = (f"<font color='grey'>（这条线最高板是 {_lc.get('name')}"
+                         f"{'·已断板' if _lc.get('broken') else ''}）</font>")
+        blocks.append(_div(f"{name_txt}{_boards_txt(r)} {gap_txt} → {tag}{_core_tag}"))
+        # ⛔ 理由去重（2026-09-15 用户「个股下的话术重复了」）：理由正文由下方个股段
+        #    `_ai_view_line` 唯一渲染（9:25 实判理由 / 旧口径的昨日理由）——计划块再整段渲染
+        #    即逐字重复。仅当**下方不会渲染**该票 AI 行时（无 record / 报价缺失段）才在此补出。
+        _rendered_below = bool(r.get("code")) and oc.get("decision_status") != "unavailable"
+        if not _rendered_below:
+            _reason = str(oc.get("pool_reason") or v.get("reason") or "").strip()
+            if _reason:
+                blocks.append(_div(
+                    f"　　<font color='grey'>{_reason}</font>" if _has_pool
+                    else _narr_render(_reason, prev=True)))
+
+    # 🐣 跟风闸：达标但没买（当日被"线核心"判断拦下）——必须显式点名，否则读者会问
+    #    「它竞价明明达标，为什么没买」。⛔ 理由正文仍由下方个股段 `_ai_view_line` 渲染
+    #    （禁两处重复），本块只给一眼名单。
+    _gated = [r for r in records
+              if _oc_of(r).get("follower_gate")
+              and str(_oc_of(r).get("ai_view") or "") != "participate"]
+    if _gated:
+        blocks.append(_div("<font color='grey'>🐣 竞价达标但没买（是跟风，不是这条线的核心）：</font>"))
+        for r in _gated[:5]:
+            oc = _oc_of(r)
+            gap = oc.get("gap_pct")
+            gtxt = f"竞价{gap:+.2f}%" if isinstance(gap, (int, float)) else "竞价数据未到"
+            _lc = oc.get("line_core") or {}
+            blocks.append(_div(
+                f"　　{_hl(str(r.get('name') or '') + '(' + str(r.get('code') or '') + ')', 'yellow')}"
+                f"{_boards_txt(r)} {gtxt}"
+                + (f"<font color='grey'>（最高板是 {_lc.get('name')}）</font>"
+                   if _lc.get("name") else "")))
 
     if others:
-        shown = "、".join(others[:8]) + ("等" if len(others) > 8 else "")
-        # 名单来自**上一交易日盘后**的选票 → 时点必须是「昨日」，⛔ 禁写「今天不买」。
-        blocks.append(_div(f"　　<font color='grey'>其余 {len(others)} 只昨日没有安排买：{shown}</font>"))
+        shown = "、".join([o for o in others if o][:8]) + ("等" if len(others) > 8 else "")
+        # ⏱️ 时点（2026-09-18/21）：9:25 口径 = 名单是**今日**判出来的；旧口径 = 由**昨日**盘后定。
+        _tail = (f"其余 {len(others)} 只今日没有买入安排：{shown}" if _has_pool
+                 else f"其余 {len(others)} 只昨日没有安排买：{shown}")
+        blocks.append(_div(f"　　<font color='grey'>{_tail}</font>"))
 
     st = _load_ai_stats()
     if st:
@@ -1534,6 +1640,8 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
         _ice_flag = " ｜ ⚠️市场很冷·候选仅供参考·买不买自决" if regime == "ice" else ""
         blocks.append(_div(f"**🔥 接力池 TOP{len(relay)}（核心候选）**{_relay_mode_note(mode)}{_ice_flag}"))
     weak_flagged = 0
+    # 同一市场结构提示只在接力池汇总一次：逐票重复会挤占信息密度，且无法增加决策信息。
+    mid_carry_weak = 0
     relay_narr: list[str] = []
     for it in relay:
         exp = it.get("expectation") or {}
@@ -1562,19 +1670,19 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
         _gene = _hist_gene_line(it)          # 2026-09-09 历史涨停基因常驻行（有档案才渲染）
         if _gene:
             blocks.append(_div(_gene))
-        # 中位承接（2026-08-17 修正：_mid_carry 改为健康度分级 充足/一般/不足——
-        # 旧 has_complete 布尔口径在涨停分散日恒 False 导致全部候选刷同一句。
-        # 仅真·梯队薄弱（C/D 级·health<6）才提示；B 级「一般」不提示（信息价值低）。）
+        # 中间层偏弱是全市场结构信息，不对每一只候选重复展示。
         if it.get("dim_panel", {}).get("_mid_carry") == "不足":
-            _lh = it.get("ladder_health") or 0
-            # 白话化（2026-09-14）：去「梯队」圈内造词
-            blocks.append(_div("　　⚠️ 中间位置没人跟（等中间的票跟上再考虑接力）"))
+            mid_carry_weak += 1
         # 反吃日报 verdict：板块被日报判弱时，加「仅龙头独立强势」注记（以日报判断为准）
         if dv and dv.get("tag"):
             blocks.append(_div(f"　　{dv.get('tag')} {dv.get('note')}"))
         # 点评收集到底部集中展示，不与个股混排（名称独占一行；点评按语义分段·2026-09-11）
         if it.get("narrative"):
             relay_narr.append(f"　· {_stock_hl(it, 'purple')}\n{_narr_render(it['narrative'])}")
+    if mid_carry_weak:
+        blocks.append(_div(
+            f"⚠️ 接力池 {mid_carry_weak} 只缺中间跟随票：等中间票跟上再考虑接力"
+        ))
     if weak_flagged:
         blocks.append(_div(
             f"📋 其中 {weak_flagged} 只已被日报判板块弱/观察级，按纪律仅做龙头、不追板块"
@@ -1814,7 +1922,7 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
 
     # 🤖 AI 判断视图（2026-09-10 用户「AI 思考合并进竞价验证」·盘后写入次日卡展示）
     _ai_view = _load_ai_view(str(summary.get("trade_date10") or ""))
-    # AI 决策原文（含 stance/direction/note/views）——卡头口径与「🤖 今日买入计划」段共用同一份
+    # AI 决策原文（含 stance/direction/note/views）——卡头口径与「🤖 今日买入/昨日预案」段共用同一份
     _ai_raw = _load_ai_view_raw(str(summary.get("trade_date10") or ""))
     total = summary.get("total_candidates", len(records))
     buys = summary.get("buy_signals", 0)
@@ -1827,14 +1935,14 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
 
     # ── 买入口径统一为 AI（2026-09-14 用户「我想统一为AI口径」→「全量以 AI 为唯一口径！」）──
     # AI 有判断 → 卡头/定调以 **AI 口径实际能成交的只数**（= 账本口径 = summary.buy_signals）为准，
-    #   并括注「计划 N 只」（AI 判参与）与「机械达标 M 只」给出全信息；
+    #   并括注「重点看 N 只」（AI 昨日预案）与「机械量价参考 M 只」给出全信息；
     # AI 无判断（视图缺失）或旧 summary（无 caliber 字段）→ 回退上一版行为（参与只数 / 机械口径）。
     # 采用「实买」而非「计划」的理由：计划数会把「AI 要买但竞价开太高没买到」渲染成有信号，
     # 与账本（0 成交）自相矛盾——口径统一后卡头必须与账本同源。
-    ai_plan = _ai_participate_count(_ai_raw)
+    ai_focus = _ai_focus_count(_ai_raw)
     caliber = str(summary.get("caliber") or "")
     ai_caliber = bool(AI_CALIBER_BUY_SIGNAL and (_ai_raw.get("views") or {}))
-    ai_filled = buys if (ai_caliber and caliber == "ai") else ai_plan
+    ai_filled = buys if (ai_caliber and caliber == "ai") else ai_focus
     mech_buys = summary.get("mech_buy_signals")
     if mech_buys is None:
         mech_buys = buys if caliber == "" else None   # 旧 summary 回退；新链路缺字段则如实省略
@@ -1857,10 +1965,10 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
     nav_txt = f"{nav}" if nav is not None else "—"
     if ai_caliber:
         _refs = []
-        if ai_filled != ai_plan:
-            _refs.append(f"计划 {ai_plan} 只")
+        if ai_filled != ai_focus:
+            _refs.append(f"重点看 {ai_focus} 只")
         if mech_buys is not None:
-            _refs.append(f"机械达标 {mech_buys} 只")
+            _refs.append(f"机械量价参考 {mech_buys} 只")
         buy_txt = (f"AI 买入信号<text_tag color='red'>{ai_filled}</text_tag>"
                    + (f"<font color='grey'>（{'·'.join(_refs)}）</font>" if _refs else ""))
         if ice_ban:
@@ -1883,10 +1991,10 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
         blocks.extend(dd_blocks)
         blocks.append(_hr())
 
-    # 🤖 AI 昨日买入计划（2026-09-11 立项「竞价卡要告诉我今天买什么 + 统计 AI 自己的收益」；
-    # 2026-09-18 时点口径修正：计划由上一交易日盘后定 → 标题与段内时点词统一为「昨日」）
-    # 数据源 = 上一交易日盘后 AI 自定的 ai_view_{今日}.json；AI 决策先于竞价 → 无非公开信息
-    blocks.extend(_ai_plan_block(_ai_raw, records))
+    # 🤖 今日买入（2026-09-11 立项「竞价卡要告诉我今天买什么 + 统计 AI 自己的收益」；
+    # 2026-09-21 时点改造：买哪只改在**今日 09:25 竞价落地后**由 `core/pool_call` 在池内判，
+    # 昨日盘后只出「预案」（基调/方向/bias）——「接力池＝提前缩范围，不是提前拍板」。
+    blocks.extend(_ai_plan_block(_ai_raw, records, pool_summary=summary.get("pool_call")))
 
     # 👑 核心弱转强（昨日连板核心·今日竞价·2026-08-14 用户定·情绪核心战法）
     core_blocks = _core_reversal_block()
@@ -1905,7 +2013,8 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
 
     buy_rows = [r for r in records if _is_mech_pass(r)]
     if buy_rows:
-        blocks.append(_div("**✅ 竞价达标·机械参考**" if ai_caliber else "**✅ 达标买入信号**"))
+        # AI 裁决启用后，机械达标只用于核对量价，不得被误读为当日买入安排。
+        blocks.append(_div("**📊 机械量价参考（仅作核对，不构成 AI 买入）**" if ai_caliber else "**✅ 达标买入信号**"))
         for r in buy_rows:
             oc = (r.get("performance") or {}).get("open_check") or {}
             gap = oc.get("gap_pct")
@@ -1922,7 +2031,7 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
             # 风险提示：2026-09-11 起不再内联在标题行（与下方点评的「⚠️ 风险」段重复且撑长标题行），
             # 统一由 _narr_render 在点评末行以 turquoise 标签呈现（语义顺序：走势→题材→股性→风险）。
             blocks.append(_div(
-                f"✅ {_stock_hl_boards(r, hl_color)} {sig} {_gap_tag(gap)}"
+                f"{'📊' if ai_caliber else '✅'} {_stock_hl_boards(r, hl_color)} {sig} {_gap_tag(gap)}"
                 + _verdict_tag(verdict)
                 + _sector_support_tag(r)
             ))

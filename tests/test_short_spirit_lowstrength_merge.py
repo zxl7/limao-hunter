@@ -59,6 +59,9 @@ def _env(tmp_path, monkeypatch, signals, now, last_push):
         "max_signals": 5, "weight": {}})
     monkeypatch.setattr(ss, "build_signals",
                         lambda d, n, c: (signals, "morning", len(signals), len(signals)))
+    # ⛔ 下跌支路（2026-09-21 新增）同样必须 mock —— 否则 main() 会去抓真实跌幅榜（触网），
+    #    且会把「低强度合并」用例的真实 pending 池搅乱。
+    monkeypatch.setattr(ss, "build_signals_down", lambda d, n, c: ([], "morning", 0, 0))
     _freeze(monkeypatch, now)
     pp.write_text(json.dumps({"date": TODAY, "codes": [], "last_push": last_push,
                               "pending": [], "pending_ts": ""}), encoding="utf-8")

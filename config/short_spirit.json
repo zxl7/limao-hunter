@@ -1,6 +1,7 @@
 {
   "note": "短线精灵·盘中异动信号阈值（2026-08-18 用户定·参数化便于按行情环境调整）。成交额=当日累计总成交额，amount_morning_yi/amount_afternoon_yi 是上午/下午两个档位的门槛（非独立时段额度）",
   "min_pct": 3.0,
+  "min_pct_down": 7.5,
   "min_market_cap_yi": 100,
   "amount_morning_yi": 5,
   "amount_afternoon_yi": 10,

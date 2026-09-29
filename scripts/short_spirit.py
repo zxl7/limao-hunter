@@ -14,6 +14,7 @@
   python3 scripts/short_spirit.py --dry-run    # 只出 JSON 不推
 """
 import argparse
+import fcntl
 import hashlib
 import json
 import pathlib
@@ -24,11 +25,20 @@ from datetime import datetime, timedelta
 from pathlib import Path  # 2026-09-04 --send 统一出口用
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+# 守护进程按脚本路径启动时，sys.path 只有 scripts/；补项目根目录以加载 common。
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from common.json_io import append_jsonl, load_json, load_jsonl, save_json
+
 CFG_PATH = ROOT / "config" / "short_spirit.json"
 OUT_PATH = ROOT / "cache" / "short_spirit_signals.json"
 PUSHED_PATH = ROOT / "cache" / "short_spirit_pushed.json"
+# 当日信号沉淀上限（2026-09-21）：实测一天信号量级为百条，300 足够覆盖且防止极端情形无限增长
+HISTORY_TODAY_MAX = 300
 SNAP = ROOT / "cache" / "pulse_snapshots" / "latest.json"
 ROUND_PATH = ROOT / "cache" / "short_spirit_round.json"    # 涨停观测轮快照（当下性硬门·2026-09-07）
+ROUND_DOWN_PATH = ROOT / "cache" / "short_spirit_round_down.json"  # 跌停观测轮快照（下跌当下性硬门·2026-09-21 平行独立）
 ENABLE_SPIRIT_TIMELINESS = True  # ⛔ 涨停当下性硬门（用户「时间顺序第一」·2026-09-07 盘中激活）：
 #   每轮记录「被观测为涨停」的票；上轮已观测=存量涨停(非当下新封)→剔除不推，
 #   仅本轮新观测涨停才推。拦截「激活晚/东财恢复把上午涨停下午补推」的旧闻。
@@ -36,6 +46,10 @@ ENABLE_SPIRIT_TIMELINESS = True  # ⛔ 涨停当下性硬门（用户「时间�
 EM_URL = ("https://push2.eastmoney.com/api/qt/clist/get?pn={pn}&pz=100&po=1&np=1&fltt=2&invt=2"
           "&fid=f3&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
           "&fields=f2,f3,f6,f12,f14,f18,f20,f21,f26,f62,f100")
+# 跌幅榜（2026-09-21 用户「盲区补强」）：po=0=按 f3 降序 → 跌得最狠的排前。其余同 EM_URL。
+EM_DOWN_URL = ("https://push2.eastmoney.com/api/qt/clist/get?pn={pn}&pz=100&po=0&np=1&fltt=2&invt=2"
+               "&fid=f3&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
+               "&fields=f2,f3,f6,f12,f14,f18,f20,f21,f26,f62,f100")
 
 # ── 短线精灵·市值门槛豁免（2026-09-07 用户 A+B 方案 · 默认关）──────────────
 # 背景：用户情绪核心战法（08-14）连板龙头多中小盘，原 min_market_cap_yi=100 把
@@ -65,9 +79,18 @@ ENABLE_SPIRIT_LEADER_FALLBACK = True  # C：东财抓取失败(下午常空池)�
 #      这边（展示）慢慢优化」。故本能力**只作为已实现、已测试的待用能力保留**，
 #      ⛔ 绝不默认改变盘中推送节奏。要启用须用户明确指示，且收盘后 + 次日盘中验证。
 ENABLE_SPIRIT_LOWSTRENGTH_MERGE = False
-LOW_STRENGTH_TYPES = ("快速拉升",)
+LOW_STRENGTH_TYPES = ("快速拉升", "快速下跌")  # 2026-09-21 加 快速下跌：单条下跌同单条拉升→合并等待，不单独刷屏
 EARLY_REALTIME_START_MIN = 9 * 60 + 25   # 09:25
 EARLY_REALTIME_END_MIN = 9 * 60 + 55     # 09:55
+
+
+# 东财两页请求是否完整。仅用于审计和前端展示，不因单页失败丢弃已取得的信号。
+FETCH_STATUS = {"up": {}, "down": {}}
+
+
+def _lock_path() -> Path:
+    """锁文件随 ROOT 动态计算，测试切换临时根目录时不会触及生产锁。"""
+    return ROOT / "cache" / "short_spirit.lock"
 
 
 def http_get(url, t=8):
@@ -81,7 +104,7 @@ def load_cfg():
         return json.loads(CFG_PATH.read_text(encoding="utf-8"))
     except Exception:
         return {"min_pct": 3.0, "min_market_cap_yi": 100, "amount_morning_yi": 5,
-                "amount_afternoon_yi": 10, "max_new_stock_days": 365, "top_per_sector": 2,
+                "amount_afternoon_yi": 10, "min_pct_down": 7.5, "max_new_stock_days": 365, "top_per_sector": 2,
                 "max_signals": 10, "batch_threshold": 10, "batch_timeout_min": 30,
                 "weight": {"pct": 0.4, "amount": 0.2, "resonance": 0.3, "flow": 0.1}}
 
@@ -118,12 +141,17 @@ def in_early_realtime_window(now=None) -> bool:
 def fetch_pool(cfg):
     """东财涨幅榜两页 → 原始信号池"""
     raw = []
+    meta = {"pages_requested": 2, "pages_ok": [], "failed_pages": [], "errors": []}
     for pn in (1, 2):
         try:
             d = http_get(EM_URL.format(pn=pn))
             raw.extend(((d.get("data") or {}).get("diff") or []))
-        except Exception:
-            break
+            meta["pages_ok"].append(pn)
+        except Exception as e:
+            meta["failed_pages"].append(pn)
+            meta["errors"].append(str(e)[:160])
+    meta["complete"] = len(meta["pages_ok"]) == meta["pages_requested"]
+    FETCH_STATUS["up"] = meta
     pool = []
     for it in raw:
         try:
@@ -137,6 +165,41 @@ def fetch_pool(cfg):
                 "float_cap_yi": round(float(it.get("f21") or 0) / 1e8, 1),
                 "list_date": str(it.get("f26") or "") or None,
                 "prev_close": float(it.get("f18") or 0),  # 2026-09-04 涨停封板校验（炸板票不误标涨停）
+                "main_flow_yi": round(float(it.get("f62") or 0) / 1e8, 2),
+                "industry": str(it.get("f100") or ""),
+            })
+        except Exception:
+            continue
+    return pool
+
+
+def fetch_pool_down(cfg):
+    """东财跌幅榜两页 → 原始下跌信号池（2026-09-21 盲区补强，与 fetch_pool 平行）。"""
+    raw = []
+    meta = {"pages_requested": 2, "pages_ok": [], "failed_pages": [], "errors": []}
+    for pn in (1, 2):
+        try:
+            d = http_get(EM_DOWN_URL.format(pn=pn))
+            raw.extend(((d.get("data") or {}).get("diff") or []))
+            meta["pages_ok"].append(pn)
+        except Exception as e:
+            meta["failed_pages"].append(pn)
+            meta["errors"].append(str(e)[:160])
+    meta["complete"] = len(meta["pages_ok"]) == meta["pages_requested"]
+    FETCH_STATUS["down"] = meta
+    pool = []
+    for it in raw:
+        try:
+            pool.append({
+                "code": str(it.get("f12") or ""),
+                "name": str(it.get("f14") or ""),
+                "pct": float(it.get("f3") or 0),
+                "price": float(it.get("f2") or 0),
+                "amount_yi": round(float(it.get("f6") or 0) / 1e8, 2),
+                "market_cap_yi": round(float(it.get("f20") or 0) / 1e8, 1),
+                "float_cap_yi": round(float(it.get("f21") or 0) / 1e8, 1),
+                "list_date": str(it.get("f26") or "") or None,
+                "prev_close": float(it.get("f18") or 0),
                 "main_flow_yi": round(float(it.get("f62") or 0) / 1e8, 2),
                 "industry": str(it.get("f100") or ""),
             })
@@ -261,19 +324,56 @@ def _timeliness_gate(signals, pool, now):
     每轮覆盖更新观测快照（炸板那轮不记录 → 回封算新一轮，可再推）。"""
     date = now.strftime("%Y-%m-%d")
     prev_zt = set()
-    try:
-        r = json.loads(ROUND_PATH.read_text(encoding="utf-8"))
-        if r.get("date") == date:
-            prev_zt = set(r.get("zt") or [])
-    except Exception:
-        pass
+    r = load_json(ROUND_PATH) or {}
+    if r.get("date") == date:
+        prev_zt = set(r.get("zt") or [])
     keep = [s for s in signals
             if not (s.get("type") == "涨停" and str(s.get("code") or "") in prev_zt)]
-    ROUND_PATH.write_text(json.dumps({
+    save_json(ROUND_PATH, {
         "date": date,
         "ts": now.strftime("%H:%M:%S"),
         "zt": sorted(_zt_observe_codes(pool, signals)),
-    }, ensure_ascii=False), encoding="utf-8")
+    })
+    return keep
+
+
+def _dt_observe_codes(pool, signals):
+    """本轮「被观测为跌停」的 code 集 = 信号标跌停 ∪ 池内跌幅达跌停线（20cm 按 -19.7）。"""
+    dt = set()
+    for s in signals:
+        if s.get("type") == "跌停":
+            dt.add(str(s.get("code") or ""))
+    for p in pool:
+        code = str(p.get("code") or "")
+        pct = float(p.get("pct") or 0)
+        if not code:
+            continue
+        if code[:3] in ("300", "301", "688"):
+            if pct <= -19.7:
+                dt.add(code)
+        elif pct <= -9.8:
+            dt.add(code)
+    return dt
+
+
+def _timeliness_gate_down(signals, pool, now):
+    """⛔ 跌停当下性硬门（2026-09-21 用户「盲区补强」·与 _timeliness_gate 平行、独立 round 快照）。
+
+    跌停信号必须是「本轮新观测到」——上轮已观测为跌停 = 存量跌停（可能上午就封死一直封到现在），
+    不是当下新封跌停 → 剔除不推，避免下午把上午跌停补推成「新异动」。
+    打开跌停/快速下跌天然是当下行为，不受限（同 接近涨停/快速拉升）。"""
+    date = now.strftime("%Y-%m-%d")
+    prev_dt = set()
+    r = load_json(ROUND_DOWN_PATH) or {}
+    if r.get("date") == date:
+        prev_dt = set(r.get("dt") or [])
+    keep = [s for s in signals
+            if not (s.get("type") == "跌停" and str(s.get("code") or "") in prev_dt)]
+    save_json(ROUND_DOWN_PATH, {
+        "date": date,
+        "ts": now.strftime("%H:%M:%S"),
+        "dt": sorted(_dt_observe_codes(pool, signals)),
+    })
     return keep
 
 
@@ -360,6 +460,32 @@ def signal_type(s):
     return t, tags
 
 
+def signal_type_down(s):
+    """下跌异动类型（2026-09-21 盲区补强，与 signal_type 平行）：
+    跌停（真封死）/ 打开跌停（曾触跌停炸开·撬板异动）/ 快速下跌（跌幅未达跌停线但急杀）。
+    ⛔ 科创板(688)按用户纪律剔除（无权限），上游过滤已挡，这里仍按 is20 算阈值兜底。"""
+    code3 = s["code"][:3]
+    is20 = code3 in ("300", "301") or code3 == "688"
+    thr_zt, thr_chg = (19.9, 15.0) if is20 else (9.9, 7.5)
+    pc = float(s.get("prev_close") or 0)
+    limit_down = round(pc * (0.8 if is20 else 0.9), 2) if pc > 0 else 0.0
+    if limit_down > 0 and s["price"] <= limit_down + 0.001:
+        t = "跌停"
+    elif s["pct"] <= -thr_zt:
+        # 跌幅达跌停线但现价未封死（曾触跌停炸开/回升中）=「打开跌停」撬板异动
+        t = "打开跌停"
+    elif s["pct"] <= -thr_chg:
+        t = "快速下跌"
+    else:
+        t = None  # 跌幅未达阈值 → 不视为下跌异动
+    tags = []
+    if s["main_flow_yi"] < 0:
+        tags.append("大单流出")
+    if s["amount_yi"] >= 10:
+        tags.append("放量")
+    return t, tags
+
+
 def strength(s, res, flow_ratio, cfg):
     """信号强度 = 涨幅归一 + 成交额归一 + 共振 + 主力净流入方向"""
     w = cfg["weight"]
@@ -429,11 +555,100 @@ def build_signals(d, now, cfg):
     return signals[: cfg["max_signals"]], session(), len(keep), len(pool)
 
 
+# 下跌支路对「部分 cfg」容错（2026-09-22）：缺键不得让整个 `main()` 崩 ——
+# 否则会连带**向上路径的推送**一起停摆（单测/半成品配置缺键即触发）。
+# 与 `load_cfg()` 的兜底默认同值。
+_CFG_FALLBACK = {"amount_morning_yi": 5, "amount_afternoon_yi": 10,
+                 "max_new_stock_days": 365, "min_market_cap_yi": 100,
+                 "top_per_sector": 2, "max_signals": 10}
+
+
+def build_signals_down(d, now, cfg):
+    """下跌支路主流程（2026-09-21 用户「盲区补强」）：与 build_signals 平行、独立 round 快照、
+    不改动已验证的向上路径。抓跌幅榜 → 过滤 → 龙头保留 → 共振 → 向下 signal_type。
+    ⛔ 下跌支路不做连板龙头市值豁免（下跌票非连板龙头）；科创板(688)剔除（无权限）。"""
+    pool = fetch_pool_down(cfg)
+    # ⚠️ 下跌支路不兜底 latest.json（下跌票无稳定连板龙头快照可复用），东财空池则本轮无下跌信号。
+    min_pct_down = float(cfg.get("min_pct_down", 7.5))
+    amt_thr = (cfg.get("amount_morning_yi", _CFG_FALLBACK["amount_morning_yi"])
+               if session() == "morning"
+               else cfg.get("amount_afternoon_yi", _CFG_FALLBACK["amount_afternoon_yi"]))
+    cutoff = now - timedelta(days=int(cfg.get("max_new_stock_days", _CFG_FALLBACK["max_new_stock_days"])))
+    cap_thr = (SPIRIT_LOWCAP_YI if ENABLE_SPIRIT_LOWCAP
+               else cfg.get("min_market_cap_yi", _CFG_FALLBACK["min_market_cap_yi"]))
+    keep = []
+    for s in pool:
+        if "ST" in s["name"] or "退" in s["name"] or "*" in s["name"]:
+            continue
+        if not s["code"] or not s["name"]:
+            continue
+        if s["code"][:3] == "688":  # ⛔ 科创板剔除
+            continue
+        if s["pct"] > -min_pct_down:  # 跌幅未达阈值 → 跳过（下跌只看大面）
+            continue
+        if s["market_cap_yi"] < cap_thr:
+            continue
+        if s["amount_yi"] < amt_thr:
+            continue
+        if s["list_date"] and len(s["list_date"]) == 8:
+            try:
+                ld = datetime.strptime(s["list_date"], "%Y%m%d")
+                if ld > cutoff:
+                    continue
+            except ValueError:
+                pass
+        keep.append(s)
+    # 板块龙头保留（同行业按跌幅取 top_per_sector，跌得最狠的优先）
+    sec_groups = {}
+    for s in keep:
+        sec_groups.setdefault(s["industry"] or "其他", []).append(s)
+    core = []
+    for sec, arr in sec_groups.items():
+        arr.sort(key=lambda x: x["pct"])  # 跌得最狠的排前
+        core.extend(arr[: cfg.get("top_per_sector", _CFG_FALLBACK["top_per_sector"])])
+    kws = hot_keywords(d)
+    t5codes = top5_codes(d)
+    t5names = [str(s.get("name") or "") for s in (d.get("top5") or [])[:5]]
+    code_t5 = {}
+    for s5 in (d.get("top5") or [])[:5]:
+        nm = str(s5.get("name") or "")
+        L = s5.get("leader") or {}
+        if L.get("code"):
+            code_t5[str(L["code"])[:6]] = nm
+        for f in (s5.get("followers") or []):
+            if f.get("code"):
+                code_t5[str(f["code"])[:6]] = nm
+    signals = []
+    for s in core:
+        res, hit = resonance(s, kws, t5codes, t5names)
+        typ, tags = signal_type_down(s)
+        if typ is None:
+            continue
+        sc = strength({**s, "pct": abs(s["pct"])}, res, 0, cfg)  # 强度按跌幅绝对值，与向上同量级可比
+        t5 = ""
+        kw_hit = [h for h in hit if h not in ("板块核心", "题材名")]
+        if not t5 and kw_hit:
+            t5 = kw_hit[0]
+        if not t5 and "题材名" in hit:
+            t5 = "题材共振"
+        reason = f"共振[{t5[:8]}]" if t5 else typ
+        signals.append({
+            "name": s["name"], "code": s["code"], "sector": s["industry"],
+            "market_cap_yi": s["market_cap_yi"], "amount_yi": s["amount_yi"],
+            "pct": s["pct"], "type": typ, "tags": tags,
+            "resonance": round(res * 100), "flow_yi": s["main_flow_yi"],
+            "strength": sc, "reason": reason,
+        })
+    signals.sort(key=lambda x: x["pct"])  # 跌得最狠在前（强度语义：跌幅越大越强）
+    # ⛔ 跌停当下性硬门（2026-09-07 涨停硬门的下跌平行版）：仅本轮新观测跌停才推
+    if ENABLE_SPIRIT_TIMELINESS:
+        signals = _timeliness_gate_down(signals, pool, now)
+    return (signals[: cfg.get("max_signals", _CFG_FALLBACK["max_signals"])],
+            session(), len(keep), len(pool))
+
+
 def load_pushed():
-    try:
-        return json.loads(PUSHED_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {"date": "", "codes": [], "last_push": "", "pending": [], "pending_ts": ""}
+    return load_json(PUSHED_PATH) or {"date": "", "codes": [], "last_push": "", "pending": [], "pending_ts": ""}
 
 
 def save_pushed(pushed, now, update_last=True):
@@ -442,13 +657,14 @@ def save_pushed(pushed, now, update_last=True):
     pushed["date"] = now.strftime("%Y-%m-%d")
     if update_last:
         pushed["last_push"] = now.strftime("%H:%M:%S")
-    PUSHED_PATH.write_text(json.dumps(pushed, ensure_ascii=False), encoding="utf-8")
+    save_json(PUSHED_PATH, pushed)
 
 
 # 个股名语义色（2026-08-25 用户定·与涨幅数字同色号）：涨停/快速拉升=red（与涨幅红一致）、
 # 接近涨停=purple（机会紫）。⛔ 类型区分靠分组标题（🔥/🚀/⚡），个股名不再承担类型色——
 # 曾用 orange 标快速拉升，飞书渲染偏橘红与涨幅正红不一致（用户抓包「红色颜色不对」）。
-TYPE_COLORS = {"涨停": "red", "接近涨停": "purple", "快速拉升": "red"}
+TYPE_COLORS = {"涨停": "red", "接近涨停": "purple", "快速拉升": "red", "炸板·回落": "red",
+               "跌停": "green", "打开跌停": "green", "快速下跌": "green"}
 
 
 def _pct_tag(pct: float) -> str:
@@ -488,8 +704,12 @@ def build_card(signals, sess, now):
                      f"<text_tag color='{tcol}'>{top['name']}({top['code']})</text_tag> "
                      f"{_pct_tag(top['pct'])}（{top['sector']}）｜⚡{top['reason']}｜{sess_cn}时段")
     for typ, title, col in (("涨停", "🔥 涨停信号", "red"),
+                            ("炸板·回落", "🔥 炸板回落", "red"),
                             ("接近涨停", "🚀 接近涨停", "purple"),
-                            ("快速拉升", "⚡ 快速拉升", "red")):
+                            ("快速拉升", "⚡ 快速拉升", "red"),
+                            ("跌停", "🔻 跌停", "green"),
+                            ("打开跌停", "🔓 打开跌停", "green"),
+                            ("快速下跌", "💥 快速下跌", "green")):
         arr = groups.get(typ, [])
         if not arr:
             continue
@@ -519,6 +739,85 @@ def _events_path() -> Path:
     return ROOT / "cache" / f"short_spirit_events_{datetime.now().strftime('%Y%m%d')}.jsonl"
 
 
+def _scan_history_today() -> dict:
+    """当日逐事件流 → 「今天出现过哪些信号」的身份表（code → 首次/末次时刻 + 出现轮次）。
+
+    ⛔ 为什么需要它：`OUT_PATH` 的 `signals` 是**本轮触发**的信号，文件每轮**覆盖写**；
+    而 `_timeliness_gate` 又会剔掉存量涨停 —— 于是「早盘触发过、现在已封住」的票
+    在本轮 signals 里**必然为空** → 前端一刷新列表就没了（用户 2026-09-21 抓包
+    「短线精灵…我这一刷新，列表那里就空了」）。
+    事件流（`short_spirit_events_<date>.jsonl`）是 append-only 的审计主源，
+    故从它回填「当日信号身份 + 首次时刻」—— **修复前的历史记录也能捞回来**。
+    """
+    out: dict = {}
+    p = _events_path()
+    if not p.exists():
+        return out
+    try:
+        for r in load_jsonl(p):
+            if r.get("kind") != "scan":
+                continue
+            at = str(r.get("at") or "")[-8:]  # 'HH:MM:SS'
+            for it in (r.get("items") or []):
+                code = str(it.get("code") or "")
+                if not code:
+                    continue
+                cur = out.get(code)
+                if cur is None:
+                    out[code] = {
+                        "code": code, "name": it.get("name"), "type": it.get("type"),
+                        "sector": it.get("sector"), "strength": it.get("strength"),
+                        "first_seen": at, "last_seen": at, "seen_count": 1,
+                    }
+                else:
+                    cur["last_seen"] = at
+                    cur["seen_count"] += 1
+    except Exception as e:  # ⛔ 盘中链路安全第一：解析失败不影响主流程
+        print(f"[short_spirit] scan 历史解析失败(已忽略): {e}")
+    return out
+
+
+def build_signals_today(prev: dict, signals: list, now) -> list:
+    """当日信号沉淀（2026-09-21 用户「做好沉淀」）。
+
+    三源合并（同 code 归并）：
+      ① 上一版 `signals_today` —— 保住已累积的完整字段；
+      ② 当日事件流的 scan 身份表 —— **回填今天更早轮次**（含修复前的记录）；
+      ③ 本轮 `signals` —— 带 pct / 资金 / 共振等完整字段，覆盖同 code 的旧值。
+    ⛔ `first_seen` 一经确定**不再改写**：沉淀的核心就是「第一次什么时候出现的」。
+    排序 = `first_seen` **倒序**（盯盘先看最近发生了什么）。
+    """
+    date_now = now.strftime("%Y-%m-%d")
+    acc: dict = {}
+    if prev.get("date") == date_now:
+        for it in (prev.get("signals_today") or []):
+            code = str(it.get("code") or "")
+            if code:
+                acc[code] = dict(it)
+    for code, it in _scan_history_today().items():
+        cur = acc.get(code)
+        if cur is None:
+            acc[code] = dict(it)
+        else:
+            if not cur.get("first_seen"):
+                cur["first_seen"] = it.get("first_seen")
+            cur["last_seen"] = it.get("last_seen") or cur.get("last_seen")
+            cur["seen_count"] = max(cur.get("seen_count") or 0, it.get("seen_count") or 0)
+    hhmmss = now.strftime("%H:%M:%S")
+    for s in signals:
+        code = str(s.get("code") or "")
+        if not code:
+            continue
+        cur = acc.get(code) or {}
+        merged = {**cur, **s}
+        merged["first_seen"] = cur.get("first_seen") or hhmmss
+        merged["last_seen"] = hhmmss
+        merged["seen_count"] = (cur.get("seen_count") or 0) + 1
+        acc[code] = merged
+    rows = sorted(acc.values(), key=lambda x: (x.get("first_seen") or ""), reverse=True)
+    return rows[:HISTORY_TODAY_MAX]
+
+
 def append_event(rec: dict) -> None:
     """⛔ 事件级审计（2026-09-17 A3）：把**逐事件**（含时间与身份）追加落盘，
     供「合并后不丢不重 / 送达状态」核验 —— 原实现只有覆盖写快照，无法还原每次推送。
@@ -528,10 +827,7 @@ def append_event(rec: dict) -> None:
     """
     try:
         r = {"at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), **rec}
-        p = _events_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        append_jsonl(_events_path(), r)
     except Exception as e:
         print(f"[short_spirit] 事件落盘降级（不影响主流程）: {e}", file=sys.stderr)
 
@@ -558,12 +854,7 @@ def _send_card(card_path: str, webhook: str | None = None, dry: bool = False) ->
     content = json.dumps(card, ensure_ascii=False)
     h = hashlib.sha1(content.encode()).hexdigest()
     dp = _send_dedup_path()
-    ded = {}
-    if dp.exists():
-        try:
-            ded = json.loads(dp.read_text(encoding="utf-8"))
-        except Exception:
-            ded = {}
+    ded = load_json(dp) or {}
     now = datetime.now()
     last = ded.get(h, 0)
     if now.timestamp() - float(last) < 45.0:
@@ -581,28 +872,19 @@ def _send_card(card_path: str, webhook: str | None = None, dry: bool = False) ->
         # ⛔ 有界修复（2026-09-17）：仅「实际发送成功」才提交内容去重；
         # 发送失败不提交，下一轮可重试（不把失败卡误判为已推）。
         ded[h] = now.timestamp()
-        dp.write_text(json.dumps(ded, ensure_ascii=False), encoding="utf-8")
+        save_json(dp, ded)
         print(f"[short_spirit] --send 推送成功 {cf.name} | {card.get('title', '')[:50]}")
         return 0
     print(f"[short_spirit] --send 推送失败 {cf.name} | {card.get('title', '')[:50]}")
     return 1
 
 
-def main():
+def _run(args):
+    """持锁后的实际执行入口；避免多个守护分支同时读改写同一批状态。"""
     global cfg
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--push", action="store_true", help="检测并推送")
-    ap.add_argument("--force", action="store_true",
-                    help="跳过 batch/timeout 双触发，直接推当前待推池（2026-08-24 早盘高频窗口用）")
-    ap.add_argument("--dry-run", action="store_true", help="只出 JSON 不推")
-    ap.add_argument("--send", metavar="CARD_JSON",
-                    help="统一出口模式（2026-09-04）：透传已拼好的短线精灵系列卡到异动群·内容级 45s 防抖")
-    ap.add_argument("--webhook", default=None, help="--send 时可选覆盖推送目标（默认异动群；测试用 feishu_webhook_test）")
-    args = ap.parse_args()
-
     cfg = load_cfg()
     if args.send:
-        sys.exit(_send_card(args.send, webhook=args.webhook, dry=args.dry_run))
+        return _send_card(args.send, webhook=args.webhook, dry=args.dry_run)
     if not in_trading():
         print("[short_spirit] 非交易时段，跳过")
         return
@@ -613,11 +895,27 @@ def main():
     d = json.loads(SNAP.read_text(encoding="utf-8"))
 
     signals, sess, kept, total = build_signals(d, now, cfg)
-    result = {"ts": now.strftime("%Y-%m-%d %H:%M:%S"), "session": sess,
+    # 下跌支路（2026-09-21 用户「盲区补强」）：平行独立链路，合并进同一信号流 →
+    # 沉淀/扫描事件/推送池/飞书卡分组都自然覆盖（build_card 按 type 动态分组）。
+    sig_down, _sess_d, kept_d, total_d = build_signals_down(d, now, cfg)
+    if sig_down:
+        signals = signals + sig_down
+        kept += kept_d
+        total += total_d
+    # 当日信号沉淀（2026-09-21 用户「做好沉淀」）：`signals` 只表达「本轮新触发」，
+    # 覆盖写后上一轮的触发会消失 → 前端一刷新列表就空。故另存一份当日累积。
+    _prev = load_json(OUT_PATH) or {}
+    signals_today = build_signals_today(_prev, signals, now)
+    result = {"ts": now.strftime("%Y-%m-%d %H:%M:%S"),
+              "date": now.strftime("%Y-%m-%d"),
+              "session": sess,
               "thresholds": {k: cfg[k] for k in ("min_pct", "min_market_cap_yi", "amount_morning_yi", "amount_afternoon_yi")},
-              "pool_total": total, "after_filter": kept, "signals": signals}
-    OUT_PATH.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[short_spirit] 池{total}→过滤{kept}→信号{len(signals)} | 时段={sess}")
+              "source": {"up": dict(FETCH_STATUS["up"]), "down": dict(FETCH_STATUS["down"])},
+              "min_pct_down": float(cfg.get("min_pct_down", 7.5)),
+              "pool_total": total, "after_filter": kept,
+              "signals": signals, "signals_today": signals_today}
+    save_json(OUT_PATH, result)
+    print(f"[short_spirit] 池{total}→过滤{kept}→本轮信号{len(signals)}｜当日沉淀{len(signals_today)} | 时段={sess}")
     # ⛔ A3 事件级审计：本轮「看到了什么」（逐事件含类型/行业/强度，时间=本轮 at）
     append_event({"kind": "scan", "session": sess, "pool_total": total, "after_filter": kept,
                   "count": len(signals),
@@ -687,7 +985,7 @@ def main():
     card_signals = sorted(pending, key=lambda x: -x["strength"])[: cfg["max_signals"]]
     card = build_card(card_signals, sess, now)
     cf = ROOT / "cache" / "short_spirit_card.json"
-    cf.write_text(json.dumps(card, ensure_ascii=False), encoding="utf-8")
+    save_json(cf, card)
     # ⛔ 有界修复（2026-09-17）：入池后、任何发送尝试之前可靠落盘 pending（update_last=False）。
     # 下方 push_card 失败（rc!=0）时：pending 已持久化、codes/last_push 未登记 → 下一轮可重试；
     # 成功时下方 save_pushed(pushed, now)（update_last=True）再正式结算。不可改 batch/force/选股/过滤/调度业务。
@@ -707,5 +1005,31 @@ def main():
                       "trigger": "count" if by_count else ("timeout" if by_timeout else "force")})
 
 
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--push", action="store_true", help="检测并推送")
+    ap.add_argument("--force", action="store_true",
+                    help="跳过 batch/timeout 双触发，直接推当前待推池（2026-08-24 早盘高频窗口用）")
+    ap.add_argument("--dry-run", action="store_true", help="只出 JSON 不推")
+    ap.add_argument("--send", metavar="CARD_JSON",
+                    help="统一出口模式（2026-09-04）：透传已拼好的短线精灵系列卡到异动群·内容级 45s 防抖")
+    ap.add_argument("--webhook", default=None, help="--send 时可选覆盖推送目标（默认异动群；测试用 feishu_webhook_test）")
+    args = ap.parse_args()
+
+    # live_signal 的多条分支都会唤起精灵；整段流程持同一把锁，才不会重复发送或覆盖 pending。
+    lock_path = _lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("[short_spirit] 已有实例执行中，跳过")
+            return 0
+        try:
+            return _run(args)
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

@@ -26,6 +26,10 @@ from pathlib import Path
 
 ROOT = Path("/Users/zxl/WorkBuddy/狸猫猎手")
 CACHE = ROOT / "cache"
+# 白话词表单一源（同目录 card_copy_rules.py）；本脚本可能被以任意 cwd 调起
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+import card_copy_rules as _ccr  # noqa: E402
 REPORT_DIR = CACHE
 HISTORY_FILE = CACHE / "backtest_history.jsonl"
 SUGGEST_FILE = CACHE / "learning_suggestions.json"
@@ -40,7 +44,9 @@ BLUE = "blue"
 
 
 def _div(t: str) -> dict:
-    return {"tag": "div", "text": {"tag": "lark_md", "content": t}}
+    # 2026-09-18：渲染出口统一白话化（词表单一源 = card_copy_rules.sanitize）——
+    # 建议文案可能来自已落盘的旧记录，否则 09-21 起阻断期会把整卡拦死。
+    return {"tag": "div", "text": {"tag": "lark_md", "content": _ccr.sanitize(t)}}
 
 
 def _hr() -> dict:
@@ -173,7 +179,7 @@ def render_daily(report: dict, suggestions: list[dict]) -> dict:
                         f" ｜ 实际 {r['actual_gap_pct']:+.2f}% {_tag('偏离', GREEN)}"
                     ))
         else:
-            el.append(_div(f"⛔ {b.get('reason', '无评估样本')}"))
+            el.append(_div(f"⛔ {b.get('reason', '无评估数据')}"))
     else:
         el.append(_div(f"⛔ {b.get('reason', '无竞价数据')}"))
     el.append(_hr())

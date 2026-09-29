@@ -36,9 +36,15 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+# core 既可能由财富密码 CLI 导入，也可能由项目根脚本导入；日历在项目根 common/。
+HUNTER_ROOT = Path(__file__).resolve().parents[2]
+if str(HUNTER_ROOT) not in sys.path:
+    sys.path.insert(0, str(HUNTER_ROOT))
+from common.trading_calendar import next_a_share_trading_day
 
 # ── 开关（用户拍板「全量以 AI 为唯一口径」）────────────────────────────────
 # True  = 账户账本 / 持仓 / 战绩统计口径 = AI 决策（本模块接管）
@@ -141,14 +147,8 @@ def decisions_path() -> Path:
 
 
 def next_trade_day(date10: str) -> str:
-    """次一交易日（跳周末）——与 `pipelines/pipeline_verify._next_day` 同算法同口径。"""
-    try:
-        d = datetime.strptime(str(date10), "%Y-%m-%d") + timedelta(days=1)
-        while d.weekday() >= 5:
-            d += timedelta(days=1)
-        return d.strftime("%Y-%m-%d")
-    except Exception:
-        return str(date10)
+    """次一A股交易日；与 `pipeline_verify._next_day` 共享法定休市日历。"""
+    return next_a_share_trading_day(date10) or str(date10)
 
 
 def _read_jsonl(p: Path) -> list[dict]:
@@ -233,69 +233,44 @@ def decide(decision: dict | None, gap_pct: float | None,
            auction_amount_yi: float | None = None,
            need_yi: float | None = None,
            *, valve_hit: bool = False) -> tuple[bool, str, dict]:
-    """按 AI 口径裁决单票能否成交（2026-09-14 纪律 ＋ 2026-09-17「A 计划」区间门）。
+    """按 AI 决策结算单票；机械信号和逃生阀均不能放行未参与的标的。
 
-    入参：decision = AI 决策行（None=该票未被 AI 判断）；gap_pct = 当日竞价涨幅(%)；
-         expected_range = 盘后预期区间 [lo, hi]（缺省 None → 回退旧口径·只按 5% 硬线）。
-         valve_hit = 该票已被 `pick_hibernate_valve` 选中为**逃生阀唯一标的**
-         （2026-09-18 用户拍板 A）——AI 判 watch 时仍放行，其余口径不变。
-    返回：(can_enter, note, meta)
-
-    裁决链（方案 A·**卡面 = 账本**）：
-      AI 判 participate ∧ 有竞价数据
-        ∧ 竞价 ≤ USER_ENTRY_MAX_GAP_PCT(5%) 硬线
-        ∧ 竞价落在预期区间（`gap_zone`·含 EXPECTED_ZONE_TOL 容差）
-      → 成交
-      ＋ hibernate 逃生阀：`valve_hit=True` 时，把「AI 判观察」这一条放开（其余条件照旧收紧）。
-    ⛔ AI 自定 entry_max_gap 仅留痕（meta.ai_declared_limit），不参与裁决。
-    ⛔ 判据**唯一源 = `gap_zone`**（卡面 `build_cards._ai_dyn_verdict` 同调此函数·禁另写一套）。
+    ``valve_hit`` 保留调用签名兼容，但不再拥有任何放行权限。只有 AI 的
+    ``view=participate``，并同时通过竞价价格、预期区间和量能校验，才可成交。
     """
     base = {"ai_gap_limit": USER_ENTRY_MAX_GAP_PCT,
             "ai_declared_limit": ai_declared_limit(decision)}
     if decision is None:
-        # ⛔ 逃生阀**不放行**无决策票：阀门只从 AI 已判断过的候选里挑（禁绕过 AI 视图）。
         return False, "AI 昨日未对这只票下判断 → 不买", {"ai_view": None, **base}
-    # ⚠️ 缺失 view 视为 participate（历史兼容·与 `ai_ledger.cmd_settle` 的 todo 筛选
-    #    `r.get("view") or "participate"` 同口径）——09-11 前决策行无 view 字段，
-    #    若此处严格判空 → 与结算层口径打架（同票「结算层算参与、裁决层判不买」）。
-    view = str(decision.get("view") or "participate")
-    via: str | None = None
-    if view != "participate":
-        if not valve_hit:
-            return False, f"AI 判「{view_label(view)}」→ 不买", {"ai_view": view or None, **base}
-        # hibernate 逃生阀（2026-09-18 用户拍板 A）：AI 判观察，但该票是当日**唯一**
-        # 满足「红开≤5% ∧ 带量 ∧ 方向内位置最高」的票 → 允许小仓试错。
-        via = "hibernate_valve"
+
+    raw_view = str(decision.get("view") or "").strip()
+    if not raw_view:
+        # 新版盘后预案以 bias 表达意图；只有 focus 才是 AI 明确参与。
+        raw_view = {"focus": "participate", "normal": "watch", "avoid": "skip"}.get(
+            str(decision.get("bias") or "").strip(), "missing")
+    if raw_view != "participate":
+        return False, f"AI 判「{view_label(raw_view)}」→ 不买", {"ai_view": raw_view or None, **base}
     if gap_pct is None:
         return False, "无竞价数据 → 不知道能不能买到，不买（诚实跳过）", {
-            "ai_view": view or "participate", **base}
-    _g = float(gap_pct)
-    _zone = gap_zone(_g, expected_range)
-    base["zone"] = _zone
-    if via:
-        base["via"] = via
-    if _zone == "above":          # 高开太多（绝对线 >5%·见 gap_zone docstring）
-        return False, (f"竞价高开 {_g:+.2f}% 超过 {USER_ENTRY_MAX_GAP_PCT:g}% 上限（高开太多）"
-                       " → 不追（纪律：高开超 5% 的不买）"), {
-            "ai_view": view or "participate", **base}
-    if _zone == "below":          # 不及预期（低于预期区间下沿）
-        return False, (f"竞价 {_g:+.2f}% 低于预期区间 → 放弃（不及预期·不接）"), {
-            "ai_view": view or "participate", **base}
-    # ③ 无量高开（2026-09-17 用户「带量高开＝转强」）→ 观察：红开但量能 < 目标×VOLUME_WEAK_RATIO。
-    #    ⛔ 只拦「红开无量」（诱多典型）；绿开/平开本就不买；无目标/无数据 → 不判（宽容）。
-    if (auction_amount_yi is not None and need_yi and float(need_yi) > 0 and _g > 0
+            "ai_view": raw_view, **base}
+
+    gap = float(gap_pct)
+    zone = gap_zone(gap, expected_range)
+    base["zone"] = zone
+    if zone == "above":
+        return False, (f"竞价高开 {gap:+.2f}% 超过 {USER_ENTRY_MAX_GAP_PCT:g}% 上限（高开太多）"
+                       " → 不追（纪律：高开超 5% 的不买）"), {"ai_view": raw_view, **base}
+    if zone == "below":
+        return False, (f"竞价 {gap:+.2f}% 低于预期区间 → 放弃（不及预期·不接）"), {
+            "ai_view": raw_view, **base}
+    if (auction_amount_yi is not None and need_yi and float(need_yi) > 0 and gap > 0
             and float(auction_amount_yi) < float(need_yi) * VOLUME_WEAK_RATIO):
         base["volume_weak"] = True
         return False, (f"竞价量能 {float(auction_amount_yi):.2f}亿 < 目标 {float(need_yi):.2f}亿"
                        f"×{VOLUME_WEAK_RATIO:g}（无量的高开）→ 观察·不追"), {
-            "ai_view": view or "participate", **base}
-    if via == "hibernate_valve":
-        return True, (f"市场本来判断为空仓，但竞价 {_g:+.2f}% 带量走强、是方向里位置最高的那只"
-                      " → 只买一小笔试错"), {
-            "ai_view": view, **base}
-    return True, (f"AI 要买·竞价 {_g:+.2f}% 未超 {USER_ENTRY_MAX_GAP_PCT:g}% 上限、未低于预期"
-                  " → 买入"), {
-        "ai_view": view or "participate", **base}
+            "ai_view": raw_view, **base}
+    return True, (f"AI 要买·竞价 {gap:+.2f}% 未超 {USER_ENTRY_MAX_GAP_PCT:g}% 上限、未低于预期"
+                  " → 买入"), {"ai_view": raw_view, **base}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -428,4 +403,3 @@ def pick_hibernate_valve(candidates: Any, quotes: dict[str, dict] | None, *,
             "position": HIBERNATE_VALVE_POSITION,
             "reason": _valve_reason(top["cand"], top["gap_pct"], top["boards"]),
             "candidates": [x["code"] for x in leaders]}
-

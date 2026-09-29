@@ -81,6 +81,20 @@ def _load_narratives(path: str | None):
     return narr, g
 
 
+def _archive_decision(recommendation_date: str) -> None:
+    """冻结候选与执行证据；归档失败只告警，不能反向阻断已完成的选股/竞价结算。"""
+    if not recommendation_date:
+        return
+    try:
+        archive = ROOT.parent / "scripts" / "archive_decision.py"
+        result = subprocess.run([sys.executable, str(archive), "--date", recommendation_date],
+                                capture_output=True, text=True, timeout=60)
+        if result.returncode:
+            print(f"[ARCHIVE] 冻结证据失败: {result.stderr.strip() or result.stdout.strip()}")
+    except Exception as exc:
+        print(f"[ARCHIVE] 冻结证据跳过: {exc}")
+
+
 def _load_ai_env(path: str | None):
     """
     读取 agent 写好的 AI 研判 JSON（喂进 spec 自有维度，不另立打分）：
@@ -147,6 +161,7 @@ def cmd_eod(args: argparse.Namespace) -> int:
             print(f"[EOD] 推送盘后候选卡: {'✓' if ok else '✗'} {out}")
         else:
             print("[EOD] 无候选（涨停池可能为空/非交易日），跳过推送")
+    _archive_decision(str(payload.get("date") or ""))
     return 0
 
 
@@ -224,7 +239,17 @@ def cmd_verify(args: argparse.Namespace) -> int:
     elif args.fetch:
         # 真实竞价接入：抓最新候选的 09:25 实时报价
         cand = _load_latest_candidates()
-        codes = [str(c.get("code")) for c in (cand.get("relay", []) + cand.get("watch", [])) if c.get("code")]
+        pool_codes = [str(c.get("code")) for c in (cand.get("relay", []) + cand.get("watch", [])) if c.get("code")]
+        # 同步冻结完整昨涨停池的 09:25 报价，用于判断红开比例、连板红开比例和量能。
+        # ⛔ 不可只抓接力/观察池：筛选样本天然更强，会虚高市场反馈。
+        full_zt_codes: list[str] = []
+        try:
+            p = ROOT.parent / "cache" / "zt_history" / f"zt_{cand.get('date')}.json"
+            rows = json.loads(p.read_text(encoding="utf-8")).get("zt_list") or []
+            full_zt_codes = [str(r.get("code") or "").strip() for r in rows if isinstance(r, dict)]
+        except Exception as _e:
+            print(f"[VERIFY] 昨日完整涨停池读取失败（{_e}）——不放宽空仓名额")
+        codes = list(dict.fromkeys(pool_codes + [c for c in full_zt_codes if len(c) == 6]))
         quotes = input_auction.fetch_realtime_auction(codes)
         # 板块竞价承接力（2026-08-24 用户「孤军高开·板块无承接被砸」思想）：
         # 抓同板块成员（昨日涨停池同 sector，eod 已回填 sector_mates）竞价 →
@@ -262,6 +287,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
             quotes_path=Path(args.quotes) if args.quotes else None,
         )
     print(json.dumps(res["summary"], ensure_ascii=False, indent=2))
+    # 实盘竞价已落地后重新归档同一候选日，补齐竞价与 9:25 池内裁决冻结件。
+    if not args.synthesize:
+        _archive_decision(str(res["summary"].get("date10") or ""))
     # 持仓自动同步（2026-08-17）：真实买入运行写 holdings.json；合成/测试（--synthesize）不写
     if not args.synthesize:
         td = res["summary"].get("trade_date10") or datetime.now(BJ_TZ).strftime("%Y-%m-%d")

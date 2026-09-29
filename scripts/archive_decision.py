@@ -39,6 +39,7 @@ import shutil
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from common.trading_calendar import next_a_share_trading_day
 
 ROOT = Path(__file__).resolve().parent.parent
 WC = ROOT / "wealth_code"
@@ -91,6 +92,7 @@ def _cand_summary(cand: dict) -> dict:
 def collect(date10: str) -> tuple[list[dict], dict, list[str]]:
     """→ (来源清单, 摘要, 缺口列表)"""
     d8 = _d8(date10)
+    trade_date = next_a_share_trading_day(date10)
     srcs: list[dict] = []
     gaps: list[str] = []
     summary: dict = {}
@@ -106,16 +108,25 @@ def collect(date10: str) -> tuple[list[dict], dict, list[str]]:
     else:
         gaps.append(f"缺 candidates-{date10}.json（无法归档因子快照）")
 
-    # ② 竞价报价
-    q_p = WC_CACHE / f"auction_quotes-{date10}.json"
-    if q_p.exists():
+    # ② 次日竞价报价：候选日=T，实际执行日=T+1；不可再按同日错误归档。
+    q_p = WC_CACHE / f"auction_quotes-{trade_date}.json" if trade_date else None
+    if q_p and q_p.exists():
         srcs.append({"role": "auction_quotes", "src": str(q_p.relative_to(ROOT)),
                      "dst": "auction_quotes.json", "bytes": q_p.stat().st_size,
-                     "sha256": _sha256(q_p)})
+                     "sha256": _sha256(q_p), "trade_date": trade_date})
     else:
-        gaps.append(f"缺 auction_quotes-{date10}.json（竞价数据未落地）")
+        gaps.append(f"缺 auction_quotes-{trade_date or '未知'}.json（竞价数据未落地）")
 
-    # ③ AI 参与判断（按 decision_date 归属到当日决策）
+    # ③ 9:25 池内裁决也属于执行日，和竞价快照同一时点冻结。
+    pool_p = WC_CACHE / f"pool_call-{trade_date}.json" if trade_date else None
+    if pool_p and pool_p.exists():
+        srcs.append({"role": "pool_call", "src": str(pool_p.relative_to(ROOT)),
+                     "dst": "pool_call.json", "bytes": pool_p.stat().st_size,
+                     "sha256": _sha256(pool_p), "trade_date": trade_date})
+    else:
+        gaps.append(f"缺 pool_call-{trade_date or '未知'}.json（9:25池内裁决未冻结）")
+
+    # ④ AI 参与判断（按 decision_date 归属到候选日）
     ai_p, ai_match = _find_ai_view(date10)
     if ai_p is not None:
         try:
@@ -130,7 +141,7 @@ def collect(date10: str) -> tuple[list[dict], dict, list[str]]:
     else:
         gaps.append(f"缺 AI 参与判断（decision_date={date10} 的 ai_view_*.json 不存在）")
 
-    # ④ 涨停池（数据目录优先，回退归档目录）
+    # ⑤ 涨停池（数据目录优先，回退归档目录）
     for role, p in (("zt_pool_data", WC / "data" / "zt_history" / f"zt_{date10}.json"),
                     ("zt_pool_cache", ROOT_CACHE / "zt_history" / f"zt_{date10}.json")):
         if p.exists():
@@ -140,7 +151,7 @@ def collect(date10: str) -> tuple[list[dict], dict, list[str]]:
     else:
         gaps.append(f"缺 zt_{date10}.json（两个 zt_history 目录均无）")
 
-    # ⑤ 当日卡片（盘前/潜伏/竞价验证/其他 card_*）——全留，但标注调试卡
+    # ⑥ 当日卡片（盘前/潜伏/竞价验证/其他 card_*）——全留，但标注调试卡
     cards = []
     for pat in (f"panqian_card_{d8}.json", f"ambush_card_{d8}.json", f"card_{d8}_*.json"):
         for p in sorted(WC_CACHE.glob(pat)):
@@ -157,6 +168,7 @@ def collect(date10: str) -> tuple[list[dict], dict, list[str]]:
         gaps.append(f"当日无卡片文件（panqian/ambush/card_{d8}_*）")
 
     summary["sources"] = len(srcs)
+    summary["trade_date"] = trade_date
     return srcs, summary, [g for g in gaps if g]
 
 

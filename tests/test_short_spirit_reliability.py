@@ -132,6 +132,10 @@ def _setup_main_env(tmp_path, monkeypatch, signals):
     monkeypatch.setattr(ss, "load_cfg", lambda: _fake_cfg())
     monkeypatch.setattr(ss, "build_signals",
                        lambda d, now, cfg: (signals, "morning", len(signals), len(signals)))
+    # ⛔ 下跌支路（2026-09-21 新增）也必须 mock —— 否则 main() 会去抓**真实跌幅榜**（触网）。
+    #    本文件只用 main() 的推送簿记，与向下的选股无关。
+    monkeypatch.setattr(ss, "build_signals_down",
+                        lambda d, now, cfg: ([], "morning", 0, 0))
     return tmp_path / "pushed.json"
 
 

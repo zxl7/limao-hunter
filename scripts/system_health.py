@@ -14,6 +14,15 @@
   5. 质量门: 调用 scripts/quality_gate.py（配置/任务/契约/单测四项，自动选可用解释器）
      —— 2026-09-02 补：此前质量门维度缺失，pytest/yaml 缺失类问题无法在体检中暴露。
      加 --skip-gate 可跳过（例行快速体检用）。
+
+⚠️ 政策边界（2026-09-23 标注·不改行为）:
+  本脚本第 1 维直接读 `~/.workbuddy/workbuddy.db` 的 automations 表。项目规则要求
+  「自动化只通过平台管理接口查询，禁止直接访问其数据库」→ 因此**agent 不得把它当默认
+  体检入口**（改用平台自动化接口 + 项目日志 + 文件业务日期分项核验，见
+  `config/skill_contract.md`）。本脚本改由 `gen_optimization_plan.py`（周五优化方案卡）
+  在任务内调用，属既有设计，未在本轮变更。
+  另注：第 1 维的 runs[].last 已被 `guard_eod_chain.py` 判定为**陈旧不可信**，判断任务
+  是否真跑过应以产出物落盘为准，不要引用该字段下结论。
 """
 import json
 import re

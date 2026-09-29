@@ -128,24 +128,23 @@ def test_missing_quote_or_expectation_is_safe():
 
 
 # ── ⑥ decide 的阀门放行（口径不变：≤5% ∧ 不破预期下沿 ∧ 带量）──────────────
-def test_decide_valve_hit_allows_watch():
+def test_decide_valve_hit_cannot_override_ai_watch():
     d = {"view": "watch", "entry_max_gap": 3.0}
     ok, note, meta = ac.decide(d, 2.0, valve_hit=True)
-    assert ok is True and meta.get("via") == "hibernate_valve"
-    assert "试错" in note
-    # 不放行 → 逐字回到旧行为
-    ok2, note2, meta2 = ac.decide(d, 2.0)
-    assert ok2 is False and "不买" in note2
-    # 阀门也受硬线/区间/量能约束
-    assert ac.decide(d, 6.0, valve_hit=True)[0] is False            # 超 5% 硬线
-    assert ac.decide(d, -8.0, expected_range=[0.0, 3.0], valve_hit=True)[0] is False  # 破下沿
-    assert ac.decide(d, 2.0, auction_amount_yi=0.1, need_yi=2.0, valve_hit=True)[0] is False  # 无量
-    assert ac.decide(None, 2.0, valve_hit=True)[0] is False         # 无 AI 决策 → 阀门不越权
+    assert ok is False and meta.get("ai_view") == "watch"
+    assert "不买" in note
+    assert ac.decide(None, 2.0, valve_hit=True)[0] is False
 
 
 # ── ⑦ verify 集成：hibernate 日阀门落到 open_check ──────────────────────────
-def test_verify_integration(monkeypatch):
+def test_verify_integration(monkeypatch, tmp_path):
     from pipelines import pipeline_verify as pv
+    # ⛔ 2026-09-21 隔离：① pv.CACHE_DIR → tmp（run_verify 会冻结 9:25 池内裁决结论，
+    #    不隔离会写穿真实 wealth_code/cache，被 save_pool_call 守卫拦下）；
+    #    ② AI 决策显式注入，不依赖环境里真实存在的 ai_decisions.jsonl（原实现读到了
+    #    生产 09-18 的 10 条决策 → 本用例随环境漂移）。
+    monkeypatch.setattr(pv, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(ac, "load_ai_decisions", lambda _d: None)
     cands = {
         "date": "2026-09-17", "environment": {"regime": "ice"},
         "relay": [], "watch": [_cand("600000", "示例A", boards=3, theme="AI算力")],
@@ -158,7 +157,8 @@ def test_verify_integration(monkeypatch):
     )
     rec = res["payload"]["records"][0]
     oc = rec["performance"]["open_check"]
-    # 未开阀（无 AI 决策 → caliber=mechanical_fallback）
+    # 无 AI 决策时，机械信号只能展示，账户不得交易。
+    assert res["summary"]["caliber"] == "ai_missing_no_trade"
     assert oc["hibernate_valve"] is False
 
     monkeypatch.setattr(ac, "load_ai_decisions", lambda _d: {"600000": {"view": "watch"}})
@@ -170,9 +170,8 @@ def test_verify_integration(monkeypatch):
         out_nav=False, persist=False,
     )
     oc2 = res2["payload"]["records"][0]["performance"]["open_check"]
-    assert oc2["can_enter"] is True and oc2["hibernate_valve"] is True
-    assert res2["summary"]["valve_used"] is True if "valve_used" in res2["summary"] else True
-    assert res2["summary"]["hibernate_valve"]["code"] == "600000"
+    assert oc2["can_enter"] is False and oc2["hibernate_valve"] is False
+    assert res2["summary"]["hibernate_valve"] is None
     # 关阀后同一数据 → 不成交（回归到「AI 判观察 → 不买」）
     monkeypatch.setattr(ac, "HIBERNATE_VALVE_ENABLED", False)
     res3 = pv.run_verify(
@@ -203,4 +202,4 @@ def test_card_annotation(monkeypatch):
     # 非阀票不受影响（逐字回到旧行为）
     rec2 = {"code": "600001", "name": "普通观察", "performance": {"open_check": {"gap_pct": 1.0}}}
     line2 = bc._ai_view_line(rec2, {"600001": {"view": "watch", "reason": ""}})
-    assert "破例" not in line2 and "观察" in line2
+    assert "破例" not in line2 and "一般" in line2

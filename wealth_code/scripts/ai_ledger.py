@@ -21,6 +21,11 @@
   入场规则由 AI 决策自带（entry_max_gap，默认 ≤3% 才参与、超则放弃）；竞价价缺失→跳过（诚实）
   ⛔ 0 成交日**不写账本行**（与账户账本同语义：账本只记有实际买入的交易日）
 
+🛡️ 交易闸门留痕（2026-09-23·宪法【🛡️ 交易闸门三条】）：picks 可选带
+  `target_pct` / `stop_pct` / `hold_horizon` → **原样**透传到决策台账与 ai_view；
+  赔率 < 2 或周期标签非法 → 只追加 `payoff_warning` / `hold_horizon_warning`。
+  ⛔ 纯留痕：缺失即 None、不校验、不抛错、不阻断落盘，⛔ 不改 bias/view、不参与裁决。
+
 用法：
   python3 wealth_code/scripts/ai_ledger.py record --decision-date 2026-09-10 --file /tmp/ai_picks.json
   python3 wealth_code/scripts/ai_ledger.py settle --trade-date 2026-09-11
@@ -75,6 +80,57 @@ except Exception:                                     # 独立运行兜底（sys
 USER_ENTRY_MAX_GAP_PCT = getattr(_ai_caliber, "USER_ENTRY_MAX_GAP_PCT", 5.0)
 MAX_POSITION_PER_STOCK = getattr(_ai_caliber, "MAX_POSITION_PER_STOCK", 0.5)
 
+# ── 🎯 9:25 池内裁决（2026-09-21 用户「接力池＝提前缩范围，不是提前拍板」）────────────
+# 盘后（T-1）只写**预案**（bias：focus/normal/avoid），**不再定"买哪只"**；
+# 次日 09:25 竞价落地后由 `core/pool_call` 在池内判命中 → 结论冻结在
+# `wealth_code/cache/pool_call-<执行日>.json`。本轨结算必须读**同一份冻结结论**，
+# 否则会出现「卡上买 A、账户账本买 B、AI 轨买 C」三方打架。
+def _pool_call_views(trade_date: str) -> dict:
+    """读当日已冻结的 9:25 池内裁决结论 → {code: {view, reason, ...}}。缺失 → {}。
+
+    ⚠️ 路径**跟随模块全局 `CACHE` 动态求值**（⛔ 不用导入期快照的常量）——与
+    `build_cards._load_ai_stats` 同款模式：测试 monkeypatch `al.CACHE` 才生效，
+    否则单测会去读真实生产目录（且掩盖路径接缝）。
+    """
+    try:
+        p = CACHE / f"pool_call-{trade_date}.json"
+        d = json.loads(p.read_text(encoding="utf-8"))
+        v = d.get("views")
+        return v if isinstance(v, dict) else {}
+    except Exception:
+        return {}
+
+
+def _requires_pool_call(row: dict) -> bool:
+    """9:25 模式的预案必须等冻结件，盘后倾向不能替代实际买入。"""
+    # 新链路已由 pool_call 接管“买哪只”；缺冻结件宁可不成交。
+    # 9-21 前的历史行仍按旧口径读取，避免篡改历史结算语义。
+    return (row.get("execution_mode") == "pool_call_925"
+            or str(row.get("decision_date") or "") >= "2026-09-21")
+
+
+def _effective_view(row: dict, pool_views: dict) -> str:
+    """该票的**生效**判断：9:25 池内裁决优先，缺失则回退**昨日预案档** bias。
+
+    ⛔ 2026-09-22「彻底不派」：盘后只写 bias（focus/normal/avoid），⛔ 不再派生 view。
+    故 9:25 无结论时，回退口径从「读盘后 view」改为「读盘后 bias 反推终态」：
+      focus→participate / normal→watch / avoid→skip —— 与旧派生口径**逐字一致**，
+    保证结算/账本时序不被改写。真·旧数据（既无 9:25 也无 bias，只有 legacy view）
+    仍走 `row.get("view") or "participate"` 兜底（缺 view 视为 participate）。
+    """
+    code = str(row.get("code") or "").strip()
+    m = pool_views.get(code)
+    if isinstance(m, dict) and str(m.get("view") or "").strip():
+        return str(m["view"])
+    _bias = str(row.get("bias") or "").strip()
+    if _bias == "focus":
+        return "participate"
+    if _bias == "avoid":
+        return "skip"
+    if _bias == "normal":
+        return "watch"
+    return str(row.get("view") or "participate")
+
 
 def _cand_fields_of(decision_date: str, code: str) -> dict:
     """从盘后候选文件取该票的 gate 字段（预期区间 + 量能目标）—— 2026-09-17「A 计划/A2/量能门」。
@@ -105,6 +161,157 @@ def _cand_fields_of(decision_date: str, code: str) -> dict:
     return {}
 
 
+# ── 预案档 ↔ 旧口径 view 的互转（2026-09-21 语义迁移）─────────────────────────
+# 盘后写 `bias`（预案档），9:25 池内裁决写 `view`（终态）。为了让**旧消费方**
+# （尚未改造的脚本 / 历史审计）不炸，`bias` 落盘时同时派生一个同义 `view`；
+# 反之若调用方只给了 `view`，也补一个 `bias` 便于卡面渲染「昨日预案」。
+_BIAS_TO_VIEW = {"focus": "participate", "normal": "watch", "avoid": "skip"}
+_VIEW_TO_BIAS = {"participate": "focus", "watch": "normal", "skip": "avoid"}
+
+
+# ── ⛔ bias 越权兜底（2026-09-22 用户抓包「接力池#1 真龙被判观察」）────────────────
+# 背景（实证 2026-09-21 盘后 → 09-22 执行）：
+#   · 接力池 **#1** 内蒙新华(603230)：09:25:02 **秒板**、带动 **5 家**、带 **「先发」** tag、
+#     龙头分 65.1 —— AI 判 **`normal`（一般/观察）**；
+#   · 接力池 **#6** 世联行(002285)：**13:17 午后**封板、**无「先发」**、龙头分 39.31 —— AI 判 **`focus`（重点看）**。
+#   AI 给出的降级理由是「收入降24%、净利降82%、炒名字、砸开3次」——**全部不属于四类硬伤**
+#   （🤖-1c②：一字买不到 / ST / 成交额<5亿 / 纯跟风无带动；且「高位炸板=辨识度」按 P2-9 是**加分**）。
+#   ⛔ 危害面：裁决链第③条「昨日预案＝回避 → **放弃**」是**硬否决** ——
+#     若 AI 给真龙 `avoid`，09:25 会直接不买（09-22 只是恰好给了 `normal` 才被机械层救回）。
+# 本兜底只做**一件事**：`avoid` 必须命中四类硬伤，否则降级 `normal`（+ `bias_warning` 留痕）。
+#   ⛔ 只降这一档（avoid→normal），**不触碰** focus/normal —— 不反压 AI 的判断空间；
+#   ⛔ 不改写 AI 的 `reason` 原文（显示层照旧保留 AI 说了什么）；
+#   ⛔ 取不到候选文件（缺席/字段缺）→ 视为「无硬伤信息」→ **不降级**（宁松不误伤）。
+ENABLE_BIAS_AVOID_GUARD = True
+# 四类硬伤里的「成交额过小」阈值（与 pipeline_eod.MIN_TURNOVER_YI 同口径：5 亿）
+HARD_FLAW_MIN_TURNOVER_YI = 5.0
+# 机械「强龙」证据阈值：首封 ≤ **09:30** 才算真秒板（开盘即封）
+# ⛔ 不用 relay_score 的 ≤10:00 档：实证 09-21 候选 16 只里 09:31~09:56 封板的有 8 只，
+#    用 ≤10:00 会把它们全标成"秒板" → 告警退化为噪声（同「全他妈打上孤军」的教训）。
+LEADER_SECOND_BOARD_MAX_FBT = 930
+
+
+def _cand_stock_of(decision_date: str, code: str) -> dict:
+    """从盘后候选文件取该票原始条目（relay/watch）。取不到 → {}（诚实降级）。"""
+    p = CACHE / f"candidates-{decision_date}.json"
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    for bucket in ("relay", "watch"):
+        for it in (d.get(bucket) or []):
+            if str(it.get("code") or "") == str(code):
+                return {**it, "_bucket": bucket}
+    return {}
+
+
+def _mech_hard_flaws(it: dict) -> list[str]:
+    """四类硬伤（🤖-1c②）的**机械**判定 —— 命中任一，AI 才有资格给 `avoid`。"""
+    flaws: list[str] = []
+    if it.get("is_one_word"):
+        flaws.append("一字板买不到")
+    if it.get("is_st"):
+        flaws.append("ST")
+    cje = it.get("cje_yi")
+    if isinstance(cje, (int, float)) and 0 < cje < HARD_FLAW_MIN_TURNOVER_YI:
+        flaws.append(f"成交额<{HARD_FLAW_MIN_TURNOVER_YI:g}亿")
+    # 纯跟风无带动：行业与题材皆孤（无板块效应）**且**封板后没带动任何同伴
+    lone = (bool(it.get("sector_is_lone"))
+            and not bool(it.get("theme_has_sector_effect"))
+            and int(it.get("carry_cnt") or 0) == 0)
+    if lone:
+        flaws.append("纯跟风无带动")
+    return flaws
+
+
+def _mech_leader_marks(it: dict) -> str:
+    """机械「强龙」证据（仅用于**告警留痕**，⛔ 不改变 bias）。
+
+    ⛔ **判据必须能分开人**，否则退化成噪声（同「全他妈打上孤军」的教训）：
+       · **含**：接力池 **第1** / 首封 **≤09:30**（真秒板·开盘即封）—— 实测各只命中 1~2 只；
+       · **不含**：`先发` tag（09-21 实测 16 只里 **13 只**都有 → 零区分度）；
+         `fbt ≤10:00`（会把 09:31~09:56 的 8 只全当"秒板"）。
+       · `带动≥4家` 仅作**附加说明**（有主证据时才附），不单独触发告警。
+    """
+    marks: list[str] = []
+    # 接力池第 1（`relay_rank` 仅接力池有 → 直接判字段即可，不依赖外部注入的 `_bucket`）
+    if int(it.get("relay_rank") or 0) == 1:
+        marks.append("接力池第1")
+    fbt = "".join(ch for ch in str(it.get("fbt") or "") if ch.isdigit())
+    if len(fbt) >= 4 and int(fbt[:4]) <= LEADER_SECOND_BOARD_MAX_FBT:
+        marks.append(f"{fbt[:2]}:{fbt[2:4]}秒板")
+    carry = int(it.get("carry_cnt") or 0)
+    if marks and carry >= 4:
+        marks.append(f"带动{carry}家")
+    return "·".join(marks)
+
+
+# ── 🛡️ 交易闸门三条 · 赔率 / 周期留痕（2026-09-23 用户定·延迟任务落地）────────────
+# 依据 = `config/shared_rules.md`【🛡️ 交易闸门三条 · 交割单实证反推】：
+#   🛡️-1 赔率闸门 —— 进场前写死「目标涨幅 / 止损幅度」，**目标/止损 < 2 → ⛔ 不做**；
+#   🛡️-2 周期闸门 —— 进场时贴「兑现周期标签」（主线核心按周/月 · 纯情绪票才日内~3天）。
+# 本段只做**留痕**：⛔ 不做硬拦、⛔ 不改 `bias` / `view`、⛔ 不参与买卖裁决 ——
+#   闸门靠纪律与宪法约束；代码硬拦会误杀真实机会，代价大于漏记一条告警。
+#   · `target_pct` / `stop_pct` —— 目标涨幅 / 止损幅度（百分数·如 12.0 / 5.0）
+#   · `hold_horizon`           —— 兑现周期标签·合法值 `intraday` / `swing` / `mainline`
+# ⛔ 三字段**全部可选**：缺失即 None、不做必填校验、不抛错、不阻断落盘。
+ENABLE_PAYOFF_WARNING = True
+# 🛡️-1 赔率下限 = 2（⛔ 阈值单一源 = `scripts/behavior_attribution.GATE_PAYOFF_MIN`，改须两处同步）
+PAYOFF_MIN = 2.0
+# 🛡️-2 周期标签合法档（非法值原样留痕 + 告警·⛔ 不抛错）
+HOLD_HORIZON_VALID = ("intraday", "swing", "mainline")
+# 档位白话（告警文案用·⛔ 卡片话术铁律：英文档位不上「人看的」文案）
+_HOLD_HORIZON_PLAIN = "日内/波段/主线核心"
+
+
+def _num_or_none(v: Any) -> float | None:
+    """宽容取数 → float；缺 / 空 / 非数 / 布尔 → None（⛔ 不抛错·不阻断落盘）。"""
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, str) and not v.strip():
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _payoff_of(pk: dict) -> tuple[float | None, float | None, str | None]:
+    """逐票读 `target_pct` / `stop_pct` → (目标, 止损, 赔率告警)。
+
+    赔率 = |目标 / 止损|；**两值都给 ∧ 止损 ≠ 0 ∧ 赔率 < 2** → 出大白话告警
+    （🛡️-1：赔率不足 2 → 按纪律不做）。⛔ 只加告警字段，⛔ 不改 `bias` / `view`；
+    ⛔ 不做必填校验、不抛错——缺任一值即静默返回 None（诚实降级）。
+    """
+    tgt = _num_or_none(pk.get("target_pct"))
+    stp = _num_or_none(pk.get("stop_pct"))
+    warn: str | None = None
+    if ENABLE_PAYOFF_WARNING and tgt is not None and stp is not None and stp != 0:
+        ratio = abs(tgt / stp)
+        if ratio < PAYOFF_MIN:
+            warn = (f"赔率 {round(ratio, 2):g} 不足 {PAYOFF_MIN:g}"
+                    f"（目标 {tgt:g}% / 止损 {stp:g}%）· 按纪律应不做")
+    return tgt, stp, warn
+
+
+def _horizon_of(pk: dict) -> tuple[str | None, str | None]:
+    """逐票读 `hold_horizon` → (留痕值, 告警)。非法值**原样留痕** + 告警，⛔ 不抛错。
+
+    ⛔ 不做大小写 / 别名归一：只按宪法 🛡️-2 的三个合法档**精确匹配**（两端空白容忍）——
+    写错档位本身就是要留痕的行为，代 AI 猜档会掩盖输入质量问题。
+    """
+    raw = pk.get("hold_horizon")
+    if raw is None:
+        return None, None
+    val = str(raw).strip()
+    if not val:
+        return None, None
+    if val in HOLD_HORIZON_VALID:
+        return val, None
+    return val, (f"周期标签「{val}」不是标准档（可选 {_HOLD_HORIZON_PLAIN}）"
+                 "· 已原样留痕，请复核")
+
+
 def _read_jsonl(p: Path) -> list[dict]:
     if not p.exists():
         return []
@@ -132,15 +339,9 @@ def _nav_now() -> float:
 
 
 def _next_trade_day(date10: str) -> str:
-    """次一交易日（跳周末·与 pipeline_verify._next_day 同口径）。"""
-    from datetime import datetime as _dt, timedelta as _td
-    try:
-        d = _dt.strptime(date10, "%Y-%m-%d") + _td(days=1)
-        while d.weekday() >= 5:
-            d += _td(days=1)
-        return d.strftime("%Y-%m-%d")
-    except Exception:
-        return date10
+    """次一A股交易日；统一法定休市日历，禁止仅跳周末。"""
+    from common.trading_calendar import next_a_share_trading_day
+    return next_a_share_trading_day(date10) or date10
 
 
 def _write_ai_view(trade_date: str, decision_date: str, views: dict,
@@ -204,17 +405,62 @@ def cmd_record(args) -> int:
         if (ddate, code) in existing:
             print(f"  跳过重复决策: {ddate} {code}")
             continue
+        # 🎯 2026-09-21 语义迁移：盘后输入的是**预案档** `bias`（focus/normal/avoid），
+        #    ⛔ 不再是「买哪只」的终态。为兼容旧消费方，落盘时同步派生同义 `view`
+        #    （focus→participate / normal→watch / avoid→skip）——9:25 池内裁决会把它覆盖成实判。
+        _bias = str(pk.get("bias") or "").strip()
+        if _bias not in _BIAS_TO_VIEW:
+            # 只给了旧口径 view → 反推预案档；两者都没给 → **空**（沿用旧行为：`view=None`，
+            # `ai_caliber.decide` 把缺 view 视为 participate），⛔ 不得默认成 watch 而悄悄改口径。
+            _bias = _VIEW_TO_BIAS.get(str(pk.get("view") or "").strip(), "")
+        # ⛔ bias 越权兜底（2026-09-24 降噪）：
+        #    `avoid` 无四类硬伤 → **降级 normal**（avoid 会在 09:25 硬否决买入）并显著告警。
+        #    `normal` 与机械强龙不同不再告警：09:25 已将强龙与 focus 同档排序，
+        #    原始 bias、机械强龙事实与最终裁决都已落盘，可供事后归因，不能再制造待处理假告警。
+        # 同一冻结候选同时提供越权校验与台账排序评分，避免分别读取后期可能变化的文件。
+        _candidate = _cand_stock_of(ddate, code)
+        _bias_warning = ""
+        if _bias:
+            if _bias == "avoid" and ENABLE_BIAS_AVOID_GUARD and _candidate:
+                if not _mech_hard_flaws(_candidate):
+                    _bias = "normal"
+                    _bias_warning = ("AI 原判 avoid，但候选无四类硬伤（一字/ST/成交额<5亿/纯跟风）"
+                                     "→ 已降级 normal（avoid 会在 09:25 直接否决买入）")
+                    print(f"  ⚠️ bias=avoid 无硬伤 → 降级 normal：{code} {pk.get('name') or ''}",
+                          file=sys.stderr)
+            # `normal` 与机械强龙的差异仅保留在 bias、mechanical_leader 和 09:25 裁决中，
+            # 不写 `bias_warning`。融合排序已处理该差异；只有 avoid 的硬否决风险才需要显著提示。
+        # 🛡️ 交易闸门留痕（2026-09-23）：逐票**可选**读目标涨幅 / 止损幅度 / 兑现周期标签
+        #    ⛔ 缺即 None、不校验、不抛错——见上方 `ENABLE_PAYOFF_WARNING` 段
+        _tgt, _stp, _payoff_warning = _payoff_of(pk)
+        _horizon, _horizon_warning = _horizon_of(pk)
         row = {
             "decision_date": ddate,
             "code": code,
             "name": pk.get("name") or "",
             "reason": (pk.get("reason") or "").strip(),
             "factors": pk.get("factors") or {},
+            # 候选冻结时的排序评分（满分 100）：供 AI 台账按当日真实候选口径复盘，绝不在结算时重算。
+            "ranking_score": _candidate.get("score"),
             "entry_max_gap": float(pk.get("entry_max_gap", DEFAULT_ENTRY_MAX_GAP)),
             # 单票仓位上限 50%（2026-09-14 用户「买入仓位不超过 50%」）——AI 给超了就裁到这里
             "position": (_ai_caliber.clamp_position(pk.get("position")) if _ai_caliber
                          else pk.get("position")),
-            "view": (pk.get("view") or None),      # participate/skip/watch（供竞价验证卡渲染）
+            # 盘后预案档（focus/normal/avoid·昨日唯一结论）；未给 → None（旧口径兼容）
+            "bias": _bias or None,
+            # ⛔ 越权兜底留痕（2026-09-22）：非空 = 该票的 bias 与机械证据冲突（或已被降级）
+            "bias_warning": _bias_warning or None,
+            # 🛡️ 交易闸门三条留痕（2026-09-23）：三字段**全可选**·缺失即 None
+            #    ⛔ 纯留痕：不校验、不抛错、不阻断落盘、不改 bias/view（见上方常量段）
+            "target_pct": _tgt,
+            "stop_pct": _stp,
+            "payoff_warning": _payoff_warning,
+            "hold_horizon": _horizon,
+            "hold_horizon_warning": _horizon_warning,
+            # ⛔ 2026-09-22「彻底不派」：盘后 ⛔ 不再派生 view，仅保留调用方显式传入（通常为 None）
+            "view": (pk.get("view") or None),
+            # 新链路的成交授权只能来自次日 9:25 冻结件，供结算与审计识别。
+            "execution_mode": "pool_call_925" if ddate >= "2026-09-21" else "legacy_plan",
             "source": "AI",
             "ts": datetime.now(BJ_TZ).isoformat(),
             "settled": False,
@@ -232,7 +478,7 @@ def cmd_record(args) -> int:
         print(f"  ✓ 记录 AI 决策 {ddate} {row['name']}({code}) {row['reason'][:40]}")
         # 🤖 合并进竞价验证（2026-09-10 用户）：同步写 ai_view_{trade_date}.json
         # → 次日 build_verify_card 渲染「🤖 AI 判断」行，与机器信号同卡对照（不再另开平行台账查看）
-        if row.get("view"):
+        if row.get("view") or row.get("bias"):
             view = view_map.setdefault(code, {})
             # ⛔ entry_max_gap 必须带进 views（2026-09-14 修）：此前只 UPDATE view/reason/factors，
             #    导致 build_cards._ai_plan_block 取不到逐票上限 → 回落到顶层 meta 默认 3.0，
@@ -240,9 +486,21 @@ def cmd_record(args) -> int:
             #    且与结算口径不一致（cmd_settle 读决策行的 2.0）。三处必须同值。
             view.update({
                 "view": row["view"],
+                # 🎯 2026-09-21：盘后预案档随视图落盘 —— 次日 09:25 池内裁决读它做排序/否决
+                #    （focus 优先、avoid 直接否决），卡面同时展示「昨日预案」与「今日实判」。
+                "bias": row["bias"],
                 "reason": row["reason"],
                 "factors": row["factors"],
                 "entry_max_gap": row["entry_max_gap"],
+                # ⛔ 兜底留痕随视图落盘 → AI 台账/竞价卡可直接看到「这条 bias 被判越权」
+                "bias_warning": row.get("bias_warning"),
+                # 🛡️ 赔率 / 周期留痕随视图落盘（2026-09-23）——与 bias/reason 同级，
+                #    供 AI 台账「判断明细」与后续卡面排期消费（本次 ⛔ 不改渲染）
+                "target_pct": row.get("target_pct"),
+                "stop_pct": row.get("stop_pct"),
+                "payoff_warning": row.get("payoff_warning"),
+                "hold_horizon": row.get("hold_horizon"),
+                "hold_horizon_warning": row.get("hold_horizon_warning"),
             })
     if view_map:
         meta.setdefault("entry_max_gap", DEFAULT_ENTRY_MAX_GAP)
@@ -283,41 +541,36 @@ def cmd_settle(args) -> int:
         return 2
     rows = _read_jsonl(DECISIONS)
     due = [r for r in rows if not r.get("settled") and str(r.get("decision_date") or "") < tdate]
-    # ⛔ 只有 view=participate（AI 决定买）才计入 AI 收益；watch/skip 是 AI 看过但没买的，
-    #    一并标记 settled 但不进收益（2026-09-11 修：原实现把所有待结算决策都当买入，
-    #    会把「观察/放弃」的票算进 AI 成绩 → 收益虚高失真）。
-    todo = [r for r in due if str(r.get("view") or "participate") == "participate"]
-    others = [r for r in due if str(r.get("view") or "participate") != "participate"]
+    # 🎯 9:25 池内裁决与账户账本 / 卡面读同一份冻结件，三方同源。
+    pool_views = _pool_call_views(tdate)
+    if pool_views:
+        print(f"[ai_ledger] 🎯 读当日 9:25 池内裁决 {len(pool_views)} 只 → 买哪只以它为准")
+    # ⛔ 新链路缺冻结件不允许回退盘后预案。focus 只是缩池与排序依据，不是成交授权。
+    settlement_blocks: dict[str, str] = {}
+    effective_views: dict[str, str] = {}
+    for r in due:
+        code = str(r.get("code") or "")
+        frozen = pool_views.get(code)
+        if _requires_pool_call(r) and not (isinstance(frozen, dict) and str(frozen.get("view") or "").strip()):
+            settlement_blocks[code] = "9:25 池内裁决冻结件缺失 → 不记实际买入"
+            effective_views[code] = "watch"
+        else:
+            effective_views[code] = _effective_view(r, pool_views)
+    # ⛔ 只有「生效判断 = participate」才计入 AI 收益；watch/skip 只留结算痕迹。
+    todo = [r for r in due if effective_views.get(str(r.get("code") or "")) == "participate"]
+    others = [r for r in due if effective_views.get(str(r.get("code") or "")) != "participate"]
     if not due:
         print(f"[ai_ledger] {tdate} 无待结算 AI 决策")
         return 0
     quotes = _load_quotes(tdate)
-    # ── hibernate 竞价逃生阀（2026-09-18 用户拍板「A」）──────────────────────────
-    # 依据日 AI 定调 hibernate → 当日**唯一**满足「红开≤5% ∧ 带量 ∧ 方向内位置最高」的票
-    # 允许小仓试错：把它从「未选中(others)」搬进「待结算(todo)」，与账户账本同源同判
-    # （`ai_caliber.pick_hibernate_valve` + `decide(valve_hit=True)`）。
-    # ⛔ 未开阀 → valve=None，行为与旧版逐字一致。
-    valve: dict | None = None
-    if _ai_caliber is not None and due:
-        _ddate = sorted({str(r.get("decision_date") or "") for r in due})[-1]
-        try:
-            _cands = json.loads((CACHE / f"candidates-{_ddate}.json").read_text(encoding="utf-8"))
-        except Exception:
-            _cands = None
-        valve = _ai_caliber.pick_hibernate_valve(
-            _cands, quotes, stance=_ai_caliber.ai_stance(tdate),
-            views={str(r.get("code") or ""): str(r.get("view") or "") for r in due})
-        if valve:
-            _vc = str(valve.get("code") or "")
-            _mv = [r for r in others if str(r.get("code") or "") == _vc]
-            if _mv:
-                others = [r for r in others if str(r.get("code") or "") != _vc]
-                todo = todo + _mv
-            print(f"[ai_ledger] 🚪 hibernate 逃生阀：{valve.get('name')}({_vc}) "
-                  f"竞价 {valve.get('gap_pct'):+.2f}% → 小仓试错 {valve.get('position')}")
+    # AI 决策为唯一入场授权：不再用逃生阀把观察票提升为成交。
     traded, skipped = [], []
     for r in others:
-        skipped.append((str(r.get("code")), f"AI 本次没选它（{r.get('view')}）·不参与收益统计"))
+        _code = str(r.get("code") or "")
+        _v = effective_views.get(_code, "watch")
+        _why = (pool_views.get(_code) or {}).get("reason") if pool_views else None
+        skipped.append((_code, settlement_blocks.get(_code) or
+                        (f"9:25 池内裁决={_v}·不参与收益统计" + (f"（{_why}）" if _why else ""))))
     for r in todo:
         code = str(r["code"])
         q = quotes.get(code) or {}
@@ -331,11 +584,13 @@ def cmd_settle(args) -> int:
         #    参与 ∧ ≤5% 硬线 ∧ 落预期区间 → 成交；否则跳过（不及预期/高开太多/超线均不买）。
         #    此前此处手写 `gap > 5%`，与账户账本新增的区间门脱节 → 两轨会同票不同结论。
         if _ai_caliber is not None:
+            # 🎯 生效判断 = 9:25 池内裁决（缺失才回退行内 view）——与账户账本同一个 decide
+            _dec = dict(r)
+            _dec["view"] = effective_views.get(code, "watch")
             _can, _note, _ = _ai_caliber.decide(
-                r, gap, expected_range=r.get("expected_range"),
+                _dec, gap, expected_range=r.get("expected_range"),
                 auction_amount_yi=q.get("auction_amount_yi"),
-                need_yi=r.get("amount_need_yi"),
-                valve_hit=bool(valve) and str(valve.get("code")) == code)
+                need_yi=r.get("amount_need_yi"))
             if not _can:
                 skipped.append((code, _note))
                 continue
@@ -377,6 +632,8 @@ def cmd_settle(args) -> int:
         if (str(r.get("decision_date")), str(r.get("code"))) in settled_keys:
             r["settled"] = True
             r["settled_trade_date"] = tdate
+            if str(r.get("code") or "") in settlement_blocks:
+                r["settlement_note"] = settlement_blocks[str(r.get("code") or "")]
     DECISIONS.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
     print(f"[ai_ledger] {tdate} 结算：AI 选中 {len(todo)} 只 → 成交 {len(traded)} 只·跳过 {len(skipped)} 只 | "
           f"avg={avg}% nav={nav}")

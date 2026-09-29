@@ -80,25 +80,9 @@ fi
 echo "$NOW" > "$STATE"
 rotate_log "$LOG"
 echo "[$(date '+%H:%M:%S')] fetch start (interval=${TARGET}s)" >> "$LOG"
-run_step "intraday_pulse"  "$PY scripts/intraday_pulse.py --mode intra --json-only --force" "cache/pulse_snapshots/intraday.log"
-run_step "gen_candidates"  "$PY scripts/gen_candidates.py"                                          "cache/pulse_snapshots/candidates.log"
-run_step "feedback_matrix" "$PY scripts/feedback_matrix.py"                                         "cache/pulse_snapshots/feedback.log"
-run_step "ma5_check"       "$PY scripts/ma5_check.py"                                              "cache/pulse_snapshots/ma5.log"
-run_step "memory_detect"   "$PY scripts/memory_lib.py detect"                                      "cache/pulse_snapshots/detect.log"
-run_step "gen_dashboard"   "$PY HTML/gen_dashboard.py"                                             "cache/pulse_snapshots/dash.log"
-run_step "gen_watch"       "$PY HTML/gen_watch.py"                                                 "cache/pulse_snapshots/watch.log"
-run_step "live_signal"     "$PY scripts/live_signal.py"                                            "cache/pulse_snapshots/signal.log"
-# 2026-09-04 精选快讯速递（用户「异动群加一点快讯·精选速递」）：消息面催化直推异动群，
-# 只播「点名个股/带板块+重磅词」的硬快讯（每轮≤2·当日 id 去重·走短线精灵 --send 统一出口）。
-run_step "newsflash_express" "$PY scripts/newsflash_express.py"                                     "cache/pulse_snapshots/express.log"
-# 2026-09-04 异动群节拍汇总：空窗≥15min 自动补一条「📡 盘中节拍」轻卡（无事件时保持群节奏·
-# 用户「异动群至少 15 分钟推一次」）；有事件推送自动顺延不重复（独立脚本幂等判 gap）。
-run_step "intraday_beat"   "$PY scripts/intraday_beat.py"                                           "cache/pulse_snapshots/beat.log"
-# 2026-09-17 盘中情绪时间轴记录（用户「时间轴要记录整个交易时间的情绪起落·既有爆发也有杀跌」）：
-# ⛔ 纯记录 · 零推送 · 不改任何推送行为/节奏；每轮把「本轮新发生的情绪事件」（涨停/炸板/跌停/
-#    板块走强/杀跌板块）**追加**到 cache/intraday_timeline_<date>.jsonl（原 latest.json 是覆盖写，盘中历史全丢）。
-# ⛔ 独立 try 包裹：任何异常都不影响守护链（run_step 已失败不中断）。
-run_step "intraday_timeline" "$PY scripts/intraday_timeline.py"                                     "cache/pulse_snapshots/timeline.log"
+run_step "realtime_data"   "$PY scripts/realtime_data_pipeline.py"   "cache/pulse_snapshots/data-pipeline.log"
+run_step "realtime_push"   "$PY scripts/realtime_push_pipeline.py"   "cache/pulse_snapshots/push-pipeline.log"
+run_step "realtime_render" "$PY scripts/realtime_render_pipeline.py" "cache/pulse_snapshots/render-pipeline.log"
 # 2026-08-18 用户「脉冲与精灵分工」方案B：砍掉精灵日常持续调用，退化为仅 S级共振(live_signal.py:903)
 # + 冷却补推(:776) 触发。日常异动全交给窗口卡(close_window_step)；精灵不再每轮守护链跑，避免双线冗余刷屏。
 # run_step "short_spirit"    "$PY scripts/short_spirit.py --push"                                    "cache/pulse_snapshots/short_spirit.log"
@@ -193,7 +177,7 @@ except Exception:
   fi
 }
 # volume_trigger_step   # 2026-09-03 高频单通道停用（见 close_window_step 注释）
-echo "[$(date '+%H:%M:%S')] detect+dashboard done" >> "$LOG"
+echo "[$(date '+%H:%M:%S')] data→push→render done" >> "$LOG"
 
 # 每日一次清理过期记忆/去重状态（保留最近5个交易日）。守卫：同一天只清一次。
 PRUNE_STATE=cache/pulse_snapshots/.last_prune_date

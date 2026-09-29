@@ -111,13 +111,17 @@ def main() -> int:
         f"[record_zt_snapshot] ✅ {pretty} 涨停{snap['zt_count']}只 最高{snap['max_boards']}板 → {out}"
     )
 
-    # 归档到财富密码自建文件夹（题材沉淀地基，复用已抓数据，不重抓）
+    # 归档到题材沉淀目录（**双目录同写**·合并保留 intraday_points）——单一出口 = scripts/zt_archive.py
+    # ⛔ 2026-09-18：此前只写 wealth_code/data/zt_history，而 theme_roll/live_signal 等消费方
+    #    读 cache/zt_history → 「双路径分裂」（15:30 读到盘中空壳 → 题材广度当日为 0）。
+    #    见 scripts/zt_archive.py 模块头事故链；新增归档目录一律在 ZT_DIRS 登记。
     try:
-        archive_dir = ROOT / "wealth_code" / "data" / "zt_history"
-        archive_dir.mkdir(parents=True, exist_ok=True)
-        ap = archive_dir / f"zt_{pretty}.json"
-        ap.write_text(json.dumps(snap, ensure_ascii=False), encoding="utf-8")
-        print(f"[record_zt_snapshot] 📁 已归档题材沉淀 → {ap}")
+        if str(HERE) not in sys.path:
+            sys.path.insert(0, str(HERE))
+        import zt_archive
+        paths = zt_archive.write_archives(snap)
+        print("[record_zt_snapshot] 📁 已归档题材沉淀（%d 目录）→ %s"
+              % (len(paths), " | ".join(str(p) for p in paths)))
     except Exception as e:  # noqa: BLE001
         print(f"[record_zt_snapshot] ⚠️ 归档失败(不影响主流程): {e}")
 

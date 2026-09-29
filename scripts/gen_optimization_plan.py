@@ -34,6 +34,10 @@ from pathlib import Path
 
 ROOT = Path("/Users/zxl/WorkBuddy/狸猫猎手")
 CACHE = ROOT / "cache"
+# 白话词表单一源（同目录 card_copy_rules.py）；本脚本可能被以任意 cwd 调起
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+import card_copy_rules as _ccr  # noqa: E402
 HISTORY_FILE = CACHE / "backtest_history.jsonl"
 SUGGEST_FILE = CACHE / "learning_suggestions.json"
 PROPOSAL_FILE = CACHE / "learning_proposals.jsonl"
@@ -49,7 +53,9 @@ BLUE = "blue"
 
 
 def _div(t: str) -> dict:
-    return {"tag": "div", "text": {"tag": "lark_md", "content": t}}
+    # 2026-09-18：渲染出口统一白话化 —— 卡面文案可能来自**已落盘的旧 evidence/提案**
+    # （代码已改、旧数据不会自己变），否则 09-21 起阻断期会把整卡拦死。见 card_copy_rules.sanitize
+    return {"tag": "div", "text": {"tag": "lark_md", "content": _ccr.sanitize(t)}}
 
 
 def _hr() -> dict:
@@ -106,7 +112,10 @@ def load_learning_effect() -> dict | None:
         return None
     for r in reversed(rows):
         if r.get("effect"):
-            return {"effect": r["effect"], "applied": r.get("applied_summary"),
+            # 2026-09-18 修：learning.py 从不写 `applied_summary`（真实数据在 `effect.applied`）
+            # → 卡面「上轮自动应用」长期渲染为空。三级回退：显式摘要 → 效果记录内列表 → None。
+            return {"effect": r["effect"],
+                    "applied": (r.get("applied_summary") or (r.get("effect") or {}).get("applied")),
                     "ts": r.get("generated_at"), "range_hit_rate_avg": r.get("range_hit_rate_avg")}
     return None
 
@@ -177,7 +186,7 @@ def build_decisions(hist, sugs, props, health) -> list[dict]:
                 "id": f"O{n}", "cat": "回测/学习", "sev": "high",
                 "title": f"候选池命中率持续走低（均值 {avg_a:.0f}%）",
                 "evidence": f"近{len(rates_a)}日候选命中率均值 {avg_a:.1f}% < 40%",
-                "action": "P2 提案已生成：核查财神-选股 relay/watch 门槛（first_choice_min 上调 2 分候选）；样本≥3才生效",
+                "action": "P2 提案已生成：核查财神-选股 relay/watch 门槛（first_choice_min 上调 2 分候选）；记录≥3日才生效",
                 "impact": "影响选股质量→eod/verify 卡",
                 "default": "待拍板（提案 P2）",
             })
@@ -332,7 +341,7 @@ def render_card(plan: dict) -> dict:
         e = eff["effect"]
         imp = e.get("improved")
         el.append(_div(f"**🔄 学习效果回看** {_tag('改善' if imp else '未改善', RED if imp else GREEN)}"))
-        el.append(_div(f"　上轮自动应用：{('、'.join(eff.get('applied') or []))[:80]}"))
+        el.append(_div(f"　上轮自动应用：{('、'.join(eff.get('applied') or []) or '（本机无记录）')[:80]}"))
         el.append(_div(f"　区间命中率：{_tag(str(e.get('range_hit_rate')), rate_color(eff.get('range_hit_rate_avg')))}（自 {(e.get('since') or '')[:10]}）"))
         if not imp:
             el.append(_div("　⚠️ 效果未改善 → 可考虑 `learning.py --rollback <快照>` 回退该次改动"))
@@ -342,7 +351,7 @@ def render_card(plan: dict) -> dict:
     fa = plan.get("factor_attr")
     if fa:
         bb = fa.get("by_bucket") or {}
-        el.append(_div(f"**📈 因子归因**（样本 {fa.get('n_all')} 笔·胜率 {fa.get('win_rate_pct')}%）"))
+        el.append(_div(f"**📈 因子归因**（已记录 {fa.get('n_all')} 笔·胜率 {fa.get('win_rate_pct')}%）"))
         for k, lbl in (("relay", "接力池"), ("watch", "观察池")):
             b = bb.get(k) or {}
             if b.get("win_rate_pct") is not None:

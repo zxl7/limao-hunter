@@ -1,0 +1,27 @@
+# limao-hunter.service —— 云服务器上用 systemd 托管 serve.py
+# 安装：
+#   sudo cp limao-hunter.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now limao-hunter
+# 对外只监听 127.0.0.1，由 nginx 反代到 443（见 nginx.conf）。
+
+[Unit]
+Description=Limao Hunter read-only web server
+After=network.target
+
+[Service]
+Type=simple
+User=limao
+WorkingDirectory=/opt/limao
+Environment=SHARE_HOST=127.0.0.1
+Environment=SHARE_PORT=8000
+# ⚠️ 改成你自己的强口令；公网必设
+Environment=SHARE_TOKEN=CHANGE_ME_STRONG_TOKEN
+# 若 cache 不在 /opt/limao/cache，按需设置：
+# Environment=LIMAO_DATA_ROOT=/opt/limao
+ExecStart=/usr/bin/python3 /opt/limao/serve.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

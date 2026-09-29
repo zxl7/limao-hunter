@@ -100,17 +100,21 @@ def is_trading_day(now: datetime) -> bool:
     return now.weekday() < 5
 
 
-def fetch_today_zt(date: str) -> set:
-    """今日真实涨停池代码集合 + 最高板"""
+def fetch_today_zt(date: str):
+    """复用今日涨停池，返回代码集合、最高板和逐票今日首封时间。"""
     try:
         raw = http_get(ZT_POOL_URL.format(date=date))
         pool = (raw.get("data") or {}).get("pool") or []
         codes = {str(it.get("c")) for it in pool if it.get("c")}
         max_b = max((int(it.get("lbc") or 0) for it in pool), default=0)
-        return codes, max_b
+        # fbt 来自今日涨停池；昨日快照的 fbt 不可用于盘中梯队排序。
+        # 东财早盘时间会写成 92501，补齐到 HHMMSS 才能正确排序与展示。
+        first_seal_times = {str(it["c"]): str(it["fbt"]).zfill(6) for it in pool
+                            if it.get("c") and it.get("fbt")}
+        return codes, max_b, first_seal_times
     except Exception as e:
         print(f"[feedback_matrix] 今日涨停池拉取失败: {e}")
-        return set(), 0
+        return set(), 0, {}
 
 
 def fetch_quotes(codes):
@@ -161,6 +165,47 @@ def fetch_quotes(codes):
                     }
             except Exception as e2:
                 print(f"[feedback_matrix] 腾讯降级行情失败: {e2}")
+    return out
+
+
+def fetch_bids(codes):
+    """批量拉**买一 / 卖一盘口**（腾讯 `qt.gtimg.cn` · GBK）→
+    `{code: {"bid1": 买一价, "bid1_vol": 买一量(手), "sell1_vol": 卖一量(手)}}`。
+
+    ⛔ 为什么要单列一个函数：**封单额只有盘口能给** ——
+      选股宝 `stock/data` 的 fields 无封单字段；东财延迟源 `f32`（买一量）实测恒 `0`。
+      腾讯是这个字段唯一可靠来源（实测 000504 买一 11.01 × 291710 手 = 3.21 亿，卖一量 0 = 真封板）。
+    ⛔ 纯**补充**源：任何异常只返回已拿到的部分，**绝不影响 pct/price 主流程**。
+    ⚠️ 不能走 `http_client`（它强制 utf-8 解码会毁掉 GBK 字节）→ 用 urllib 原始字节按 GBK 解。
+    """
+    out = {}
+    codes = [c for c in codes if c]
+    if not codes:
+        return out
+    try:
+        import urllib.request as _ur
+        for i in range(0, len(codes), 60):
+            batch = codes[i:i + 60]
+            qs = "q=" + ",".join(("sh" if c[:1] in ("6", "9", "5") else "sz") + c for c in batch)
+            req = _ur.Request(f"https://qt.gtimg.cn/{qs}", headers={"Referer": "https://gu.qq.com/"})
+            with _ur.urlopen(req, timeout=10) as _resp:
+                raw_tx = _resp.read().decode("gbk", errors="ignore")
+            for line in raw_tx.split(";"):
+                if "~" not in line:
+                    continue
+                p = line.split("~")
+                if len(p) < 21:
+                    continue
+                try:
+                    out[p[2]] = {
+                        "bid1": float(p[9] or 0),
+                        "bid1_vol": float(p[10] or 0),
+                        "sell1_vol": float(p[20] or 0),
+                    }
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"[feedback_matrix] 盘口拉取失败(封单将缺省): {e}")
     return out
 
 
@@ -436,7 +481,7 @@ def main():
         return 0
     # 隔日反馈核心：昨涨停(快照) ∩ 今涨停(今日实时)。必须用【今天日期】拉今日涨停池，
     # 绝不可用快照日期(date_raw)，否则会变成「昨池∩昨池」自交 → 晋级率恒为100%假象（2026-08-04 实测）
-    today_codes, today_max_b = fetch_today_zt(today_str)
+    today_codes, today_max_b, today_fbt = fetch_today_zt(today_str)
     # 守卫3（2026-08-16 新增·节假日兜底）：今日涨停池为空 或 与昨池完全重合 = 接口返回上一交易日数据
     # （法定节假日/接口异常特征）。此时禁止自交计算，保留上一交易日缓存或标记 error。
     prev_code_set = set(prev_codes)
@@ -453,6 +498,9 @@ def main():
         print("[feedback_matrix] ⏭ 今日涨停池空/自交，写 zt_pool_unreliable 标记")
         return 0
     quotes = fetch_quotes(prev_codes)
+    # 盘口补充（封单）：2026-09-21 用户「连板天梯上面显示涨幅和封单」——
+    # pct/price 主源已有，但**封单额只有盘口能给**（东财延迟源 f32 恒 0、选股宝无该字段）。
+    bids = fetch_bids(prev_codes)
     quote_fail = len(prev_codes) - len(quotes)
 
     # 晋级：昨日涨停 ∩ 今日真实涨停池（独立于行情接口，最可靠）
@@ -558,6 +606,34 @@ def main():
                               "pct": q["pct"] if q else prev_map[c].get("pct", 0)})
     promote_names.sort(key=lambda x: (-x["prev_boards"], -x["pct"]))
 
+    # 逐票行情（2026-09-21 用户「连板天梯上面显示涨幅和封单，这样我也可以实时看到它的涨幅」）：
+    # **全量落盘**（⛔ 不只 `promote_list[:8]`）—— 前端要按 code 取**每一只**昨日涨停票的
+    # 今日实时涨幅与封单。⛔ 封单额只在「无卖盘」（真封板）时给出，否则买一的普通挂单
+    # 会被误读成封单（实测涨停票卖一量 = 0，未涨停的票卖一有量）。
+    # 同交易日累积已确认封板事实；收盘后盘口不再提供买一封单，不能让梯队回退。
+    old_quotes = (old.get("quotes") or {}) if (old.get("date") == _now().strftime("%Y-%m-%d")
+                  and old.get("prev_date") == snap.get("date") and not old.get("error")) else {}
+    quotes_out = {}
+    for _c, _q in quotes.items():
+        _b = bids.get(_c) or {}
+        _vol = float(_b.get("bid1_vol") or 0)
+        _sealed = _vol > 0 and float(_b.get("sell1_vol") or 0) == 0
+        # 封单额（亿）= 买一价 × 买一量(手) × 100 股 ÷ 1e8
+        _seal_yi = round(float(_b.get("bid1") or 0) * _vol * 100 / 1e8, 2) if _sealed else None
+        _old_q = old_quotes.get(_c) or {}
+        # 盘中正封单或既有记录均可确认；15:00 收盘池带今日首封时间时也可确认最终封板。
+        _sealed_today = (_seal_yi is not None and _seal_yi > 0) or bool(_old_q.get("sealed_today")) \
+            or (float(_old_q.get("seal_yi") or 0) > 0) \
+            or (mins >= 900 and _c in today_codes and bool(today_fbt.get(_c)))
+        quotes_out[_c] = {
+            "name": _q.get("name"),
+            "pct": _q.get("pct"),
+            "price": _q.get("price"),
+            "seal_yi": _seal_yi,
+            "sealed_today": _sealed_today,  # 当日曾确认封板；不冒充当前封单额。
+            "today_fbt": today_fbt.get(_c),  # 今日首封时间；无今日涨停记录时保持缺失。
+        }
+
     # 监管打击强度（2026-08-19·P1-8）：读 regulatory_watch 沉淀的当日压力分
     regulatory_pressure = 0.0
     try:
@@ -596,7 +672,7 @@ def main():
         "nuke_count": nuke_count,
         "break_count": break_count,   # 真破位（跌破MA5+MA10）家数
         "market_missing": market_missing,  # 2026-08-25：量能/广度缺失标记（字段级完整性·自查盲区修复）
-        "nuke_list": nukes[:8],
+        "nuke_list": nukes,  # 极值名单逐票展示需要完整核按钮明细；数量仍以 nuke_count 为准。
         "big_loss_count": big_loss,
         "broken_rate": round(broken_rate * 100, 1),
         "prev_max_boards": prev_max_b,
@@ -606,6 +682,15 @@ def main():
         "idx_avg": idx_avg,
         "market_amount_yi": market_amount_yi,   # P0-量能广度：两市成交额(亿)
         "breadth": {"up": breadth_up, "down": breadth_down},  # 全市场涨跌家数
+        # 2026-09-21 新增：**全量**晋级代码（6 位）。
+        # 为什么不能只靠 promote_list：它是**截断到前 8** 的展示用名单，拿它做
+        # 「某票今天晋级了吗」的判定会产生**假阴性**（第 9 只之后的晋级票全被判成未晋级）。
+        # 消费方 = 前端「连板天梯」（昨日梯队 × 今日晋级），纯代码数组、体积 <1KB。
+        "promote_codes": promote_codes,
+        # 逐票实时行情（全量 · 前端「连板天梯」用）：code → {name, pct, price, seal_yi}
+        # ⚠️ 与 promote_list 的区别：**不截断**，且每票带**封单额**（仅真封板时非空）
+        "quotes": quotes_out,
+        # 截断版：卡片/AI 展示用（含名称与涨幅），勿用于集合判定
         "promote_list": promote_names[:8],
         "sentiment_score": score,
         "sentiment_label": label,

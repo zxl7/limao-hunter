@@ -176,3 +176,82 @@ def test_monotonic_judgement():
     bad = [mk("participate", False)] + [mk("watch", True)] * 3 + [mk("skip", False)] * 3
     assert da._ai_matrix(good)["monotonic"] is True
     assert da._ai_matrix(bad)["monotonic"] is False
+
+
+# ── 5) 多周期收益口径（L4·2026-09-18 用户拍板「先做 124」）───────────────
+# 锁四件事：①口径算对（同一入场点折算各档）②缺失一律 None（不填 0 / 不借相邻日）
+#          ③日历越界不猜测 ④旧缓存（裸 float 仅收盘）仍可读，退化为仅 t0 口径
+CAL = ["20260916", "20260917", "20260918", "20260921", "20260922"]
+
+
+def _cache(bars: dict) -> dict:
+    """bars: {"000001": {"20260917": (open, close), ...}} → OHLC 缓存结构。"""
+    return {c: {d: {"o": o, "c": cl} for d, (o, cl) in m.items()} for c, m in bars.items()}
+
+
+def test_attach_returns_multi_horizon_caliber():
+    """同一入场点（竞价成交价 100）折算 t0收 / t+1开 / t+1收 / t+3收 / 最差收盘。"""
+    cache = _cache({"000001": {"20260917": (99.0, 101.0), "20260918": (105.0, 110.0),
+                               "20260921": (108.0, 103.0), "20260922": (100.0, 95.0)}})
+    r = da.attach_returns(_row(1.0, ap=100.0), cache, CAL)
+    assert r["ret_pct"] == 1.0            # (101−100)/100
+    assert r["ret_t1_open"] == 5.0        # 隔夜溢价：次日开盘 105
+    assert r["ret_t1_close"] == 10.0
+    assert r["ret_t3_close"] == -5.0
+    assert r["mdd_t0_t3"] == -5.0         # 最差收盘 95（t0..t3 各收盘最小值）
+
+
+def test_forward_returns_none_not_zero():
+    """⛔ 缺失必须 None：不填 0、不用相邻日顶替；只有 t0 一个点时最差收盘也须 None。"""
+    cache = _cache({"000001": {"20260917": (100.0, 101.0)}})
+    r = da.attach_returns(_row(1.0, ap=100.0), cache, ["20260917"])
+    assert r["ret_pct"] == 1.0
+    assert r["ret_t1_open"] is None and r["ret_t1_close"] is None and r["ret_t3_close"] is None
+    assert r["mdd_t0_t3"] is None, "只有 t0 一个点 → 不得退化成 ret_pct 的重复"
+
+
+def test_nth_next_never_guesses():
+    """日历越界 / 非交易日 → None（⛔ 不猜测、不位移）。"""
+    cal = ["20260917", "20260918", "20260921"]
+    assert da.nth_next(cal, "2026-09-18", 1) == "20260921"
+    assert da.nth_next(cal, "2026-09-21", 1) is None      # 尾部越界
+    assert da.nth_next(cal, "2026-09-19", 1) is None      # 非交易日（周末）→ 不猜
+    assert da.nth_next(cal, "20260917", 3) is None
+
+
+def test_kline_calendar_from_bars_not_zt_archive():
+    """日历须来自日K实际日期（市场事实），而不是 zt 归档日 —— 归档缺日会静默把 t+1 挪位。"""
+    cache = _cache({"000001": {"20260917": (1.0, 1.0), "20260918": (1.0, 1.0)},
+                    "600000": {"20260921": (1.0, 1.0)}})
+    assert da.kline_calendar(cache) == ["20260917", "20260918", "20260921"]
+
+
+def test_legacy_close_cache_still_readable():
+    """旧缓存（裸 float·仅收盘）仍可读 → 降级为仅 t0 口径，不报错、不编造开盘。"""
+    cache = {"000001": {"20260917": 101.0}}
+    assert da.close_of(cache, "000001", "2026-09-17") == 101.0
+    assert da.open_of(cache, "000001", "2026-09-17") is None
+    assert da._legacy_entry(cache["000001"]) is True
+    assert da._legacy_entry({"20260917": {"o": 100.0, "c": 101.0}}) is False
+    assert da._bar(cache, "000001", None) is None
+
+
+def test_stats_exposes_horizon_counts():
+    """每个档位自带可用条数 —— 防拿 3 条当结论（t+3 在窗口尾部天然缺失）。"""
+    r = _row(1.0)
+    r.update({"ret_pct": 1.0, "ret_t3_close": -2.0, "mdd_t0_t3": -3.0})
+    s = da._stats([r])
+    assert s["exec_ret_n"] == 1
+    assert s["ret_t3_close"] == -2.0 and s["n_ret_t3_close"] == 1
+    assert s["ret_t1_open"] is None and s["n_ret_t1_open"] == 0
+    assert s["win_t3_close"] == 0.0
+    for k in ("ret_t1_open", "ret_t1_close", "ret_t3_close", "mdd_t0_t3"):
+        assert f"n_{k}" in s, f"{k} 缺少同行条数"
+
+
+def test_no_second_data_source():
+    """⛔ 日K只走 `common.tencent_kline`（同 ai_ledger 单一源），本脚本不得自带 URL/host。"""
+    code = _code_only(SRC.read_text(encoding="utf-8"))
+    assert "common.tencent_kline" in code and "fetch_kline_ohlc" in code
+    for bad in ("http://", "https://", "ifzq.gtimg", "fqkline"):
+        assert bad not in code, f"审计脚本出现自带数据源：{bad}"

@@ -123,14 +123,14 @@ def test_verify_card_ai_plan_yesterday_wording(monkeypatch, tmp_path):
     r2 = _rec("002584", "西陇科学", "reject", 1.2)
     s = _text(bc.build_verify_card(_vr("2026-09-18", [r1, r2], date10="2026-09-17")))
 
-    assert "🤖 AI 昨日买入计划" in s and "AI 今日买入计划" not in s
+    assert "🤖 AI 昨日预案" in s and "AI 今日买入计划" not in s
     assert "AI 昨日判断：只做最强的一只" in s and "AI 判断：只做最强的一只" not in s
-    assert "09-17 盘后定 · 今日竞价定成交" in s              # 两个时点同时交代
+    assert "09-17 盘后定 · 重点看/一般/回避 · 买哪只今日竞价定" in s              # 两个时点同时交代
     # note（写于上一交易日盘后）→ 平移到读者视角
     assert "昨天市场很冷" in s and "今天市场很冷" not in s
     assert "涨停从前天的89家掉到47家" in s
     # 逐票判断 + 理由同源平移；但「今日竞价」保留（当日实况）
-    assert "🤖 AI 昨日判断：参与" in s
+    assert "🤖 AI 昨日判断：重点看" in s
     assert "机器人昨天7家涨停" in s and "机器人今天7家涨停" not in s
     assert "今日竞价" in s
     # 其余名单：昨日没安排（⛔ 不能写「今天不买」）
@@ -151,7 +151,7 @@ def test_verify_card_hibernate_valve_yesterday_wording(monkeypatch, tmp_path):
 
     assert "昨日收盘定的是空仓" in s and "今天本来是空仓日" not in s
     assert "今日竞价破例小仓试错" in s
-    assert "🤖 AI 昨日判断：观察 → 破例小仓买" in s          # 卡面不与账本成交打架
+    assert "🤖 AI 昨日判断：一般 → 破例小仓买" in s          # 卡面不与账本成交打架
 
 
 def test_verify_card_empty_plan_says_yesterday(monkeypatch, tmp_path):

@@ -50,6 +50,9 @@ QUALITY_SINCE = "2026-09-18"
 #    非文案重复）；只抓真正的长文案重复（实证 09-16 `⚠️ 风险：20cm波动大要盯紧止损` x2）。
 MIN_SENT_LEN = 15         # 参与重复检测的最短句长
 MAX_REPEAT_SAMPLES = 3    # 报告里每条重复最多列几个样例
+# 逐票固定裁决标签会随候选数量重复，但每一条对应不同个股，属于必要结构而非文案重复。
+# 真正的裁决理由仍保留在下一行参与扫描。
+_REPEAT_EXEMPT_PREFIXES = ("🤖 今日9:25判：",)
 # ⛔ 结构字段：其值不是"给人看的文案"（`{"tag":"plain_text"}` 曾把 plain_text 当文案误报）
 _STRUCT_KEYS = {"tag", "template", "color", "msg_type", "type", "mode", "size",
                 "text_size", "width", "wide_screen_mode", "schema", "font"}
@@ -99,6 +102,8 @@ def check_card(path: Path) -> dict:
     # ① 重复句（同卡内同句 ≥2 次）
     seen: dict[str, int] = {}
     for s in _sentences(all_text):
+        if s.startswith(_REPEAT_EXEMPT_PREFIXES):
+            continue
         seen[s] = seen.get(s, 0) + 1
     dup = sorted([(s, n) for s, n in seen.items() if n >= 2], key=lambda x: -x[1])
     rec["repeat"] = [{"sentence": s[:120], "count": n} for s, n in dup[:MAX_REPEAT_SAMPLES]]

@@ -158,7 +158,31 @@ def _dragon_continuation(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]
     return out
 
 
+def _ensure_today_archive() -> str:
+    """收盘后自愈当日涨停池归档（2026-09-18·治「双路径分裂」的消费侧兜底）。
+
+    事故：15:30 财富码 eod 跑本模块时，`cache/zt_history/zt_{今日}.json` 可能还是
+    盘中时间轴建的**空壳**（有 intraday_points、无 zt_list）→ 当日 zt_count=0，
+    题材广度静默失真。处置：读之前先让 scripts/zt_archive 自愈（≥15:00 才抓、
+    只写归档、不碰 yesterday_zt.json、失败不阻断）。⛔ 不重复实现抓取逻辑。
+    """
+    try:
+        import sys
+        scripts = str(ROOT.parent / "scripts")
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        import zt_archive
+        act = zt_archive.ensure_today_archive()
+        if act != "ok":
+            print(f"[theme_roll] 🔧 当日涨停池归档自愈：{act}")
+        return act
+    except Exception as e:  # noqa: BLE001 —— 自愈失败只告警，不阻断盘点
+        print(f"[theme_roll] ⚠️ 归档自愈异常（不阻断）: {e}")
+        return f"error({e})"
+
+
 def run_theme_roll(days: int = DEFAULT_DAYS, *, out_path: Path | None = None) -> dict[str, Any]:
+    _ensure_today_archive()
     snapshots = _load_recent_snapshots(days)
     out_path = out_path or OUT_PATH
 

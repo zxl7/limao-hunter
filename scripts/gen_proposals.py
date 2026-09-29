@@ -164,7 +164,7 @@ def gen_proposals() -> list[dict]:
             np_ = _mk_proposal(
                 "P1_sentiment_bias",
                 f"AI 情绪预判系统性{direction} {abs(avg):.1f} 分",
-                f"近{len(diffs)}日情绪差均值 {avg:+.2f}（样本 {len(diffs)}）",
+                f"近{len(diffs)}日情绪差均值 {avg:+.2f}（已记录 {len(diffs)} 日）",
                 f"财神-选股/复盘 AI 研判的情绪预判需校准：{direction}方向 {abs(avg):.1f} 分。建议人工审阅研判口径后手动改 skill 对应章节。",
             )
             # 幂等：同 rule 同日期已存在则跳过
@@ -182,7 +182,7 @@ def gen_proposals() -> list[dict]:
             np_ = _mk_proposal(
                 "P2_candidate_low",
                 f"候选命中率持续走低（均值 {avg:.0f}%）",
-                f"近{len(cand_rates)}日候选命中率均值 {avg:.1f}%（样本 {sum(cand_counts)} 只）",
+                f"近{len(cand_rates)}日候选命中率均值 {avg:.1f}%（已记录 {sum(cand_counts)} 只）",
                 "财神-选股 relay/watch 候选门槛核查：命中率连续走低，建议人工审阅选股逻辑后手动调整。",
             )
             if not any(e.get("proposal_id") == np_["proposal_id"] for e in existing):

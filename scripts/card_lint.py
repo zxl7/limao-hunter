@@ -188,6 +188,33 @@ def lint_card(card: dict, fix: bool = False) -> tuple[bool, list[dict], list[dic
                 check_fields(v, f"{path}[{i}]")
     check_fields(card)
 
+    # 5) 元素结构检查（2026-09-22 机构晚报空白卡事故·新增 FAIL 项）
+    #    事故：拼卡把正文写成 {"tag":"div","lark_md":"..."}（少一层 text 包裹），
+    #    飞书 div 无 text 对象 → 正文不渲染，客户端只见标题+分割线=整卡空白。
+    #    旧 lint 只查「**存在** content 时其类型」，而该结构里根本没有 content 键
+    #    → check_content_type 空过、整卡放行。此处改为**结构性硬判**。
+    def check_elements(node, path="card"):
+        if isinstance(node, dict):
+            if node.get("tag") == "div":
+                if "lark_md" in node:
+                    errors.append({"level": "FAIL",
+                                   "msg": f"{path} 非法扁平 lark_md（须包进 text.content）: keys={sorted(node.keys())[:6]}"})
+                if "text" not in node and "fields" not in node:
+                    errors.append({"level": "FAIL",
+                                   "msg": f"{path} div 缺 text/fields → 飞书渲染整块空白（2026-09-22 机构晚报事故）"})
+                tx = node.get("text")
+                if tx is not None and not (isinstance(tx, dict)
+                                           and isinstance(tx.get("content"), str)
+                                           and tx["content"].strip()):
+                    errors.append({"level": "FAIL",
+                                   "msg": f"{path} div.text 须为 {{tag:'lark_md', content:非空字符串}}"})
+            for k, v in node.items():
+                check_elements(v, f"{path}.{k}")
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                check_elements(v, f"{path}[{i}]")
+    check_elements(card)
+
     ok = not any(e["level"] == "FAIL" for e in errors)
     return ok, errors, warns
 
