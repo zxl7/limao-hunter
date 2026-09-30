@@ -27,6 +27,8 @@ ZT_DIR = CACHE / "zt_history"
 OUT_PATH = CACHE / "theme_rotation.json"
 TRADING_LOOKBACK = 5     # 5 日窗口：最近 5 个**交易日**文件（2026-08-16 由日历日回看 6 天改交易日计数）
 BOOM_ZT = 3                # 爆发阈值：题材当日涨停数 >= 3 视为 boom
+REENTRY_GAP_MIN_DAYS = 2   # 回流确认：两次爆发间隔≥2个冷却交易日（间隔≥3交易日）才认回流，过滤电风扇
+REENTRY_LOOKBACK_LONG = 15  # 回流确认长历史回看（交易日）：覆盖冷却期超过5日窗口的回流（如09-30医药冷却约一周）
 BOOM_PCT = 4.0             # 或涨幅 >= 4% 也算 boom
 COOL_DAYS_FOR_REENTRY = 2  # 退潮满 2 天后列为回流候选
 COOL_STALE_DAYS = 4         # 2026-08-27 B档：re-entry 悬挂超时——冷却满4天且资金未现回流 → 移出回流候选
@@ -109,12 +111,12 @@ def _recent_files(glob_pattern: str, prefix: str, n: int):
     return dated
 
 
-def _load_series():
-    """加载最近 5 个**交易日**的 eruption 快照，按日期升序。返回 [(date_str, {theme_name: theme_obj})]。"""
+def _load_series(ndays: int = None):
+    """加载最近 ndays 个**交易日**的 eruption 快照，按日期升序。返回 [(date_str, {theme_name: theme_obj})]。"""
     series = []
     if not ERUPT_DIR.exists():
         return series
-    for dd, p in _recent_files(str(ERUPT_DIR / "eruption_*.json"), "eruption_", TRADING_LOOKBACK):
+    for dd, p in _recent_files(str(ERUPT_DIR / "eruption_*.json"), "eruption_", ndays or TRADING_LOOKBACK):
         data = _load(p)
         if not data:
             continue
@@ -133,6 +135,25 @@ def _is_boom(t):
     if not t:
         return False
     return (t.get("zt") or 0) >= BOOM_ZT or (t.get("pct") or 0) >= BOOM_PCT
+
+
+def _classify_reentry(per_day: list, boom_idx: int, gap_min: int = REENTRY_GAP_MIN_DAYS):
+    """判定题材是否「冷却后回流确认」（2026-09-30）。
+
+    条件：① 今日真实爆发(per_day[-1] 是 boom) ② 窗口内更早也曾爆发过
+    ③ 两次爆发之间间隔 ≥ gap_min 个冷却交易日。
+    电风扇板块每天 boom、间隔 0 → 返回 False（不认回流，避免假回流刷屏）。
+    返回 (is_reentry, reentry_gap_days)。
+    """
+    _prev = None
+    for i in range(boom_idx - 1, -1, -1):
+        if _is_boom(per_day[i]):
+            _prev = i
+            break
+    _today_boom = per_day[-1] is not None and _is_boom(per_day[-1])
+    is_reentry = (_prev is not None and (boom_idx - _prev - 1) >= gap_min and _today_boom)
+    gap_days = (boom_idx - _prev - 1) if _prev is not None else 0
+    return is_reentry, gap_days
 
 
 def _heat(t):
@@ -829,6 +850,13 @@ def build(*, live_day=None, live_themes=None, live_codes=None):
         series = [(day, themes) for day, themes in series if day < live_day]
         series.append((live_day, {item["name"]: item for item in (live_themes or []) if item.get("name")}))
         series = series[-TRADING_LOOKBACK:]
+    # 🆕 回流确认长历史回看序列（2026-09-30）：与 series 同源(eruption)，回看更长窗口，
+    #    用于识别"冷却期超过5日窗口"的回流（如医药冷却约一周）。不做 phase 判定，仅供 is_reentry。
+    series_long = _load_series(ndays=REENTRY_LOOKBACK_LONG)
+    if live_day is not None:
+        series_long = [(day, themes) for day, themes in series_long if day < live_day]
+        series_long.append((live_day, {item["name"]: item for item in (live_themes or []) if item.get("name")}))
+        series_long = series_long[-REENTRY_LOOKBACK_LONG:]
     mctx = _market_context()
     # P0-孤岛打通（2026-08-17）：sector_delta 板块增量进轮动判定。
     # 此前 latest.json sector_delta 产出零消费；现读取今日盘中 top5 活跃板块名，
@@ -985,6 +1013,22 @@ def build(*, live_day=None, live_themes=None, live_codes=None):
         boom_date = series[boom_idx][0]
         cooled_days = (len(per_day) - 1) - boom_idx
 
+        # 🆕 回流确认标记（2026-09-30）：区分「新题材首次爆发」与「冷却后重新爆发」。
+        #    先用 5 日窗口判；若窗口内无更早爆发（候选像新题材），再用更长历史回看
+        #    （series_long，覆盖冷却期超过5日的回流，如 09-30 医药冷却约一周）。
+        is_reentry, reentry_gap_days = _classify_reentry(per_day, boom_idx)
+        if not is_reentry:
+            _pl = [mp.get(nm) for _, mp in series_long]
+            _bi = None
+            for _i in range(len(_pl) - 1, -1, -1):
+                if _is_boom(_pl[_i]):
+                    _bi = _i
+                    break
+            if _bi is not None and _bi != len(_pl) - 1:
+                _ok_l, _gap_l = _classify_reentry(_pl, _bi)
+                if _ok_l:
+                    is_reentry, reentry_gap_days = True, _gap_l
+
         # 相位判定
         if boom_idx == len(per_day) - 1:
             phase = "boom"                 # 今天刚爆发
@@ -1103,6 +1147,9 @@ def build(*, live_day=None, live_themes=None, live_codes=None):
             "zt_valid_days": zt_valid,     # 补全后有效天数（数据质量）
             # P0-孤岛打通（2026-08-17）：今日盘中 top5 活跃板块（sector_delta）交叉验证
             "today_hot": nm in today_hot_names,   # 今日仍在活跃 → 回流概率高
+            # 🆕 回流确认标记（2026-09-30）：is_reentry 由引擎判定，供 live_signal 实时弹回流确认卡
+            "is_reentry": is_reentry,
+            "reentry_gap_days": reentry_gap_days,
         })
 
     # 候选排序：re-entry-candidate 优先，其次置信度；总量封顶（沉淀密度 7 个左右）

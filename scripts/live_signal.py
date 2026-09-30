@@ -306,6 +306,7 @@ EBB_MIN_DIMS = 2                 # 恶化维度命中数下限（≥2 才推·�
 # 语义：回流前兆 = 冷却/分歧中的题材当日盘中翻回资金净流入榜；boom(今日已爆发)/dead(死透)排除。
 REFLOW_PHASE_WIDEN = True
 REFLOW_PHASES = {"re-entry-candidate", "cooling", "分歧", "watch"}
+REENTRY_BOOM_MIN_ZT = 3   # 与 theme_rotation.BOOM_ZT 同源·回流确认卡强度门槛（今日涨停数需达此值）
 
 # ── 回流前兆「资金趋势」主判据（2026-09-15 用户拍板·口径切换）──
 # 背景：「电子布」刷屏事故暴露——原判定唯一触发条件是**当日实时资金榜命中**，
@@ -1040,6 +1041,69 @@ def build_reflow_card(cands, hhmm: str) -> dict:
     elements.append({"tag": "note", "elements": [
         {"tag": "plain_text", "content": "🔔 资金与题材回流监控（机器检测·非AI判断）"}]})
     return {"title": f"⚡短线精灵·回流监控 {hhmm}", "color": "purple", "elements": elements}
+
+
+def build_reflow_confirm_card(cands, hhmm: str) -> dict:
+    """回流确认卡：题材冷却后今天重新爆发（系统原盲区信号）。
+
+    与回流前兆卡互补——前兆卡抓"冷却中预判回流"，本卡抓"今天已经爆发的回流"。
+    大白话呈现，不堆机器黑话；不是买点信号，只做事实提醒。
+    """
+    lines = ["**⚡ 回流确认**（之前冷却过、今天重新爆发，不是新题材）："]
+    for c in cands[:6]:
+        theme = c.get("theme", "")
+        _zt = c.get("boom_zt") or 0
+        zt = int(_zt) if isinstance(_zt, (int, float)) and float(_zt) == int(_zt) else _zt
+        gap = c.get("reentry_gap_days") or 0
+        pool = "、".join(f"{s.get('name')}" for s in (c.get("watch_pool") or [])[:4] if s.get("name"))
+        lines.append(f"　<font color='red'>▸ {theme}｜今日涨停{zt}只｜冷却{gap}天后回流｜核心 {pool}</font>")
+    lines.append("")
+    lines.append("<font color='purple'>回流确认是事实提醒，不是买点信号；下手看龙头封单、五日线与资金是否真跟上</font>")
+    elements = [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}}]
+    elements.append({"tag": "note", "elements": [
+        {"tag": "plain_text", "content": "⚡ 题材回流确认（机器检测·非AI判断）"}]})
+    return {"title": f"⚡短线精灵·回流确认 {hhmm}", "color": "red", "elements": elements}
+
+
+def _detect_reflow_confirm(candidates, pushed_map, sig_map, now, cooldown_sec):
+    """回流确认候选筛选（2026-09-30，单一源·可单测）。
+
+    输入候选（已带 is_reentry 标记），做：
+    ① is_reentry 过滤 ② 板块强度二次过滤(今日涨停数≥阈值) ③ 限频+内容指纹去重防刷屏。
+    返回 (待推候选列表, 跳过数, 冷却去重数)。
+    """
+    out, skip, cool = [], 0, 0
+    for c in candidates or []:
+        if not c.get("is_reentry"):
+            skip += 1
+            continue
+        nm = c.get("theme", "")
+        if not nm:
+            continue
+        _zt = c.get("boom_zt") or 0
+        # 板块强度二次过滤：今日涨停数需达爆发阈值（is_reentry 已隐含今日 boom，此处双保险）。
+        if _zt < REENTRY_BOOM_MIN_ZT:
+            continue
+        _sig_now = f"{int(_zt)}#" + "|".join(
+            sorted(str(s.get("code") or "") for s in (c.get("watch_pool") or [])[:4]))
+        _last = pushed_map.get(nm, "")
+        _ok = not _last
+        if _last:
+            try:
+                _cd_ready = (now - datetime.fromisoformat(_last)).total_seconds() > cooldown_sec
+            except Exception:
+                _cd_ready = False
+            # 冷却到期只代表"允许再推"，还须指纹变化（涨停数/跟踪池变了）才算真变化，防刷屏。
+            if _cd_ready and sig_map.get(nm, "") != _sig_now:
+                _ok = True
+            else:
+                _ok = False
+                cool += 1
+        if _ok:
+            out.append(c)
+            pushed_map[nm] = now.isoformat()
+            sig_map[nm] = _sig_now
+    return out, skip, cool
 
 
 def build_card(new_nf, new_zt, new_surge, new_strong, hhmm: str, new_sector=None, new_charge=None) -> dict:
@@ -1998,6 +2062,15 @@ def main():
     live_inflow: set = set()
     _st_phase = _st_pool = _st_cool = _st_nodup = _st_flow = 0   # P2-10 漏斗计数（初始化在此，防 try 早期异常未定义）
     _st_probe = _st_confirm = _st_failed = 0
+    # 🆕 回流确认监测（2026-09-30）：独立冷却 map，与回流前兆互不干扰
+    reflow_confirm_cands = []
+    _reflow_confirm_pushed_raw = sig.get("reflow_confirm_pushed", {})
+    reflow_confirm_pushed = (dict(_reflow_confirm_pushed_raw)
+                             if isinstance(_reflow_confirm_pushed_raw, dict) else {})
+    _reflow_confirm_sig_raw = sig.get("reflow_confirm_sig_map", {})
+    reflow_confirm_sig_map = (dict(_reflow_confirm_sig_raw)
+                              if isinstance(_reflow_confirm_sig_raw, dict) else {})
+    _st_confirm_skip = _st_confirm_cool = 0
     try:
         tr = load(CACHE / "theme_rotation.json")
         inflow_names = {x.get("name") for x in (tr.get("market_context") or {}).get("inflow_top", [])}
@@ -2079,6 +2152,16 @@ def main():
             else:
                 _st_cool += 1
                 reflow_stage_map[nm] = stage
+
+        # ── 🆕 回流确认监测（2026-09-30）：识别「冷却后重新爆发」的题材（is_reentry）。
+        #    与回流前兆（冷却中预判）互补：前兆抓"冷却中预判回流"，本段抓"今天已爆发的回流"
+        #    ——正是 09-30 医药这类系统原盲区。限频防刷屏：独立冷却 map + 内容指纹。
+        #    ⛔ 必须在 for 循环【之外】只调一次：本函数会改写 reflow_confirm_pushed 冷却时间戳，
+        #       若放在循环体内每轮对全部候选重跑，首轮标记后次轮即被冷却/去重过滤 → 最终恒为空
+        #       （实测回流确认卡永不触发）。移到循环外一次性判定，才是正确语义。
+        reflow_confirm_cands, _st_confirm_skip, _st_confirm_cool = _detect_reflow_confirm(
+            tr.get("candidates"), reflow_confirm_pushed, reflow_confirm_sig_map,
+            datetime.now(), _reflow_cd)
     except Exception as e:
         print(f"[live_signal] reflow detect ERR:{e}")
     # ⛔ 2026-09-14 修复（刷屏级·与上方 1713 同源故障的第二处）：原下一行
@@ -2091,6 +2174,9 @@ def main():
     sig["reflow_pushed"] = reflow_pushed
     sig["reflow_sig_map"] = reflow_sig_map   # ⛔ 必须与 reflow_pushed 同写入，否则指纹丢失=去重失效
     sig["reflow_stage_map"] = reflow_stage_map
+    # 🆕 回流确认冷却状态写回（2026-09-30）：与回流前兆独立，避免互相污染去重
+    sig["reflow_confirm_pushed"] = reflow_confirm_pushed
+    sig["reflow_confirm_sig_map"] = reflow_confirm_sig_map
     # P2-10 审计（2026-09-11）：回流前兆判定留痕——每日首次记录**漏斗分解**
     # （phase 不匹配 / 资金榜未命中 / 冷却中 / 最终命中），零触发时可直接定位卡在哪一层。
     # ⛔ dry-run 不写（防污染真实诊断）。
@@ -2291,6 +2377,17 @@ def main():
                 cf_r.write_text(json.dumps(reflow_card, ensure_ascii=False), encoding="utf-8")
                 rc_r = os.system(f'{PY} "{HERE / "short_spirit.py"}" --send "{cf_r}"')
                 print(f"[live_signal] 回流前兆推送{'成功' if rc_r == 0 else '失败'} n={len(reflow_cands)}")
+        # 🆕 回流确认卡（2026-09-30）：独立即时推，与回流前兆互不干扰
+        if reflow_confirm_cands:
+            cf_c = build_reflow_confirm_card(reflow_confirm_cands, hhmm)
+            if dry:
+                print("[live_signal][dry-run] 回流确认卡：")
+                print(json.dumps(cf_c, ensure_ascii=False, indent=2))
+            else:
+                cf_rc = Path(tempfile.gettempdir()) / "limao_reflow_confirm_card.json"
+                cf_rc.write_text(json.dumps(cf_c, ensure_ascii=False), encoding="utf-8")
+                rc_rc = os.system(f'{PY} "{HERE / "short_spirit.py"}" --send "{cf_rc}"')
+                print(f"[live_signal] 回流确认推送{'成功' if rc_rc == 0 else '失败'} n={len(reflow_confirm_cands)}")
         else:
             # 冷却到期且 pending 有积压 → 补推合并卡（2026-08-18：避免行情平静期信号滞留）
             _pend = load_pending()
@@ -2437,6 +2534,17 @@ def main():
             cf_r.write_text(json.dumps(reflow_card, ensure_ascii=False), encoding="utf-8")
             rc_r = os.system(f'{PY} "{HERE / "short_spirit.py"}" --send "{cf_r}"')
             print(f"[live_signal] 回流前兆推送{'成功' if rc_r == 0 else '失败'} n={len(reflow_cands)}")
+    # 🆕 回流确认卡（2026-09-30）：独立即时推，与回流前兆互不干扰
+    if reflow_confirm_cands:
+        cf_c = build_reflow_confirm_card(reflow_confirm_cands, hhmm)
+        if dry:
+            print("[live_signal][dry-run] 回流确认卡：")
+            print(json.dumps(cf_c, ensure_ascii=False, indent=2))
+        else:
+            cf_rc = Path(tempfile.gettempdir()) / "limao_reflow_confirm_card.json"
+            cf_rc.write_text(json.dumps(cf_c, ensure_ascii=False), encoding="utf-8")
+            rc_rc = os.system(f'{PY} "{HERE / "short_spirit.py"}" --send "{cf_rc}"')
+            print(f"[live_signal] 回流确认推送{'成功' if rc_rc == 0 else '失败'} n={len(reflow_confirm_cands)}")
 
     # 📊 板块加强独立卡（2026-09-07 优化A/B/C·总开关默认关）：
     # HIGH_FREQ 高频模式下 A 级板块信号只触发 short_spirit 个股卡 → 板块级"强势/加强"
