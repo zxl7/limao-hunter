@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # 统一 JSON 原子写（2026-09-02 · P0-1）：latest.json 曾被并发写坏
 # （两个进程各自 O_TRUNC 后按自身 offset 写 → 新内容+旧尾部残余 →
-#  gen_watch 解析报 JSONDecodeError: Extra data: line 1697）。
+#  展示端解析报 JSONDecodeError: Extra data: line 1697）。
 # 铁律：快照类 JSON 一律走 common.json_io.save_json（tmp+fsync+os.replace）。
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from common.json_io import save_json as _save_json, load_json as _load_json
@@ -1493,6 +1493,22 @@ def _sector_status(name, cur_zt, prev_map):
         return "surging"
     return "ongoing"
 
+
+def _previous_theme_zt_count(stocks, previous_zt_codes):
+    """按今日题材成分股回看昨日涨停池，得到可比的昨日题材涨停家数。
+
+    `prev_data` 是上一轮盘中快照，只能用于本轮增量状态，不能冒充昨日数据。
+    昨日池缺失时返回 None，避免把未知展示成 0。
+    """
+    if previous_zt_codes is None:
+        return None
+    codes = {
+        str(s.get("code") or "").split(".")[0].strip()
+        for s in (stocks or [])
+        if str(s.get("code") or "").strip()
+    }
+    return len(codes & previous_zt_codes)
+
 def build_limit_up_stocks(stocks, total_zt):
     """构造本轮完整涨停集合，供时间轴精确核对涨停家数变化的个股归因。"""
     rows = []
@@ -1525,11 +1541,21 @@ def build_summary_json(sectors, plates, diagnoses, total_zt, zt_count, risks, po
         return True
     ranked = [(pid, sec) for pid, sec in sorted(sectors.items(), key=lambda x: (-x[1]["zt"], -x[1]["hot"]))
               if keep(pid, sec)][:10]  # 放宽候选池，供 AI 全量研判后精选 TOP3
-    # 板块增量：对比上一次推送快照
-    prev_map = {}
+    # 板块增量：对比上一次推送快照（仅供盘中 new/surging/ongoing 状态）。
+    intraday_prev_map = {}
     if prev_data:
         for s in prev_data.get("top5", []):
-            prev_map[s.get("name")] = s.get("zt_count", 0)
+            intraday_prev_map[s.get("name")] = s.get("zt_count", 0)
+    # 页面「昨日」必须来自昨日涨停池；不能复用上一分钟盘中快照。
+    # 路径：cache/yesterday_zt.json 在 cache/ 根，而本文件 CACHE_DIR 指向 cache/pulse_snapshots/。
+    yesterday = _load_json(CACHE_DIR.parent / "yesterday_zt.json")
+    previous_zt_codes = None
+    if isinstance(yesterday, dict) and isinstance(yesterday.get("zt_list"), list):
+        previous_zt_codes = {
+            str(row.get("code") or "").split(".")[0].strip()
+            for row in yesterday["zt_list"]
+            if str(row.get("code") or "").strip()
+        }
 
     top5 = []
     for pid, sec in ranked:
@@ -1544,6 +1570,7 @@ def build_summary_json(sectors, plates, diagnoses, total_zt, zt_count, risks, po
             if s.get("up") and s["code"] in positives:
                 sector_pos.append(f"{s['name']}({','.join(t['tag'] for t in positives[s['code']][:2])})")
         _ldr_code = (leader or {}).get("code", "")
+        previous_theme_zt = _previous_theme_zt_count(all_s, previous_zt_codes)
         top5.append({
             "rank": len(top5)+1, "name": sec["name"], "desc": sec.get("desc", ""),
             "zt_count": sec["zt"], "turn_avg": sec.get("turn_avg", 0), "total_stocks": len(all_s),
@@ -1571,8 +1598,8 @@ def build_summary_json(sectors, plates, diagnoses, total_zt, zt_count, risks, po
             "diffusion": "共振" if len(up_s)>=3 else ("扩散" if len(up_s)>=2 else "单点"),
             "risks": [f"{r['stock']}({r['risk']})" for r in sector_risks[:3]],
             "positives": sector_pos[:3],
-            "delta": _sector_status(sec["name"], sec["zt"], prev_map) if prev_map else "new",
-            "zt_prev": prev_map.get(sec["name"]),
+            "delta": _sector_status(sec["name"], sec["zt"], intraday_prev_map) if intraday_prev_map else "new",
+            "zt_prev": previous_theme_zt,
         })
     ebb = detect_ebb(sectors, stocks, total_zt)
     index = index or []

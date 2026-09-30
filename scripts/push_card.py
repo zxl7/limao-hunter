@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse, glob, json, os, sys
 from datetime import datetime
 from pathlib import Path
+from typing import Optional  # 2026-09-30：load_webhook 注解用到，此前靠 __future__ 延迟求值兜住
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT = SCRIPT_DIR.parent

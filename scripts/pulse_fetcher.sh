@@ -12,7 +12,7 @@ STATE=cache/pulse_snapshots/.last_fetch_ts
 # 事故：crontab 存在两条完全重复的 `* * * * *` 调用 + launchd 守护(StartInterval=30) 三方抢跑，
 #      两条 cron 同秒启动时都会通过下方 STATE 节流（读到同一个旧 LAST）→ 整轮链路并发跑两遍：
 #      ① fetch.log 每行重复两次（时间线交错）②异动群同卡同秒双推（10:02:22 实证）
-#      ③ gen_dashboard 并发写 dashboard.html → rc=1（当日 5 次 FAIL：00:27/03:28/09:42/09:46/10:49）。
+#      ③ 旧 HTML 渲染并发写页面 → rc=1（该展示链路现已退役）。
 # 方案：锁放在最前（节流检查之前，因「读 STATE→比较→写 STATE」本身非原子），任何来源的并发只能进一个。
 # 陈旧锁：进程被 kill 等异常退出会残留 → 锁目录 mtime 超 600s 视为残留，自动清理后接管。
 LOCKDIR=/tmp/limao_pulse_fetcher.lock
@@ -82,7 +82,6 @@ rotate_log "$LOG"
 echo "[$(date '+%H:%M:%S')] fetch start (interval=${TARGET}s)" >> "$LOG"
 run_step "realtime_data"   "$PY scripts/realtime_data_pipeline.py"   "cache/pulse_snapshots/data-pipeline.log"
 run_step "realtime_push"   "$PY scripts/realtime_push_pipeline.py"   "cache/pulse_snapshots/push-pipeline.log"
-run_step "realtime_render" "$PY scripts/realtime_render_pipeline.py" "cache/pulse_snapshots/render-pipeline.log"
 # 2026-08-18 用户「脉冲与精灵分工」方案B：砍掉精灵日常持续调用，退化为仅 S级共振(live_signal.py:903)
 # + 冷却补推(:776) 触发。日常异动全交给窗口卡(close_window_step)；精灵不再每轮守护链跑，避免双线冗余刷屏。
 # run_step "short_spirit"    "$PY scripts/short_spirit.py --push"                                    "cache/pulse_snapshots/short_spirit.log"
@@ -178,6 +177,12 @@ except Exception:
 }
 # volume_trigger_step   # 2026-09-03 高频单通道停用（见 close_window_step 注释）
 echo "[$(date '+%H:%M:%S')] data→push→render done" >> "$LOG"
+
+# 链路断档守卫（2026-09-30 事故新增）：交易时段内数据/推送链路持续不就绪时，主动推一张告警卡，
+# 根治「静默停摆」——当日 09:15-09:41 共 98 轮全 skip 且**零告警**，早盘异动信号整段丢失，
+# 靠用户自己发现。判定：ready=false 或标记 5 分钟未刷新；连续 5 轮(≈2.5min)才告警，冷却 30min 防刷屏。
+# 守卫自身失败绝不拖累主链路（`|| true`）；回滚：设 LINK_GUARD=0 或注释本行。
+$PY scripts/link_guard.py >/dev/null 2>&1 || true
 
 # 每日一次清理过期记忆/去重状态（保留最近5个交易日）。守卫：同一天只清一次。
 PRUNE_STATE=cache/pulse_snapshots/.last_prune_date

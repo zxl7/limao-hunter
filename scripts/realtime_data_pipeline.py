@@ -26,6 +26,23 @@ STEPS = (
 )
 
 
+def _publish_theme_series() -> int:
+    """发布题材序列及当日盘中时间点；展示端只读取已发布 JSON。"""
+    try:
+        # 本脚本以 `scripts/realtime_data_pipeline.py` 启动时 sys.path[0]=scripts/，
+        # 不含仓库根 → `import common.*` 会 ModuleNotFoundError（2026-09-30 事故）。
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from common.theme_series import export_series_json, record_intraday_point
+
+        record_intraday_point()
+        export_series_json()
+        return 0
+    except Exception as exc:  # noqa: BLE001 — 单独记入数据就绪状态，禁止旧序列冒充新产物
+        print(f"[theme-series] publish failed: {exc}", file=sys.stderr)
+        return 1
+
+
 def _json(path: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -49,11 +66,12 @@ def _run(label: str, args: tuple[str, ...], log_name: str) -> int:
 def main() -> None:
     PULSE.mkdir(parents=True, exist_ok=True)
     results = {label: _run(label, args, log) for label, args, log in STEPS}
+    results["theme_series"] = _publish_theme_series()
     latest = _json(PULSE / "latest.json")
     feedback = _json(CACHE / "feedback_matrix.json")
     rotation = _json(CACHE / "theme_rotation.json")
     source_ts = latest.get("ts")
-    required_ok = all(results.get(label) == 0 for label in ("intraday_pulse", "feedback_matrix", "realtime_analytics"))
+    required_ok = all(results.get(label) == 0 for label in ("intraday_pulse", "feedback_matrix", "realtime_analytics", "theme_series"))
     same_source = bool(source_ts and rotation.get("source_ts") == source_ts)
     ready = required_ok and same_source and not feedback.get("error")
     # 推送只认这份标记；任一步关键计算失败，保留原因而不把旧数据当作新数据推送。
