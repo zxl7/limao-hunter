@@ -13,7 +13,7 @@ import py_compile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SCAN_DIRS = ("scripts", "wealth_code", "HTML", "common", "tests")
+SCAN_DIRS = ("scripts", "wealth_code", "common", "tests")
 MIN_EXPECTED = 50          # 扫描面守卫：文件数骤降说明扫描逻辑坏了
 
 

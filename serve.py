@@ -4,9 +4,9 @@
 serve.py —— 狸猫猎手 对外只读 Web 服务（白名单制）
 
 职责（v3 收敛版 L1，零重构，仅新增此文件）：
-  把本机 file:// 变成 http(s)://，且**只暴露该暴露的**。
+  托管终端 React 应用为 http(s)://，且**只暴露该暴露的**。
 
-  · 静态白名单：托管 狸猫终端 dist / watch.html / dashboard.html + SPA fallback
+  · 静态白名单：托管 狸猫终端 dist + SPA fallback
   · API 白名单：只读转发 routes.ts 的「公开盘面数据」子集
       ⛔ 排除 /api/ai/* /api/decision/* /api/account/*（AI 决策 / 净值 / 决策黑匣子）
   · 公网鉴权：SHARE_TOKEN 环境变量（设置后所有请求必须带 ?t= 或 Authorization: Bearer）
@@ -42,7 +42,6 @@ DATA_ROOT = os.environ.get("LIMAO_DATA_ROOT") or PROJECT_ROOT
 DIST_DIR = os.environ.get("LIMAO_DIST_DIR") or os.path.normpath(
     os.path.join(PROJECT_ROOT, "..", "狸猫终端", "dist")
 )
-HTML_DIR = os.path.join(PROJECT_ROOT, "HTML")
 CACHE_DIR = os.path.join(DATA_ROOT, "cache")
 
 SHARE_HOST = os.environ.get("SHARE_HOST", "0.0.0.0")
@@ -50,7 +49,7 @@ SHARE_PORT = int(os.environ.get("SHARE_PORT", "8000"))
 SHARE_TOKEN = os.environ.get("SHARE_TOKEN") or ""  # 空 = 不鉴权
 
 ACCESS_LOG = os.path.join(CACHE_DIR, "access_log.jsonl")
-ALLOWED_ROOTS = [os.path.realpath(p) for p in (DIST_DIR, HTML_DIR, CACHE_DIR)]
+ALLOWED_ROOTS = [os.path.realpath(p) for p in (DIST_DIR, CACHE_DIR)]
 
 # ────────────────────────────────────────────────────────────────
 # 路由语义（复刻 scripts/lib/read-route.mjs）
@@ -203,6 +202,7 @@ PUBLIC_ROUTES = {
     "/api/market/prev": {"file": "cache/pulse_snapshots/prev.json", "cadence": "intraday", "desc": "上一版快照"},
     "/api/market/auction": {"file": "cache/pulse_snapshots/auction_live.json", "cadence": "intraday", "desc": "竞价实时报价"},
     "/api/market/signals": {"file": "cache/short_spirit_signals.json", "cadence": "intraday", "desc": "短线精灵信号"},
+    "/api/market/relay-effect": {"file": "cache/relay_effect.json", "cadence": "intraday", "desc": "连板量能与承接观察"},
     "/api/market/feedback": {"file": "cache/feedback_matrix.json", "cadence": "intraday", "desc": "涨停反馈矩阵"},
     "/api/market/candidates": {"file": "cache/pulse_snapshots/candidates.json", "cadence": "intraday", "desc": "候选池"},
     # 二、题材 / 资金
@@ -256,9 +256,8 @@ HEALTH_ROUTES = [(r, d) for r, d in PUBLIC_ROUTES.items() if d.get("file") or d.
 STATIC_MAP = {
     "/": ("dist", "index.html"),
     "/index.html": ("dist", "index.html"),
-    "/watch": ("html", "watch.html"),
-    "/dashboard": ("html", "dashboard.html"),
 }
+RETIRED_ROUTES = {"/watch", "/dashboard"}
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -282,8 +281,6 @@ CONTENT_TYPES = {
 def _root_path(key, *parts):
     if key == "dist":
         return os.path.join(DIST_DIR, *parts)
-    if key == "html":
-        return os.path.join(HTML_DIR, *parts)
     return None
 
 
@@ -445,6 +442,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_file(cand, "text/html; charset=utf-8")
                 write_access(ts, ip, path, 200, True, token_present)
                 return
+            self.send_error(404)
+            write_access(ts, ip, path, 404, False, token_present)
+            return
+
+        # 已退役页面必须明确 404，不能被 SPA fallback 伪装成仍可访问。
+        if path in RETIRED_ROUTES:
             self.send_error(404)
             write_access(ts, ip, path, 404, False, token_present)
             return

@@ -1,6 +1,6 @@
 # 狸猫猎手 · 对外共享部署参考
 
-> 系统现状：**L0（本机 file://）+ 现已补 L1 `serve.py`**。后端数据管线（24 个 WorkBuddy 自动化）继续跑在本机 Mac，serve.py 只做「只读 Web 托管 + 白名单 + 鉴权」。
+> 系统现状：终端 React 应用是唯一展示端。后端数据管线（24 个 WorkBuddy 自动化）继续跑在本机 Mac，serve.py 只做「只读 Web 托管 + 白名单 + 鉴权」。
 
 ## 架构原则（铁律）
 - **Mac = 数据引擎**：WorkBuddy 自动化写 `cache/*.json`；serve.py 只读这些落盘文件。
@@ -40,7 +40,7 @@ ngrok 给出 `https://xxxx.ngrok-free.app`，把链接发朋友即可（带 toke
 ```bash
 # 装 Python3（标准库即可，零依赖）
 python3 --version
-# 把项目（含 serve.py / HTML / cache）rsync 到服务器
+# 把项目（含 serve.py / cache）rsync 到服务器
 ```
 
 ### 2. Mac → 服务器 增量同步（见 deploy/sync_cache.sh）

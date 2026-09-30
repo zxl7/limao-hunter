@@ -98,7 +98,7 @@
 | `cache/yesterday_zt.json` | sector_daily.zt_count 源 | record_zt_snapshot.py | pipeline_eod |
 | `wealth_code/cache/candidates-{date}.json` | candidate_relay（+relay_score 扩展） | pipeline_eod + relay_score | eod 卡 |
 | `cache/newsflash_history/daily_{date}.json` | news_events | capture_daily.py | 复盘/5日汇总 |
-| `wealth_code/cache/account_nav_history.jsonl` | nav_ledger | pipeline_verify/eod | perf_report |
+| `wealth_code/cache/account_nav_history.jsonl` | nav_ledger | pipeline_verify/eod | 狸猫终端交易战绩页 |
 
 ### 2.3 关联后的统一视图（relay_score 输出扩展 · 实现落点）
 

@@ -171,7 +171,7 @@ def _heal_residual_archives(heal_date: str, pool: list, limit: int = 5) -> list:
     （= 本次 yesterday_zt 的口径日），用该池补写；来源不明的残缺日只告警不编造。
 
     事故链（09-11 实证）：盘后链里 capture_daily 早于 record_zt_snapshot 跑完 → 当日的
-    `yesterday_zt.json` 还是前一交易日的 → 当日文件被 HTML/theme_data 的盘中时间轴创建成
+    `yesterday_zt.json` 还是前一交易日的 → 当日文件被 theme_series 的盘中时间轴创建成
     `intraday_only`（无 zt_list），此后永无来源补 → 形态/N字/回流检测永久少一天料。
     """
     if not pool:

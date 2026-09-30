@@ -403,12 +403,11 @@
   1. 来源行：`📡 选股宝+东财 | {HH:MM}`
   2. 免责声明：`⚠️ 本报告基于公开信息分析，投资需谨慎`
   - 脚本卡用两个 `note` 元素（来源行 + 免责行）；AI 卡在最后追加这两行 `note`。飞书 `note` 为纯文本、不支持 `<font>`，故免责行写纯文字即可。改此处即视为全局生效，脚本侧须同步。
-  - **⚠️ 脚本生成卡例外（2026-08-05 用户明确）**：所有**脚本代码生成**的实时/数据层卡片**底部只保留来源行，不显示免责声明**——含 `live_signal.py` 的 ⚡ 盘中异动信号 / ⚠️ 亏钱效应预警，以及 `intraday_pulse.py` 的 盘中脉搏/TOP5（build_top5_card）/ 退潮预警（build_ebb_card）/ 收盘总结（build_post_card）。免责声明**仅保留在 AI 拼卡的三类**：「中卡=11 盘中猎手」与「长卡=盘前预测/盘后复盘」。**本地 HTML 预览/看板（preview_card.py / gen_dashboard.py）属屏上看报告，保留免责。** 改此处即全局生效，脚本侧须同步（live_signal.py 的 build_card/build_nuke_card、intraday_pulse.py 的 build_top5_card/build_ebb_card/build_post_card 均已去掉免责 `note`）。
+  - **⚠️ 脚本生成卡例外（2026-08-05 用户明确）**：所有**脚本代码生成**的实时/数据层卡片**底部只保留来源行，不显示免责声明**——含 `live_signal.py` 的 ⚡ 盘中异动信号 / ⚠️ 亏钱效应预警，以及 `intraday_pulse.py` 的盘中脉搏/TOP5、退潮预警和收盘总结。免责声明**仅保留在 AI 拼卡的三类**：「中卡=11 盘中猎手」与「长卡=盘前预测/盘后复盘」。改此处即全局生效，脚本侧须同步。
   - **T+1 交易规则（A股T+1·当日成交次日方可卖出）仅作记忆存档，卡片页脚不再提示**（2026-08-03 用户明确「写入记忆就行，不用提示」）。
   - **心法页脚（仅「盘前预测」「盘后复盘」两类长卡，2026-08-06 精简）**：免责声明之后可追加一行心法金句。**盘中猎手（11个·ACTIVE）/ 脚本卡（live_signal、脉搏、退潮、TOP5、看板）一律不加**（实时性优先，控时延）。
 - 盘前 blue / 盘后 blue 或 red 模板主色保持不变（蓝=信息/红=警示），仅数据数字按涨红跌绿着色。
 - **🔒 单源权威声明**：本块是配色唯一权威源，分两套渲染环境：
-- **本地 HTML 预览 / 仪表盘**（支持 hex）：红=`#ee2500`、绿=`#093`、可买紫=`#8b5cf6`、跟涨金=`#f0a020`、换手蓝=`#3b82c4`、退潮浅绿=`#2dd4bf` —— 直接写进 CSS 变量（HTML/gen_dashboard.py / HTML/gen_trend_panel.py 的 `--up`/`--down` 等），预览即显示精确色号。
 - **飞书推送卡片**（平台限制）：`lark_md` 的 `<font color='X'>` **只接受命名色**（red / green / blue / yellow / purple / orange / grey / black / white），**不支持 hex** —— 直接写 `#ee2500` 会被飞书忽略、退回默认黑字（已踩坑：2026-08-03 盘中卡用 hex 推送后用户反馈全卡无颜色）。命名色→本块语义映射：red=龙头红 / green=跌绿 / blue=换手蓝 / yellow=跟涨金·封板金 / purple=可买紫 / turquoise=退潮浅绿 / **orange=切换日·转折试错（旧龙断板+新方向首板·见【情绪传递/龙头接力·切换日】）**。AI 拼飞书卡时一律用命名色，禁止写 hex；改色只动本文件一处即全局生效。
 
 ---
@@ -445,7 +444,6 @@
 | 3 | 退潮预警卡 | 脚本 `build_ebb_card` | `{tag}{severity} {HH:MM}` | 浅绿 `turquoise` | **时段限频触发（2026-08-14 改：早/中/下午各≤1张·加剧随时推）** | 退潮信号 / 操作建议 | 整卡浅绿，警示语红 |
 | 3.5 | **核按钮预警卡** | 脚本 `live_signal.build_nuke_card` | `⚠️ 亏钱效应预警 {HH:MM}` | 浅绿 `turquoise` | feedback_matrix nuke_count>=3（每天≤1次） | 核按钮名单(昨连板优先) / 均涨幅 / 晋级率 / 防守建议 | 跌停级跌幅绿、警示语红；与信号卡独立推送 |
 | 4 | 收盘总结卡 | 脚本 `build_post_card` | （盘后 data-layer） | 蓝/红 | **🔒 已退役·仅 debug 工具（2026-09-03 自查）：当日盘面总结=盘后复盘卡 17:18 子集，禁止作生产推送** | 当日盘面总结 | 见配色规范 |
-| 5 | HTML 看板 | 脚本 `gen_dashboard.py` | — | — | 守护每 2min 重建 | 全量盘面 + 可买紫 / 涨停红 | CSS 变量对齐配色 hex |
 | 6 | 盘中猎手研判卡 ×11 | ✅ 活跃(2026-08-05恢复) | 各任务自定（禁圆点） | 红/紫 | 09:25–14:30 错峰（各 HOURLY+BYMINUTE） | delta分级渲染+信号摘要+反馈矩阵+AI研判 | 见【配色】+【机会行/涨停行模板覆盖】 |
 | 7 | 盘中快照卡 ×1 | ⏸️ 已暂停(2026-08-05) | — | — | 原每20分钟（RRULE最小粒度1小时，20分钟不可行） | 功能由11猎手(行6)覆盖，保留可随时激活 | — |
 | 8 | 盘前预测卡 ×1 | 任务 prompt（AI 拼） | `📊 盘前预测·全量 {MM-DD} \| {一句话定调}` | indigo（靛蓝） | 06:06 | 隔夜消息 + 昨日涨停名单基数 + 盘前预判 + 持仓应对 | 见全部规范；允许 column_set |
@@ -459,7 +457,7 @@
 - **背景**：平台调度抖动 ±2~5 分，rrule 写 9:25 实际触发 09:25–09:30、卡片实测 09:28–09:30 才推送（db automation_runs 实证），用户要求 9:25 精确执行。
 - **职责拆分（防双推）**：
   - 平台自动化 `automation-1786429073209`（9:20 触发）= **AI 旁白生成器**：写 `/tmp/wealth_narr_verify.json`（全局 🗣️）+ `verify --fetch` 数据准备（幂等·不推卡）+ 09:40 兜底补推（仅当 `/tmp/wealth_verify_done_<今日>` 标记缺失=launchd 未推）。⛔ 禁止 verify --push 主流程。
-  - launchd `com.limao.wealth-verify`（09:25:00 本地精确触发）= **数据+推送**：等待竞价报价落地（≥09:26:05，verify 内置守卫阈值 09:26，早于则跳过推送）→ `verify --fetch --push`（旁白文件存在则 `--narratives` 注入）→ `perf_report.py` → 落盘校验 → 写 `/tmp/wealth_verify_done_<今日>` 幂等标记（防重复触发）。
+  - launchd `com.limao.wealth-verify`（09:25:00 本地精确触发）= **数据+推送**：等待竞价报价落地（≥09:26:05，verify 内置守卫阈值 09:26，早于则跳过推送）→ `verify --fetch --push`（旁白文件存在则 `--narratives` 注入）→ 落盘校验 → 写 `/tmp/wealth_verify_done_<今日>` 幂等标记（防重复触发）。
 - **物理约束**：竞价 09:25 结束、报价抓取需约 1 分钟落地 → 卡片最早 ≈09:26 出（⛔不能为了"准时"推报价缺失的空卡）；launchd 消除平台抖动后卡片稳定 09:26–09:27。
 - **回滚**：`launchctl unload ~/Library/LaunchAgents/com.limao.wealth-verify.plist` + 恢复平台自动化原 prompt（verify --push 版）。
 
@@ -470,7 +468,6 @@
    - **全量**（收盘/盘前全景卡）：盘后候选（eod）、盘后复盘（17:00）、盘前预测（06:06）、intraday_pulse 收盘总结。
 3. **示例**：`盘中猎手·增量 | 11:15 | 光通信·沃格光电+10% | 涨停78`；`盘中快照-1100·增量 | 10:55 | 机器人·涨停9`；`📊 财富密码·盘后候选·全量 08-17 | 退潮冰点`；`📝 盘后复盘·全量 08-17 | 高标断头·电力切换日`。
 4. ⚠️ 改标题必须同步：任务 prompt header 行 / `build_cards.py`（eod/verify/盘前）/ `live_signal.py` / `intraday_pulse.py` 四处，本表与代码必须一致。
-| 10 | 本地看板/趋势面板 | 脚本 `HTML/gen_dashboard.py` / `HTML/gen_trend_panel.py` | — | — | 本地预览 | 全量盘面 + 题材趋势追踪 | 对齐配色 hex + 标题字号=正文+2px |
 | 11 | 机构研报·早盘卡 ×1 | 任务 prompt（AI 拼·挂财神-机构调研） | `🏛️ 机构研报 {MM-DD} 早盘 \| {一句话主线}` | blue | 08:50（开盘前） | 8-10 机构主线块（▸依据/▸逻辑/▸点名）+ 🧭机构还看什么 + 📎盘面印证一行（昨日收盘） | v5 版式（财神-机构调研 SKILL·机构为主体·白话·禁黑话）；分类【机构调研】 |
 | 12 | ~~机构投研·午间卡 ×1~~ | ~~任务 prompt（AI 拼·挂财神-机构调研）~~ | ~~`🏛️ 机构视角 {MM-DD} 午间 \| {今日机构主线}`~~ | ~~blue~~ | ~~11:30（盘中）~~ | ~~4-5 机构主线块 + 📎盘中呼应一行（今日实时涨停/资金）~~ | ⛔ **2026-09-08 停用删除**（aut 6aba22e8·用户「以后只要早晚」）——根因 Gangtise 午报发布晚于 11:30，连空 4 次从未产出；机构调研仅保留早盘卡(11)+晚报卡(13)，需恢复则重建 |
 | 13 | 机构晚报速览卡 ×1 | 任务 prompt（AI 拼·挂财神-机构调研） | `🏛️ 机构晚报 {MM-DD} \| {一句话主线}` | blue | **21:00**（盘后·2026-09-03 新建 automation-ed5fd591·validFrom 09-04） | 6-8 机构主线块（Gangtise 晚报 evening·同链合并）+ 🧭机构还看什么速览 + 📎盘面印证（今日收盘·可选） | v5 版式·机构为主体·分类【机构调研】；产物 cache/gangtise_evening_research.json |
@@ -481,7 +478,7 @@
 - **短线精灵·异动信号**（`short_spirit.py`）`red`；行内个股名与**涨幅数字同色号**（2026-08-25 用户「红色颜色不对·统一色号」）：涨停/快速拉升=red、接近涨停=purple（类型靠分组标题 🔥/🚀/⚡ 区分）；**涨幅数字一律红涨绿跌（+红/-绿·A股铁律）**。⛔ 2026-08-25 用户两次抓包：①快速拉升禁用 `turquoise`（=退潮/防守语义色，上涨票显「绿」）；②禁用 `orange` 标快速拉升（飞书渲染偏橘红≠涨幅正红）；`<font>` 飞书不渲染禁用于推卡（一律 `<text_tag>` 胶囊）。回归锁：`tests/test_golden.py::test_short_spirit_color_rules`。
 - 脚本类卡（eod/verify/ambush/live_signal）颜色在各自代码 `return {"color": ...}` 写死，须与本表一致；AI 拼卡（盘前/复盘）由任务 prompt 读本表主色输出 `color` 字段。
 
-**双源声明（重要）**：⑥~⑨ 由任务 prompt 驱动（⑥盘中猎手 ACTIVE·⑦盘中快照已暂停），启动时 Read 本文件、受本规范约束；①~⑤、⑩ 由脚本代码生成，颜色/圆点/整行紫红已在代码中按本规范语义实现（`live_signal.py` / `intraday_pulse.py` / `HTML/gen_dashboard.py` / `HTML/gen_trend_panel.py`）。**两路必须保持语义一致**：在本文件改色即视为改全局，脚本侧代码须同步。禁止在脚本里再写 hex 飞书色或圆点 emoji。
+**执行声明（重要）**：任务 prompt 与脚本生成的卡片均读取本文件；颜色、圆点和整行紫红由 `live_signal.py`、`intraday_pulse.py` 与财富密码卡片代码按本规范实现。改本文件后须同步对应推送脚本；禁止在脚本里再写 hex 飞书色或圆点 emoji。
 
 ---
 
@@ -1019,7 +1016,7 @@ AI 生成卡片 JSON 时，正文换行必须用**真实换行符**，严禁输�
 
 **目的**：模块标题（突发题材榜/AI综合研判/板块资金流向等）与正文形成明显层次差。用户实测反馈：标题与正文无差别、一眼分不清模块边界。
 
-**能力边界（飞书官方文档确认）**：lark_md **不支持字号控制**，仅支持 加粗 `**text**` / 斜体 / 删除线 / `<font color>` / `<text_tag color>`（枚举：`neutral blue turquoise lime orange violet indigo wathet green yellow red purple carmine`）/ 链接。"字号放大 2px"**只在本地 HTML 看板/预览实现**（gen_dashboard.py / gen_trend_panel.py 的 h2 字号 = 正文+2px）；飞书端标题层次靠「加粗 + 背景标签」表达，不得幻想改字号。
+**能力边界（飞书官方文档确认）**：lark_md **不支持字号控制**，仅支持 加粗 `**text**` / 斜体 / 删除线 / `<font color>` / `<text_tag color>`（枚举：`neutral blue turquoise lime orange violet indigo wathet green yellow red purple carmine`）/ 链接。飞书端标题层次靠「加粗 + 背景标签」表达。
 
 **两条标题规则（所有 AI 拼卡强制：11 猎手 / 盘前预测 / 盘后复盘）**：
 
@@ -1039,7 +1036,6 @@ AI 生成卡片 JSON 时，正文换行必须用**真实换行符**，严禁输�
 
 **降级路径**：`<text_tag>` 若在某环境渲染异常（测试群实测为准），自动降级为该行纯 `**加粗**`，不中断推送、不报错。
 
-**本地 HTML 同步**：gen_dashboard.py / gen_trend_panel.py 的模块标题（h2）字号 = 正文+2px、font-weight ≥700；改本规范时若动配色须同步脚本侧 CSS。
 
 ---
 
@@ -1628,7 +1624,7 @@ div+text 真实换行分段，段间 hr：
 
 ## 【视觉样式管控规范（卡片执行铁律）· 2026-08-17】
 
-> 本规范是卡片「视觉层 + 业务铁律」的统一收口，与【统一配色规范】【语义色板】【换行规范】【标题层级规范】【📐 布局呼吸规范】同源生效。中枢 skill 索引本规范；卡片执行（`wealth_code/pipelines/build_cards.py` / `HTML/gen_dashboard.py` / AI 拼卡）严格遵循。
+> 本规范是卡片「视觉层 + 业务铁律」的统一收口，与【统一配色规范】【语义色板】【换行规范】【标题层级规范】【📐 布局呼吸规范】同源生效。中枢 skill 索引本规范；卡片执行（`wealth_code/pipelines/build_cards.py` / AI 拼卡）严格遵循。
 > **执行优先级（冲突时自上而下）**：语义色板(改善红/恶化绿，见 190 段) ＞ 强/弱色主题(本节①) ＞ 统一配色规范(185 段)。
 
 ### ⓪ 公共渲染铁律（2026-08-18 升级·全卡统一·骨架 A/B/B.5/C + 事件/窗口/短线精灵 全部适用）
@@ -1653,22 +1649,22 @@ div+text 真实换行分段，段间 hr：
 
 **场景映射表（主题 + 语义 + 代码实现）**：
 
-| 信息 | 主题 | 语义色 | 飞书卡片实现 | HTML 看板实现 |
-|---|---|---|---|---|
-| 涨停/封板/龙一 | 强 | 红(涨) | `<font color='red'>` 整行（统一配色 218） | `.idx .pct` var(--up) |
-| 机会/埋伏/可买 | 强 | 紫(机会) | `<font color='purple'>` 整行 / `_stock_hl(color='purple')` | `.buy` var(--rec) |
-| 接力池个股 | 强 | 紫 | `_stock_hl(it,'purple')`（build_cards 234） | — |
-| 观察池个股 | 弱 | 黄 | `_stock_hl(it,'yellow')` | — |
-| 情绪核心👑 | 强 | 按语义红/绿 | `text_tag color='neutral'` 标题 + 内部语义色（骨架 C⑦.5） | — |
-| 改善数据(晋级率↑) | 强 | 红(改善) | `text_tag color='red'` | — |
-| 恶化数据(核按钮↑) | 强 | 绿(恶化) | `text_tag color='green'` | — |
-| 退潮/防守 | 弱 | turquoise | `text_tag color='turquoise'` | var(--down-soft) |
-| 切换日🔀 | 强 | orange | `text_tag color='orange'`（488 段） | — |
-| 确定性最强主线⭐（AI研判TOP1） | 强 | 紫(机会/核心) | `<text_tag color='purple'>⭐确定性最强主线</text_tag>`（规范见①.5） | — |
-| 模块标题 | 弱 | neutral | `text_tag color='neutral'`（标题层级 572） | `.card h2` font-weight≥700 |
-| 未达标/天梯简列 | 弱 | neutral | neutral | — |
-| 说明/免责/数据源 | 弱 | grey | `<font color='grey'>` | `.disclaimer`/`.sub` var(--sub) |
-| 中性数据(换手) | 弱 | 蓝 | `<font color='#3b82c4'>`(仅HTML) / blue | var(--sub) |
+| 信息 | 主题 | 语义色 | 飞书卡片实现 |
+|---|---|---|---|
+| 涨停/封板/龙一 | 强 | 红(涨) | `<font color='red'>` 整行（统一配色 218） |
+| 机会/埋伏/可买 | 强 | 紫(机会) | `<font color='purple'>` 整行 / `_stock_hl(color='purple')` |
+| 接力池个股 | 强 | 紫 | `_stock_hl(it,'purple')`（build_cards 234） |
+| 观察池个股 | 弱 | 黄 | `_stock_hl(it,'yellow')` |
+| 情绪核心👑 | 强 | 按语义红/绿 | `text_tag color='neutral'` 标题 + 内部语义色（骨架 C⑦.5） |
+| 改善数据(晋级率↑) | 强 | 红(改善) | `text_tag color='red'` |
+| 恶化数据(核按钮↑) | 强 | 绿(恶化) | `text_tag color='green'` |
+| 退潮/防守 | 弱 | turquoise | `text_tag color='turquoise'` |
+| 切换日🔀 | 强 | orange | `text_tag color='orange'`（488 段） |
+| 确定性最强主线⭐（AI研判TOP1） | 强 | 紫(机会/核心) | `<text_tag color='purple'>⭐确定性最强主线</text_tag>`（规范见①.5） |
+| 模块标题 | 弱 | neutral | `text_tag color='neutral'`（标题层级 572） |
+| 未达标/天梯简列 | 弱 | neutral | neutral |
+| 说明/免责/数据源 | 弱 | grey | `<font color='grey'>` |
+| 中性数据(换手) | 弱 | 蓝 | blue |
 
 ⚠️ 强/弱是"权重"，语义色板是"方向"，二者正交——强色主题内仍按语义色板决定红/绿（恶化数据走强+绿，非强+红）。
 
@@ -1689,7 +1685,6 @@ AI 在「主线定性」中研判出的**最强主线（TOP1 = 持续性最强�
 2. 标签紧跟主线名/结论句，与题材榜、资金流向数字**分离**（不重列数字·去重铁律 1/2）。
 3. ⭐ 与本规范 164/166 行资金流向块 `is_focus=True` 板块名后的 `⭐` 含义不同：本标签 = **AI 研判结论级**（最强方向），资金块 ⭐ = **数据源命中主线关键词级**；二者不互斥但不得在同一行混用。
 4. 退潮期若 TOP1 主线为"试错 / 防守"性质，标签仍打但须注明"退潮期试错"（见 51 行主线优先级 vs 上卡铁律：退潮加深时新主线须注"退潮期试错"而非"主升确认"）。
-5. HTML 看板（dashboard.html / watch.html）对应实现 = `.card` 内 `<span class="main-line-tag">⭐确定性最强主线</span>`，样式挂在 `:root`（`--rec` 紫 / `--lead` 橙描边），改一处全局生效，与飞书 purple 语义对齐。
 
 ### ② 卡片组件标准样式（布局 / 圆角 / 阴影 / 间距）
 
@@ -1698,23 +1693,6 @@ AI 在「主线定性」中研判出的**最强主线（TOP1 = 持续性最强�
 - 模块标题组件：`text_tag color='neutral'` 包裹（标题层级规范 572）；个股行组件：`_stock_hl(it,color)` 生成 `<text_tag>` 胶囊（名+代码），结论标签【买/看/弃】紧随其后。
 - 布局呼吸：每 div ≤60 字、fields ≤6/题材 ≤4（📐 布局呼吸规范 543）。
 
-**HTML 看板（dashboard.html，组件 = `.card` CSS 类）**：标准样式常量（执行层改 `:root` 变量即全局生效）：
-
-```css
-:root{
-  --card:#fff; --line:#ececf0; --line-strong:#d8d8de;
-  --bg:#f2f3f6; --txt:#16161a; --sub:#8a8d97;
-  --up:#ee2500; --down:#093; --rec:#8b5cf6; --warn:#e0a000;
-}
-.card{ background:var(--card); border:1px solid var(--line);
-  border-radius:10px; padding:13px 15px;
-  box-shadow:0 1px 2px rgba(22,22,26,.05); }
-.card:hover{ border-color:var(--line-strong); }
-```
-
-- 圆角 `10px` / 阴影 `0 1px 2px rgba(22,22,26,.05)` / 内边距 `13px 15px` / 卡片间距 `margin-top:14px` / 边框 `1px`。
-- 组件标题 `.card h2`：`font-size:15px; font-weight:800`。
-- 执行入口：`HTML/gen_dashboard.py` 用 `:root` 变量渲染；改色/圆角/间距只动 `:root` 与 `.card` 一处。
 
 ### ③ 文案样式（字体 / 字号 / 行高 / 语气）
 
@@ -1726,10 +1704,6 @@ AI 在「主线定性」中研判出的**最强主线（TOP1 = 持续性最强�
 
 **字体 / 字号 / 行高**：
 - 飞书卡片：平台**不支持字号控制**（标题层级规范 568）；层次靠 加粗 + `text_tag` 背景标签表达；正文纯 lark_md。密度：单 div ≤60 字、单行 ≤30 字（移动端优先）。
-- HTML 看板（执行常量 `dashboard.html` `:root`+`body`）：
-  - `body{ font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif; font-size:13px; line-height:1.55; letter-spacing:.01em; }`
-  - 标题 `h1` 19px/800；`.card h2` 15px/800；`.idx .pct` 26px/800；正文 12–13px；`.sub`/`.stat`/`.meta` 12px 弱色。
-  - 执行入口：改 `body` / `h2` 一处即全局生效。
 
 ### ④ 强制性业务规则（DAO 级铁律 · 用户底层要求）
 
@@ -1977,7 +1951,7 @@ AI 在「主线定性」中研判出的**最强主线（TOP1 = 持续性最强�
 **🛡️ 词表单一源 + 推送前硬门禁（2026-09-18 建立）**：
 - **词表单一源**＝`scripts/card_copy_rules.py`（`PLAIN_FAIL` 阻断 / `PLAIN_WARN` 提示 / `PLAIN_KEEP` 显式保留）。⛔ **禁止任何模块再自维护词表**——此前词表散落 **5 处互不一致**（`tests/test_verify_card_ai.py` 四套 + `card_quality_check.py` 一套），实证 `承接` 在一套被禁、另一套未禁 → 必然漂移。
 - **推送前门禁**＝`scripts/card_lint.py`（`ENABLE_PLAIN_GATE`）：Tier-1 机器黑话 → **FAIL 阻断推送**；Tier-2 行业术语 → **WARN 提示不阻断**（⛔ 刻意不硬阻断：LLM 拼卡偶发用词若把整张复盘卡卡死、卡推不出去，代价远大于措辞瑕疵；如需强制干净把 `PLAIN_GATE_STRICT=True`）。
-  - ⚠️ **首发观察期（2026-09-18 定）**：Tier-1 阻断**生效日 `PLAIN_GATE_ENFORCE_FROM=2026-09-21`**，观察期内 Tier-1 也只 WARN。**理由＝实测事故**：上线当天用真实数据逐类构建盘中卡，**核按钮卡 / 回流前兆卡因文案含 `MA5` 被判黑话** → 若首日即阻断，这两类卡会**整卡推不出去（丢卡）**。已修源头：`MA5/MA10`→`5日线/10日线`（live_signal 6 处 + gen_dashboard 1 处）、`非AI研判`→`非AI判断`（13 处·全卡固定标签）、`恶化维度`→`恶化的方面`、`承接强度`→`有没有资金接`。**修复后实测 10 类盘中卡全部零阻断零 WARN**。⛔ **门禁上线必须先"观察期只告警"**——LLM 拼卡无法穷举，硬阻断的代价是丢卡。
+  - ⚠️ **首发观察期（2026-09-18 定）**：Tier-1 阻断**生效日 `PLAIN_GATE_ENFORCE_FROM=2026-09-21`**，观察期内 Tier-1 也只 WARN。核按钮卡 / 回流前兆卡曾因文案含 `MA5` 被判黑话；现已统一改为 `5日线/10日线`，并将「非AI研判」「恶化维度」「承接强度」改为白话表达。⛔ **门禁上线必须先"观察期只告警"**——LLM 拼卡无法穷举，硬阻断的代价是丢卡。
   - **回归锁**：`tests/test_card_lint_live_cards.py`（10 类盘中卡过门禁 + `MA5`/`非AI研判` 残留锚）；`tests/test_syntax_all.py`（全项目可编译·防空语法错误静默崩）；`tests/test_card_copy_rules.py`（词表分级/豁免/观察期）。
 - **常态化自检**＝`scripts/card_quality_check.py`（学习层 R7·每日 17:50）＋ 复盘/优化方案卡呈现。
 

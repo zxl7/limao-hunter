@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = ROOT / "cache"
 # 生产缓存目录（导入期快照·⛔ 不随 monkeypatch 变化）——供测试期写穿守卫比对基准用。
 _PROD_CACHE_DIR = Path(__file__).resolve().parent.parent / "cache"
-# 持仓展示文件 holdings.json 的权威位置：项目根 cache/（与 ma5_check.py / gen_dashboard.py 共用，
+# 持仓展示文件 holdings.json 的权威位置：项目根 cache/（与 ma5_check.py 共用，
 # 非 wealth_code/cache）。ROOT=wealth_code → ROOT.parent=狸猫猎手（项目根）。
 HOLDINGS_PATH = ROOT.parent / "cache" / "holdings.json"
 BJ_TZ = timezone(timedelta(hours=8))

@@ -44,6 +44,18 @@ def test_count_matches_names_after_filter():
     assert p["count"] == len(p["names"]) == 2
 
 
+def test_previous_theme_count_uses_yesterday_pool_not_intraday_snapshot():
+    """主线题材的「昨日」只统计昨日涨停池中的当前成分股。"""
+    stocks = [
+        {"code": "600001.SH", "name": "甲"},
+        {"code": "000002.SZ", "name": "乙"},
+        {"code": "300003.SZ", "name": "丙"},
+    ]
+    assert ip._previous_theme_zt_count(stocks, {"600001", "300003", "999999"}) == 2
+    assert ip._previous_theme_zt_count(stocks, set()) == 0
+    assert ip._previous_theme_zt_count(stocks, None) is None
+
+
 def test_missing_code_not_dropped():
     """无 symbol/code 字段时**不得**误删（只按代码判 688，不按名字猜）。"""
     raw = {"broken_pool": {"data": [{"stock_chi_name": "无代码票"}]}}

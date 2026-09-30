@@ -14,6 +14,26 @@ PULSE = CACHE / "pulse_snapshots"
 LOCK = PULSE / ".realtime_analytics.lock"
 STATE = PULSE / ".realtime_analytics_ts"
 
+# ── 时段守卫（2026-09-29 新增·防止盘中链**反向覆盖**盘后链产物）──────────────
+# ⛔ 事故：本脚本每轮无条件覆盖 `theme_rotation.json`，而收盘后 `latest.json` 的 ts
+#    仍是当日 15:00:08 ⇒ 原守卫（只比「快照日期 == 今日」）放行，于是 09-29 在
+#    17:41 / 17:51 又写了两次实时版本（`realtime=true`），把文件盖成**盘中态**。
+#    后果有二：① 盘后链真跑过也会被抹掉 ② `guard_eod_chain` 因此误判为盘后口径。
+# 判据：只在**本交易日盘中时段**（09:25 竞价纪元 ~ 16:00）写盘；
+#    16:00 与 `guard_eod_chain.EOD_COVER_HHMM` 对齐 —— 该时刻起产出一律归盘后链。
+# 可用 `REALTIME_ANALYTICS_SESSION_ONLY=0` 回退（排障时不建议，会让上述事故复现）。
+SESSION_START_HHMM = 925
+EOD_CUTOFF_HHMM = 1600
+
+
+def _session_open(now: datetime | None = None) -> bool:
+    if os.environ.get("REALTIME_ANALYTICS_SESSION_ONLY", "1") == "0":
+        return True
+    now = now or datetime.now()
+    if now.weekday() >= 5:
+        return False
+    return SESSION_START_HHMM <= now.hour * 100 + now.minute < EOD_CUTOFF_HHMM
+
 
 def _load(path: Path) -> dict:
     try:
@@ -52,6 +72,8 @@ def _live_themes(snapshot: dict) -> list[dict]:
 
 
 def main() -> None:
+    if not _session_open():
+        return
     if _fresh_enough():
         return
     try:

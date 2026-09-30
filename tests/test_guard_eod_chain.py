@@ -148,6 +148,42 @@ def test_theme_rotation_date_mismatch_reported(
     assert "2026-09-21" in miss[0][1]
 
 
+def test_theme_rotation_realtime_flag_is_not_eod_covered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """⛔ 第二类盲区（2026-09-29 实测）：盘中链 realtime_analytics 收盘后仍在写
+    `theme_rotation.json` ⇒ `date==今日` + `mtime≥16:00` 双判据同时通过，
+    盘后链没跑也判绿（当日实际缺 5 项、卡只报 4 项）。
+    盘后链版不写 `realtime` 字段 ⇒ 读到 `realtime=true` 必须判为未覆盖。
+    """
+    monkeypatch.setattr(g, "CACHE", tmp_path)
+    _seed(tmp_path, at=EOD, with_latest=False)
+    p = tmp_path / "theme_rotation.json"
+    p.write_text(
+        json.dumps({"date": TODAY, "realtime": True, "source_ts": "2026-09-22T15:00:08+08:00"}),
+        encoding="utf-8",
+    )
+    ts = datetime(2026, 9, 22, 17, 51).timestamp()        # 事故时刻：收盘后
+    os.utime(p, (ts, ts))
+    _touch(tmp_path / "carrier_state.json", EOD)
+    miss = g._missing_of(TODAY, live=True)
+    assert len(miss) == 1 and miss[0][0] == "题材回流引擎"
+    assert "realtime=true" in miss[0][1]
+
+
+def test_theme_rotation_without_realtime_flag_still_green(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """盘后链产出的 theme_rotation（**无** realtime 字段）不得被误伤。"""
+    monkeypatch.setattr(g, "CACHE", tmp_path)
+    _seed(tmp_path, at=EOD, with_latest=True)
+    p = tmp_path / "theme_rotation.json"
+    p.write_text(json.dumps({"date": TODAY, "data_days": [TODAY]}), encoding="utf-8")
+    ts = EOD.timestamp()
+    os.utime(p, (ts, ts))
+    assert g._missing_of(TODAY, live=True) == []
+
+
 # ────────────────── 3. 推卡走测试群（内部验证卡铁律） ──────────────────
 def test_alert_goes_to_test_webhook() -> None:
     src = (BASE / "scripts" / "guard_eod_chain.py").read_text(encoding="utf-8")

@@ -1,6 +1,6 @@
 # 代码架构审查与重构规划（2026-08-17 · 中枢架构师视角）
 
-> 审查对象：狸猫猎手全系统（scripts/ + wealth_code/ + common/ + HTML/ + config/）
+> 审查对象：狸猫猎手全系统（scripts/ + wealth_code/ + common/ + config/）。本文中旧 HTML 相关结论为历史审查记录；HTML 展示层已于 2026-09-29 退役，终端 React 页面为唯一展示端。
 > 审查原则：①复用优先 ②文件结构 ③解耦封装 ④一致性
 > 本文件为规划基准，落地改造逐步执行（盘中链路改动须收盘后+次日验证）。
 
@@ -40,10 +40,10 @@
 |---|---|---|---|
 | 数据采集/守护 | scripts/ | 盘中抓取/盘后沉淀/守卫/推送 | 21 |
 | 选股算法核心 | wealth_code/core/ | 龙头/评分/期望/信号/账本 | 12 |
-| 流水线 | wealth_code/pipelines/ | eod/verify/卡片/看板报告 | 6 |
+| 流水线 | wealth_code/pipelines/ | eod/verify/卡片/策略指标 | 6 |
 | 适配层 | wealth_code/adapters/ | 数据源适配(zt/auction/verdict) | 6 |
 | 公共层 | common/ | 审计/日志/mtime/必盈client | 4 |
-| 前端 | HTML/ | 看板生成 | 3 |
+| 展示 | 狸猫终端 | React 只读渲染 | — |
 
 **健康度**：pytest 22/22、validate_schema/config/tasks 三绿、审计日志/备份/哨兵已落地。
 **总规模**：约 13.7k 行 Python。

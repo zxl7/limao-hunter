@@ -82,15 +82,27 @@ def _load_narratives(path: str | None):
 
 
 def _archive_decision(recommendation_date: str) -> None:
-    """冻结候选与执行证据；归档失败只告警，不能反向阻断已完成的选股/竞价结算。"""
+    """冻结候选与执行证据；归档失败只告警，不能反向阻断已完成的选股/竞价结算。
+
+    ⚠️ 2026-09-29 修：显式把**项目根**塞进子进程 PYTHONPATH。
+    本函数以 subprocess 调 `scripts/archive_decision.py`，脚本模式下项目根不入 sys.path →
+    该脚本内 `from common.trading_calendar import ...` 抛 ModuleNotFoundError →
+    决策归档自 2026-09-11 起每个交易日静默丢失（调用方只打一行告警、不阻断）。
+    脚本侧已加 sys.path 兜底（第一层）；此处再显式传 env（第二层，防同类复发）。
+    """
     if not recommendation_date:
         return
     try:
         archive = ROOT.parent / "scripts" / "archive_decision.py"
+        env = dict(os.environ)
+        _root = str(ROOT.parent)
+        env["PYTHONPATH"] = _root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         result = subprocess.run([sys.executable, str(archive), "--date", recommendation_date],
-                                capture_output=True, text=True, timeout=60)
+                                capture_output=True, text=True, timeout=60, env=env)
         if result.returncode:
             print(f"[ARCHIVE] 冻结证据失败: {result.stderr.strip() or result.stdout.strip()}")
+        else:
+            print(f"[ARCHIVE] 冻结证据 OK: {result.stdout.strip().splitlines()[-1] if result.stdout.strip() else recommendation_date}")
     except Exception as exc:
         print(f"[ARCHIVE] 冻结证据跳过: {exc}")
 
@@ -162,6 +174,19 @@ def cmd_eod(args: argparse.Namespace) -> int:
         else:
             print("[EOD] 无候选（涨停池可能为空/非交易日），跳过推送")
     _archive_decision(str(payload.get("date") or ""))
+    # 2026-09-29 恢复：真实成绩可视化（净值曲线 + 每日明细 → wealth_code/data/performance.{md,html}）。
+    # 背景：`perf_report.py` 在两次 git 基线之间从工作区丢失（`git log --all` 仅旧基线 645205a 有、
+    # HEAD 已无），prompt 步骤8 路径失效、产物也从未落盘 → **成绩反馈回路断掉**。
+    # 短线情绪迭代 = 「判断 → 结果 → 修正」闭环，反馈半边必须有据可查，故恢复脚本并挂进 eod。
+    # 纯本地读账本 + metrics，失败静默降级（不阻断推送/结算/归档）。
+    try:
+        from pipelines.perf_report import run_perf_report
+        _pf = run_perf_report()
+        _wr = (_pf.get("winrate") or {}).get("win_rate")
+        print(f"[EOD] 成绩视图已刷新: {_pf.get('trade_days')} 个交易日 · 净值 {_pf.get('latest_nav')} "
+              f"· 累计 {float(_pf.get('total_return_pct') or 0):+.2f}% · 胜率 {_wr}%")
+    except Exception as _e:
+        print(f"[EOD] 成绩视图刷新跳过: {_e}")
     return 0
 
 

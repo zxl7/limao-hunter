@@ -3,7 +3,7 @@
 > 定位：本文件 = 本次「资金流分层对接」设计的唯一权威（对应 design_连板晋级量化分析.md 同级惯例）。
 > 对接方：github.com/Dr-Liu23/CapitalPulse（东财资金流采集，已克隆 /tmp/CapitalPulse 拆解 + 实测字段口径）。
 > 实施原则：⛔ 改动盘中链路须收盘后做 + 次日验证；长任务运行窗口（复盘/eod）20:00 前不动（中枢运维铁律）。
-> 状态：✅ **P2-18 已实施（2026-09-09 晚·盘后窗口）**：common/em_flow.py + intraday_pulse 分层注入 + dashboard 资金Tab 分层行 + tests 7 用例(全量 177 过)。次日 09:25 盘中真实卡验证。
+> 状态：✅ **P2-18 已实施（2026-09-09 晚·盘后窗口）**：common/em_flow.py + intraday_pulse 分层注入 + 终端资金模块 + tests 7 用例(全量 177 过)。次日 09:25 盘中真实卡验证。
 > ⚠️ 实施修正 2 处（真实数据校准）：①A5 落地形态=**clist 保全市场排名 + ulist.np 对榜单 Top/focus 批量补分层**（非替换 clist——ulist 需代码池，盘中动态 360 板块即池）；②校验分级=恒等1(主力=超大+大·强·丢弃) + 恒等2(守恒·软·概念板块 1~10% 破缺打标 flow_consistent=False 保留，>10% 丢弃)——强校验曾误杀 24 条概念板块(实测破缺 1~5%)。
 
 ---
@@ -21,7 +21,7 @@
 | ulist.np 批量快照 | ✅ 吸收 | 单请求多标的全字段快照，替代 clist 逐页抓取（省请求） |
 | SQLite + 3s 轮询 + WebSocket | ⛔ 不吸收 | 与本系统 launchd 30s 守护 + 定时卡架构冲突，实时到秒非需求 |
 | 申万2021二级白名单 Top30 板块池 | ⛔ 不吸收 | 板块体系以选股宝 plates + sector_family.py 为权威，不引入第二套板块分类 |
-| Next.js 前端 / FastAPI REST | ⛔ 不吸收 | 已有 dashboard/watch 自包含 HTML 双页 |
+| Next.js 前端 / FastAPI REST | ⛔ 不吸收 | 终端 React 通过既有只读 API 消费数据 |
 | 双域名回落(push2→push2delay) | ✅ 沿用 | 与本系统 EM_BOARD_HOSTS 模式一致，直接合并 |
 
 ### 1.2 落点与数据流（新增仅一处 common 层）
@@ -37,7 +37,7 @@
   → 盘中：intraday_pulse.build_sector_risk 升级（f62榜 + 分层字段透传 + 结构标签）
   → 盘后：capture_daily step → sector_flow_history_{date}.json 增补分层字段
   → 选股：pipeline_eod 候选资金回填（东财分层 + 腾讯总额 双源对账）
-  → 展示：latest.json sector_risk.* → 盘中卡💰区块 / dashboard 资金Tab / watch.html
+  → 展示：latest.json sector_risk.* → 盘中卡💰区块 / 终端资金模块
   → 审计：audit_log.py 记录每次上游快照 ts/条数/守恒异常（资金数据可追溯）
 ```
 

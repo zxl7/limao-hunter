@@ -437,7 +437,23 @@ def _rank_and_split(
     strong_sectors: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     """
-    轻量接力/观察池排序与拆分（纯模型择优，无任何个股硬编码 / 持仓加权）。
+    ⛔⛔ 2026-09-29 标注：**本函数是废弃死代码，从未被调用**。
+
+    eod 的实际排序/拆池入口 = `core.quant_score.select_relay_watch`
+    （见 `run_eod()` 内 `relay, watch, diagnostics, sel_mode = select_relay_watch(...)`）。
+    因此本函数体内的 `STRONG_SECTOR_*` 加权、`_load_strong_sectors()` 调用
+    **对候选结果零影响**；`diagnostics["strong_sector_persistent"]` 等键也从不产出
+    （实证：2026-09-29 的 candidates diagnostics 无此键）。
+
+    ⚠️ 为什么要写这段（踩过的坑）：2026-09-23 同日重跑 eod 出现 relay 1→3、
+    个别 score 变动，当时把根因归到「`_load_strong_sectors()` 未传 `exclude_date`
+    导致当时候选自举加分」并写进了记忆 —— **该归因是错的**（该函数不在生效路径上）。
+    2026-09-29 实测：候选文件存在时重跑 eod，relay/watch 与逐票 score **完全一致**。
+    真实差异只可能来自**输入文件在两次跑之间被别的任务更新**
+    （`feedback_matrix.json` / `pulse_snapshots/latest.json` / 涨停池），属「输入新鲜度」问题，
+    不是自举。**排查同日重跑不一致，请看输入文件 mtime，不要来改本函数。**
+
+    原始意图（仅供理解历史设计，勿据此推理现行为）：
     排序分 = 龙头算法分(点火+爆发+先发+题材) + 连板高度 + 板块梯队(核心) + 情绪代理 + 主板倾斜
             + 容量加权(次要,QR对齐) + 日报verdict(元覆盖,用户指定) + 最近强势板块加权(用户:聚焦题材)。
     板块梯队：题材内梯队健康度(0~10)线性映射 LADDER_WEIGHT，完整梯队 sector 龙头额外加成。
@@ -808,6 +824,10 @@ def _load_strong_sectors(
     exclude_date: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """
+    ⚠️ 2026-09-29 标注：**唯一调用方是废弃死代码 `_rank_and_split`**（run_eod 不调用它），
+    故本函数（含 `exclude_date` 语义）**不影响任何候选结果**。排查「同日重跑 eod 结果不同」
+    时不要从这里入手（见 `_rank_and_split` docstring 的说明）。
+
     聚合最近 n_days 天 candidates-*.json 的 theme(申万二级)字段，
     生成「最近强势板块清单」——即用户定义的"每天记录的题材炒作路径里爆发过的板块"。
 

@@ -49,6 +49,15 @@
 已越过收盘 15:00 与 15:30 接力卡窗口，而盘后链法定时刻为 17:18）。
 一句话：**「文件在」不等于「盘后链跑过」，必须看是否被收盘口径覆盖过。**
 
+## ⛔ 第二类盲区（2026-09-29 实测·`theme_rotation.json` 的 `realtime` 标记）
+
+`theme_rotation.json` 除盘后链外，还被**盘中链** `realtime_analytics.py` 每轮覆盖，
+且它**收盘后仍在写**（09-29 17:41、17:51 两次，`realtime=true`、`source_ts=15:00:08`）
+⇒ `date==今日` 与 `mtime≥16:00` **两条判据同时通过**，当日实际缺 5 项、卡只报 4 项。
+**判据补强** = 盘后链版 `theme_rotation.py` **不写** `realtime` 字段，故读到
+`realtime is True` 即判「盘中实时链产物」；同时 `realtime_analytics.py` 已加
+**16:00 后不再写盘**的时段守卫（见其 `EOD_CUTOFF_HHMM`），两条互为保险。
+
 ## 用法
 
 ```
@@ -142,9 +151,11 @@ def _missing_of(today: str, live: bool = True):
     for name, rel, key, impact in DATED_JSON:
         p = CACHE / rel
         got = ""
+        payload: dict = {}
         if p.exists():
             try:
-                got = str((json.loads(p.read_text(encoding="utf-8")) or {}).get(key) or "")
+                payload = json.loads(p.read_text(encoding="utf-8")) or {}
+                got = str(payload.get(key) or "")
             except Exception:
                 got = ""
         # ⚠️ 读了字段就必须与今日相等（「文件在、内容是昨天」= 同样危害，常见于链路半途而废）
@@ -154,6 +165,14 @@ def _missing_of(today: str, live: bool = True):
         ok, why = _cover_state(p, today)
         if not ok:
             missing.append((name, f"{rel}（date={got} 但 {why}）", impact))
+            continue
+        # ⛔ 2026-09-29 新增·修补第二类盲区：`theme_rotation.json` 会被**盘中链**
+        #    `realtime_analytics.py` 在**收盘后继续覆盖**（实证 09-29 17:41 / 17:51 两次写入，
+        #    `realtime=true`、`source_ts=15:00:08`）⇒ 仅凭 `date==今日` + `mtime≥16:00`
+        #    **双判据同时通过**，当日实际缺 5 项却只报 4 项。
+        #    盘后链版 `theme_rotation.py` **不写** `realtime` 字段 ⇒ 以此作区分。
+        if payload.get("realtime") is True:
+            missing.append((name, f"{rel}（{why}·但 realtime=true = 盘中实时链产物，非盘后口径）", impact))
     for name, rel, _hours, impact in FRESH_FILES:
         ok, why = _cover_state(CACHE / rel, today)
         if not ok:

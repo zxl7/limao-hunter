@@ -573,6 +573,50 @@ def _avoidance_sweep(mctx, flow_board, today_hot_names, today_theme_names):
     return out[:AVOID_TOP_N]
 
 
+def _attach_live_pool_quotes(candidates, quotes=None):
+    """给回流池附加当日实时涨幅；历史爆发日涨幅保留为建池证据，不作展示替代。
+
+    东财批量行情已有 60 秒缓存，盘中每轮只请求一次。上游没有返回某只股票时，
+    显式写 None，让终端显示「—」而不是回退到历史涨幅。
+    """
+    codes = list(dict.fromkeys(
+        str(stock.get("code") or "").split(".")[0].strip()
+        for candidate in candidates
+        for stock in (candidate.get("watch_pool") or [])
+        if str(stock.get("code") or "").strip()
+    ))
+    fetch_missing = quotes is None
+    if fetch_missing:
+        try:
+            from common.em_flow import fetch_quotes
+            quotes = fetch_quotes(codes)
+        except Exception:  # noqa: BLE001 — 实时行情缺失必须保留空值语义
+            quotes = {}
+    quotes = quotes or {}
+    # 东财盘后偶发主动断连；复用反馈矩阵已经验证过的腾讯回退，补齐未覆盖代码。
+    # 两源都失败才向终端交付 None，绝不回填历史爆发日涨幅。
+    missing = [code for code in codes if code not in quotes]
+    if fetch_missing and missing:
+        try:
+            from feedback_matrix import fetch_quotes as fetch_feedback_quotes
+            quotes.update(fetch_feedback_quotes(missing) or {})
+        except Exception:  # noqa: BLE001 — 回退失败仍维持缺失语义
+            pass
+    captured_at = datetime.now().astimezone().isoformat(timespec="seconds") if quotes else None
+    for candidate in candidates:
+        covered = 0
+        for stock in candidate.get("watch_pool") or []:
+            code = str(stock.get("code") or "").split(".")[0].strip()
+            quote = quotes.get(code) or {}
+            value = quote.get("pct")
+            stock["live_pct"] = value if isinstance(value, (int, float)) else None
+            stock["live_price"] = quote.get("price") if isinstance(quote.get("price"), (int, float)) else None
+            if stock["live_pct"] is not None:
+                covered += 1
+        candidate["live_quote_ts"] = captured_at
+        candidate["live_quote_coverage"] = {"available": covered, "total": len(candidate.get("watch_pool") or [])}
+
+
 # ── K线止跌（2026-09-22 用户定：「监听板块消息、资金流和K线是否止跌，确定是否回流」）──
 # 本文件 v1 曾明确跳过这一维（见文件头「龙头破五日线需逐票拉日K，v1 不做（成本高）」），
 # 结果回流判定只有「催化(消息) + 资金」两维 —— 用户点出缺的正是**价格**这一维。
@@ -1066,6 +1110,7 @@ def build(*, live_day=None, live_themes=None, live_codes=None):
         0 if c["phase"] == "re-entry-candidate" else 1,
         -c["confidence"]))
     candidates = candidates[:MAX_CANDIDATES]
+    _attach_live_pool_quotes(candidates)
 
     # 板块涨停数趋势卡排序：升温/新晋优先(按增长/热度)，其次平稳，最后退潮
     def _zsort(x):

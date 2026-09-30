@@ -33,11 +33,12 @@ if str(ROOT) not in sys.path:
 from common.http_client import http_get as _hc_get
 from common.json_io import load_json, save_json
 from common.market_time import now as _now, BJ_TZ
+from scripts.relay_effect import number as relay_number, publish as publish_relay
 
 CACHE = ROOT / "cache"
 SNAP = CACHE / "pulse_snapshots"
 
-ULIST_URL = ("https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids={secids}&fields=f2,f3,f12,f14")
+ULIST_URL = ("https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids={secids}&fields=f2,f3,f6,f12,f14,f124")
 ZT_POOL_URL = ("https://push2ex.eastmoney.com/getTopicZTPool?ut=7eea3edcaed734bea9cbfc24409ed989"
                "&dpt=wz.ztzt&Pageindex=0&pagesize=2000&sort=fbt%3Aasc&date={date}")
 QUOTE_TTL = 120  # 行情缓存秒数（守护每60s唤醒，避免刷爆接口）
@@ -137,6 +138,10 @@ def fetch_quotes(codes):
                         "name": str(it.get("f14") or ""),
                         "pct": round(float(it.get("f3") or 0), 2),
                         "price": round(float(it.get("f2") or 0), 2),
+                        # f6 为成交额元，f124 为行情时间；缺失不按零处理。
+                        "relay_pct": relay_number(it.get("f3")),
+                        "amount_yi": relay_number(it.get("f6")) / 1e8 if relay_number(it.get("f6")) is not None else None,
+                        "quote_at": datetime.fromtimestamp(float(it["f124"]), BJ_TZ).isoformat(timespec="seconds") if relay_number(it.get("f124")) else None,
                     }
         except Exception as e:
             print(f"[feedback_matrix] 东财行情批次{i}拉取失败: {e}，降级腾讯")
@@ -162,6 +167,9 @@ def fetch_quotes(codes):
                         "name": p[1],
                         "pct": round(float(p[32]), 2),   # 涨跌幅%
                         "price": round(float(p[3]), 2),  # 现价
+                        # 腾讯成交额 p[37] 单位万元，p[30] 为 YYYYMMDDHHMMSS 行情时间。
+                        "amount_yi": relay_number(p[37]) / 10000 if len(p) > 37 and relay_number(p[37]) is not None else None,
+                        "quote_at": datetime.strptime(p[30], "%Y%m%d%H%M%S").replace(tzinfo=BJ_TZ).isoformat(timespec="seconds") if len(p[30]) == 14 and p[30].isdigit() else None,
                     }
             except Exception as e2:
                 print(f"[feedback_matrix] 腾讯降级行情失败: {e2}")
@@ -201,6 +209,7 @@ def fetch_bids(codes):
                         "bid1": float(p[9] or 0),
                         "bid1_vol": float(p[10] or 0),
                         "sell1_vol": float(p[20] or 0),
+                        "quote_at": datetime.strptime(p[30], "%Y%m%d%H%M%S").replace(tzinfo=BJ_TZ).isoformat(timespec="seconds") if len(p) > 30 and len(p[30]) == 14 and p[30].isdigit() else None,
                     }
                 except Exception:
                     continue
@@ -632,6 +641,12 @@ def main():
             "seal_yi": _seal_yi,
             "sealed_today": _sealed_today,  # 当日曾确认封板；不冒充当前封单额。
             "today_fbt": today_fbt.get(_c),  # 今日首封时间；无今日涨停记录时保持缺失。
+            "relay_pct": _q.get("relay_pct", _q.get("pct")),
+            "amount_yi": _q.get("amount_yi"),
+            "quote_at": _q.get("quote_at"),
+            "prev_boards": prev_map[_c].get("boards"),
+            # 当前封板需同时有当前涨停池与新鲜盘口证据；曾封板不参与此判断。
+            "sealed": (True if _c in today_codes and _sealed else False if float(_b.get("sell1_vol") or 0) > 0 else None) if _b and _b.get("quote_at") and _q.get("quote_at") and abs((datetime.fromisoformat(_b["quote_at"]) - datetime.fromisoformat(_q["quote_at"])).total_seconds()) <= 180 else None,
         }
 
     # 监管打击强度（2026-08-19·P1-8）：读 regulatory_watch 沉淀的当日压力分
@@ -704,6 +719,11 @@ def main():
     # 读历史5日 emotion_*.json，检测 promote_rate 连续下滑 / 溢价走弱 → 防守警示字段
     m["trend"] = _trend_signal(prev_date=_now().strftime("%Y-%m-%d"))
     save_json(out, m)
+    try:
+        if not publish_relay(CACHE, snap, quotes_out, _now()):
+            print("[relay_effect] 样本日期不匹配或发布失败，保留原快照")
+    except Exception as exc:
+        print(f"[relay_effect] 发布失败: {exc}")
     print(f"[feedback_matrix] ✅ 昨涨停{len(prev_codes)}只→今晋级{promote*100:.0f}% "
           f"均涨幅{avg_pct}% 核按钮{nuke_count} 情绪{score}/10({label}) → {out}")
     return 0

@@ -434,11 +434,29 @@ def test_ice_ban_hit_not_buy():
         f"ice 应打标 hit 且不进场: {oc['decision_status']}/{oc['can_enter']}"
     assert oc["status"] == "super", f"命中档位应保留 super: {oc['status']}"
     assert oc["note"] and "冰点禁买" in oc["note"], "note 应含冰点禁买标注"
-    # ③ 非 ice（risk_off）不受影响：正常 buy 可进场
-    rec2 = _build_record(cand, q, None, date10="2026-08-19", regime="risk_off")
+    # ③ 非 ice（risk_off）不受影响：AI 口径下「AI 说买 + 竞价落预期区间」→ 可进场。
+    # ⚠️ 2026-09-29 修断言（门禁漂移，非代码缺陷）：原断言用 `ai_decisions=None`（不传）
+    #    期望 buy/can_enter=True。但 2026-09-14 用户拍板「全量以 AI 为唯一口径！」后，
+    #    `_build_record` 在 `ai_caliber.AI_CALIBER_ACCOUNT` 下遇 `ai_decisions is None`
+    #    即判 `ai_missing_no_trade` → can_enter=False（**账户不交易**，机械结果仅供展示/审计）。
+    #    ⇒「该执行日没有 AI 决策行就不交易」是**现行正确行为**，测试断言过时。
+    #    改法：显式给一条 focus（=participate）决策行，并把竞价挪进预期区间 [1.5,3.5]。
+    _ai = {"600353": {"code": "600353", "bias": "focus", "entry_max_gap": 5.0}}
+    q3 = {"prev_close": 10.0, "auction_price": 10.20, "auction_amount_yi": 0.6, "time": "09:25"}  # +2.0%
+    rec2 = _build_record(cand, q3, None, date10="2026-08-19", regime="risk_off", ai_decisions=_ai)
     oc2 = rec2["performance"]["open_check"]
     assert oc2["decision_status"] == "buy" and oc2["can_enter"] is True, \
-        f"risk_off 应正常 buy 进场: {oc2['decision_status']}/{oc2['can_enter']}"
+        f"risk_off + AI 说买 + 竞价达标 → 应可进场: {oc2['decision_status']}/{oc2['can_enter']}"
+    # ③-b 同一组输入换 ice：冰点硬闸优先于 AI 口径，照样不许进场（但保留 AI 判买留痕）
+    rec_ice = _build_record(cand, q3, None, date10="2026-08-19", regime="ice", ai_decisions=_ai)
+    oc_ice = rec_ice["performance"]["open_check"]
+    assert oc_ice["can_enter"] is False and oc_ice["ice_ban"] is True, \
+        f"ice 硬闸应拦下 AI 的买入: can_enter={oc_ice['can_enter']}/ice_ban={oc_ice['ice_ban']}"
+    # ③-c 无 AI 决策行（口径缺失）→ 账户不交易（诚实降级，不是静默空仓）
+    rec_na = _build_record(cand, q3, None, date10="2026-08-19", regime="risk_off")
+    oc_na = rec_na["performance"]["open_check"]
+    assert oc_na["can_enter"] is False and oc_na["caliber"] == "ai_missing_no_trade", \
+        f"缺 AI 决策应不交易且留痕: {oc_na['can_enter']}/{oc_na['caliber']}"
     # ④ verify 卡渲染：ice 场景展示命中票 + 禁买标注，标题含"冰点禁买"
     from pipelines.build_cards import build_verify_card
     vr = {
@@ -1247,74 +1265,3 @@ def test_flow_5d_trend_and_board():
     widen = [("a", {"Y": {"flow_yi": -1.0}}), ("b", {"Y": {"flow_yi": -3.0}}),
              ("c", {"Y": {"flow_yi": -5.0}}), ("d", {"Y": {"flow_yi": -8.0}}), ("e", {"Y": {"flow_yi": -10.0}})]
     assert tr._flow_trend("Y", widen)[0] == "outflow_widening"
-
-
-def test_ret_stock_triple_render():
-    """回流预测卡辨识度个股三件套（2026-08-26 用户「板块与辨识度个股要有关联性」）。
-    watch_pool 个股渲染 换手/成交额/5日涨幅 + 换手健康标注（✓健康/⚠缩量/⚠分歧）。
-    ⚠️ 关键坑：gen_dashboard 运行时 cwd=HTML/，common 包在项目根——必须显式 sys.path 加 ROOT_DIR，
-    否则 from common.tencent_kline import 失败 → 5日涨幅全 None。"""
-    import importlib.util, sys as _sys
-    _html_dir = str(ROOT / "HTML")
-    if _html_dir not in _sys.path:
-        _sys.path.insert(0, _html_dir)   # theme_data/gen_trend_panel 在 HTML/ 目录
-    spec = importlib.util.spec_from_file_location("gen_dashboard", str(ROOT / "HTML" / "gen_dashboard.py"))
-    gd = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(gd)
-    # 换手健康标注（纯函数路径：_stock_triple_html 内部逻辑）
-    w = {"code": "601011.SH", "name": "宝泰隆", "pct": 10.14, "cap_yi": 58.2}
-    h = gd._stock_triple_html(w)
-    # 缺实时数据时仍应渲染结构（换手/成交额可能 —，但标签结构完整）
-    assert "宝泰隆" in h, "个股名应渲染"
-    assert "5日" in h, "5日涨幅列应存在（缺数据为—）"
-    # 模块级缓存存在
-    assert hasattr(gd, "_QT_CACHE")
-    assert hasattr(gd, "_stock_triple")
-
-
-def test_first_seen_ordering():
-    """板块首见时间戳排序（2026-08-26 用户「今日题材轮动顺序不对」根治）。
-    live_signal 每轮 top5 记 first_seen_<date>（不受早盘高频窗口跳过窗口聚合影响）；
-    gen_dashboard 优先按 first_seen 时间排序轮动序列（≥2板块才用，避免盘中过早回退近似）。"""
-    import importlib.util, sys as _sys, json as _json, pathlib as _pl, re as _re
-    _html_dir = str(ROOT / "HTML")
-    if _html_dir not in _sys.path:
-        _sys.path.insert(0, _html_dir)
-    spec = importlib.util.spec_from_file_location("gen_dashboard", str(ROOT / "HTML" / "gen_dashboard.py"))
-    gd = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(gd)
-
-    # 模拟 first_seen 时间戳（含早盘板块）
-    import datetime as _dt
-    _today = _dt.datetime.now().strftime("%Y%m%d")
-    real = ROOT / "cache" / f"pushed_signals_{_today}.json"
-    existed = real.exists()
-    if existed:
-        bak = real.read_text(encoding="utf-8")
-    else:
-        # ⚠️ 2026-09-02 修复：盘前（09:25 前）live_signal 尚未首跑，
-        # 当日 pushed_signals 文件不存在会让本用例 FileNotFoundError——先造空壳，跑完删除。
-        bak = None
-        real.write_text("{}", encoding="utf-8")
-    try:
-        sig = _json.loads(bak) if existed else {}
-        # ⚠️ 2026-08-27 修复：gen_dashboard 读「当日」pushed_signals_<now>.json 且键为
-        # first_seen_<now>，测试原写死 20260826 文件/键只在 08-26 当天可过——改动态当日。
-        sig["first_seen_" + _today] = {
-            "黄金": "09:25:01", "医药": "09:33:00", "有色金属": "10:14:00",
-            "大农业": "10:15:00", "大金融": "10:41:00",
-        }
-        real.write_text(_json.dumps(sig, ensure_ascii=False), encoding="utf-8")
-        d = {"top5": [{"name": n} for n in
-             ["大金融", "医药", "黄金", "光通信", "有色金属", "大农业", "核聚变", "机器人", "液冷服务器", "PCB板"]],
-             "total_zt": 51}
-        s = gd.render_rotation_tab(d, {"prev_zt_count": 65})
-        tags = _re.findall(r'rot-tag[^>]*>([^<]+)</span>', s)
-        assert tags and tags[0] == "黄金" and tags[1] == "医药", \
-            f"应按first_seen时间排序(黄金09:25→医药09:33), 实际前2={tags[:2] if tags else '空'}"
-        assert "有色金属" in tags and tags.index("有色金属") > tags.index("医药")
-    finally:
-        if existed:
-            real.write_text(bak, encoding="utf-8")
-        else:
-            real.unlink(missing_ok=True)

@@ -6,7 +6,7 @@
 # 职责分工：
 #   - 平台自动化 automation-1786429073209（9:20 触发）= AI 旁白生成器，
 #     写 /tmp/wealth_narr_verify.json（本脚本优先注入）
-#   - 本脚本（com.limao.wealth-verify）= 数据+推送：抓报价/结算/推卡/可视化
+#   - 本脚本（com.limao.wealth-verify）= 数据+推送：抓报价/结算/推卡
 # 幂等：今日已推（/tmp/wealth_verify_done_<date> 存在）直接退出。
 # 回滚：launchctl unload ~/Library/LaunchAgents/com.limao.wealth-verify.plist
 #       并恢复平台自动化 prompt（原 verify --push 版本）。
@@ -67,10 +67,6 @@ export PYTHONPATH=$ROOT/wealth_code
 $PY wealth_code/scripts/run_wealth_code.py verify $PUSH_ARGS >> "$LOG" 2>&1
 RC=$?
 log "verify RC=$RC"
-
-# 刷新真实成绩可视化
-$PY wealth_code/pipelines/perf_report.py >> "$LOG" 2>&1
-log "perf_report 完成"
 
 # 落盘校验
 TODAY=$(TZ=Asia/Shanghai date '+%Y-%m-%d')

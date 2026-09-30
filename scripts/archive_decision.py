@@ -39,9 +39,21 @@ import shutil
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from common.trading_calendar import next_a_share_trading_day
 
+# ⚠️ 2026-09-29 修（决策证据黑匣子静默丢失 11 个交易日）：
+# 本脚本被 `wealth_code/scripts/run_wealth_code.py::_archive_decision()` 以 subprocess 方式调用；
+# 脚本模式下 sys.path[0] = scripts/，**项目根不入 sys.path**（Python 3.11+ 不再把 cwd 入 sys.path），
+# 于是模块级 `from common.trading_calendar import ...` 抛 ModuleNotFoundError → 调用方只打印一行
+# `[ARCHIVE] 冻结证据失败`、不阻断主流程 → `cache/decision_log/` 自 2026-09-11 起**当天归档每天静默丢失**
+# （最后一天 = 2026-09-11），「当时看到什么/判断什么」的证据链断掉，复盘与自我迭代失去底座。
+# 同类坑第二次出现（第一次=`ai_ledger._close_of`，2026-09-15）：**凡项目根子目录下的独立脚本，
+# 导入 common/ 前必须自己插 sys.path**。修法＝导入前插入项目根（幂等、无副作用）。
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from common.trading_calendar import next_a_share_trading_day  # noqa: E402
+
 WC = ROOT / "wealth_code"
 WC_CACHE = WC / "cache"
 ROOT_CACHE = ROOT / "cache"

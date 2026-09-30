@@ -6,7 +6,7 @@
 职责：所有卡片（eod/verify/panqian/盘中）共用的**纯视觉构件**——div/hr/note/text_tag
 背景胶囊/资金流向双列/页脚/时间。零业务依赖（不读数据、不含选股逻辑），可独立测试。
 
-被 build_cards / gen_dashboard / card_lint 等多渲染点引用，改样式只动本文件。
+被 build_cards / card_lint 等卡片处理模块引用，改样式只动本文件。
 配色铁律：text_tag 枚举 neutral/blue/turquoise/lime/orange/violet/indigo/wathet/
 green/yellow/red/purple/carmine（禁 hex、禁 grey 之外的自由色）。
 """

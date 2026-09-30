@@ -22,7 +22,7 @@
 | 复盘与机构卡 | 财神-复盘 / 财神-机构调研 | 消费真实证据生成卡片；复盘骨架读 shared_rules，机构原文为主体 |
 | 评估与学习 | 财神-回测 | backtest_engine / decision_audit / learning / behavior_attribution；报告与提案不直接授权改策略 |
 | 发布 | 财神-客户推送 | push_card 单一出口、卡片校验、镜像白名单与审计 |
-| 展示 | 狸猫终端 | React 只读已落盘数据；旧 HTML 由 HTML/gen_dashboard.py 生成 |
+| 展示 | 狸猫终端 | React 只读已落盘数据，是唯一展示端 |
 
 技能目录名不总等于调用名：`a-stock-realtime` 的 name 是 `zxl-stock-realtime`；`ticai-lieshou` 的 name 是 `stock-catalyst-hunter`；`hithink-finance__skillhub` 的 name 是 `hithink-finance`。先按当前可用清单核实依赖，缺失时报告并使用已有合法能力，不能假装调用。第三方数据技能的工具说明不自动改变项目生产数据源。
 

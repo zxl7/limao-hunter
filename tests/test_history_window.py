@@ -89,7 +89,7 @@ def test_zt_history_dir_exists_and_complete():
 def test_residual_archive_self_heal(tmp_path, monkeypatch):
     """残缺日自愈（2026-09-14）：口径日匹配 → 补写 zt_list；来源不明 → 只告警不改写。
 
-    事故：09-11 归档被 HTML/theme_data 盘中时间轴创建成 intraday_only，此后永无来源补
+    事故：09-11 归档被 theme_series 盘中时间轴创建成 intraday_only，此后永无来源补
     → 形态/N字/回流检测永久少一天料。
     """
     import importlib.util

@@ -79,5 +79,9 @@ def test_reflow_signature_state_is_persisted():
     src = (ROOT / "scripts" / "live_signal.py").read_text(encoding="utf-8")
     assert 'sig["reflow_sig_map"] = reflow_sig_map' in src
     assert 'sig["reflow_pushed"] = reflow_pushed' in src
-    # 指纹必须参与判定（冷却到期 ∧ 指纹变化 才允许重推）
-    assert "reflow_sig_map.get(nm, \"\") == _sig_now" in src
+    # 指纹必须参与判定（冷却到期 ∧ 指纹**变化** 才允许重推）。
+    # ⚠️ 2026-09-29 修断言：原断言搜 `== _sig_now`，与代码/自身注释相反。
+    #    `reflow_sig_map[nm]` 存的是「上次推送时的指纹」，要重推必须 `!=`（指纹变了）——
+    #    代码 2026-09-15「变化驱动」修复后即用 `!=`（见 live_signal 注释：
+    #    反例 09-15 电子布指纹恒同却每轮重弹，全天刷屏 6 次），是本断言过时而非代码错。
+    assert 'reflow_sig_map.get(nm, "") != _sig_now' in src

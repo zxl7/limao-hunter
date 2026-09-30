@@ -75,6 +75,22 @@ def test_all_four_criteria_miss(monkeypatch):
     assert state.startswith("not_yet")
 
 
+def test_pool_live_quotes_do_not_fallback_to_boom_day_pct():
+    """实时行情缺失时必须明确为空，不能把建池日涨幅当作今日涨幅。"""
+    candidates = [{
+        "watch_pool": [
+            {"code": "600001.SH", "pct": 10.0},
+            {"code": "000002.SZ", "pct": 9.9},
+        ],
+    }]
+    tr._attach_live_pool_quotes(candidates, {"600001": {"pct": 2.35, "price": 11.2}})
+    first, second = candidates[0]["watch_pool"]
+    assert first["live_pct"] == 2.35
+    assert first["live_price"] == 11.2
+    assert second["live_pct"] is None
+    assert second["live_price"] is None
+
+
 # ────────────────────── ② 阈值：≥2 才成立 ──────────────────────
 
 def _state_with(monkeypatch, hits_wanted):

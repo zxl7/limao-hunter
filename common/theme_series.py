@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""题材数据中枢（HTML 看板唯一数据源）。
+"""题材序列数据中枢。
 
-职责（只做数据，不做 HTML 渲染）：
-  1. 集中维护 题材映射表 THEME_MAP / norm_theme（单一事实源，gen_dashboard 从这里 import）
+职责（只做数据，不做展示渲染）：
+  1. 集中维护题材映射表 THEME_MAP / norm_theme（单一事实源）
   2. 动态扫描本地沉淀：cache/zt_history/zt_*.json（每日收盘涨停快照，按日归档）
   3. 读取今日盘中：cache/pulse_snapshots/latest.json（top5 板块涨停）
   4. 输出 build_series()：所有交易日（收盘）+ 今日盘中 的题材涨停序列，
-     供看板零 JS 渲染「每日题材炒作变化 / 资金扭转趋势」。
+     供终端渲染「每日题材炒作变化 / 资金扭转趋势」。
 
 设计要点：
   - 完全本地、动态：每新增一个 zt_history 文件，看板自动多一列，无需改代码。
   - 沉淀不变：只读，不删除/改写任何 zt_history 与 yesterday_zt.json 沉淀文件。
-  - 盘中时间轴：每次看板重建把当前题材分布按 30 分钟窗写入 zt_history/zt_YYYY-MM-DD.json
+  - 盘中时间轴：每次实时数据发布把当前题材分布按 30 分钟窗写入 zt_history/zt_YYYY-MM-DD.json
     的 intraday_points 字段（并入现有按日归档体系，capture_daily 5 天滚动清理自动覆盖），
     矩阵中当日显示多个盘中时间点列（蓝色标头），与收盘列并存 →
     盘中实时看演变，盘后回看全天「从早炒到晚」的路径。
 
 用法：
-  from theme_data import build_series, THEME_MAP, norm_theme
+  from common.theme_series import build_series, THEME_MAP, norm_theme
   s = build_series()   # -> {"days":[{...}], "theme_labels":[...]}
 """
 import json
@@ -232,7 +232,9 @@ def record_intraday_point():
     })
     pts.sort(key=lambda p: p.get("window", ""))
     data["intraday_points"] = pts
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    from common.json_io import save_json
+    if not save_json(path, data, indent=1):
+        raise OSError(f"盘中题材时间点写入失败: {path}")
     return (hm, len(pts))
 
 
@@ -409,8 +411,10 @@ def export_series_json(max_days=5, out_path=None):
         "table_rows": table_rows,
     }
 
-    Path(out_path).write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
-    print(f"[theme_data] ✅ 中转文件已生成: {out_path} ({len(dates)} 天, {len(labels)} 题材, "
+    from common.json_io import save_json
+    if not save_json(out_path, out, indent=2):
+        raise OSError(f"题材序列写入失败: {out_path}")
+    print(f"[theme_series] ✅ 中转文件已生成: {out_path} ({len(dates)} 天, {len(labels)} 题材, "
           f"{len(daily_details)} 日细节)")
     return out
 
