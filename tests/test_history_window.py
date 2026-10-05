@@ -68,6 +68,7 @@ def test_zt_history_dir_exists_and_complete():
     """
     import json
     from datetime import datetime
+    from common.trading_calendar import is_a_share_trading_day
     today = datetime.now().strftime("%Y-%m-%d")
     d = ROOT / "cache" / "zt_history"
     if not d.exists():
@@ -81,6 +82,10 @@ def test_zt_history_dir_exists_and_complete():
             continue
         if str(z.get("date") or "") >= today:
             continue            # 今日/未来盘中快照：盘后链跑完前无 zt_list 属正常
+        # 休市日（法定节假日/周末）本就无涨停，空 zt_list 属正常，跳过
+        fname_date = p.name[len("zt_"):-len(".json")]  # zt_YYYY-MM-DD.json
+        if not is_a_share_trading_day(fname_date):
+            continue
         if not (z.get("zt_list") or []):
             bad.append((p.name, "zt_list 为空"))
     assert not bad, f"cache/zt_history 存在残缺历史日（缺 zt_list）: {bad}"

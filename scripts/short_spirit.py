@@ -111,12 +111,18 @@ def load_cfg():
 
 def in_trading() -> bool:
     now = datetime.now()
-    if now.weekday() >= 5:
-        return False
     hm = now.hour * 60 + now.minute
     # 09:25 起（2026-08-24：早盘前半小时高频实时窗口从竞价结束 09:25 开始，秒板/冲板
     # 信号不因 09:25-09:30 区间被挡；原 09:30 起点会漏掉开盘前 5 分钟的异动）
-    return (9 * 60 + 25) <= hm <= (11 * 60 + 30) or (13 * 60) <= hm <= (15 * 60)
+    in_window = (9 * 60 + 25) <= hm <= (11 * 60 + 30) or (13 * 60) <= hm <= (15 * 60)
+    if not in_window:
+        return False
+    # 节假日门禁：法定节假日（含国庆）不推送，调休补班开市日仍推送（is_a_share_trading_day 为唯一权威）
+    try:
+        from common.trading_calendar import is_a_share_trading_day
+        return is_a_share_trading_day(now)
+    except Exception:
+        return now.weekday() < 5  # 兜底：common 不可用，至少排除周末
 
 
 def session() -> str:

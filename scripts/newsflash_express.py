@@ -71,13 +71,19 @@ def now() -> datetime:
 
 def in_trading(dt: datetime | None = None) -> bool:
     dt = dt or now()
-    if dt.weekday() >= 5:
-        return False
     mins = dt.hour * 60 + dt.minute
     # ⛔ 2026-09-07 用户「盘中异动预警停 · 收盘后快讯依然可以推送」：快讯速递时段扩到 15:30
     #    （收盘后 30min 仍推收盘播报/盘后消息面，时效门 10min 自然衰减）；
     #    盘中异动类（短线精灵涨停卡/板块卡）维持交易时段 15:00 停，收盘后不再推盘中行情。
-    return (555 <= mins <= 690) or (780 <= mins <= 930)
+    in_window = (555 <= mins <= 690) or (780 <= mins <= 930)
+    if not in_window:
+        return False
+    # 节假日门禁：法定节假日（含国庆）不推送，调休补班开市日仍推送（is_a_share_trading_day 为唯一权威）
+    try:
+        from common.trading_calendar import is_a_share_trading_day
+        return is_a_share_trading_day(dt)
+    except Exception:
+        return dt.weekday() < 5  # 兜底：common 不可用，至少排除周末
 
 
 def http_get(url: str, t: int = 10) -> dict | None:

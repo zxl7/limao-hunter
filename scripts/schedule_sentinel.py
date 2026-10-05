@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))  # 供 in_trading 内 common.trading_calendar 导入（必须在首次调用前注入）
 DB = Path.home() / ".workbuddy" / "workbuddy.db"
 BJ_TZ = timezone(timedelta(hours=8))
 STALE_MIN = 45
@@ -23,7 +24,15 @@ DEDUP_WINDOW = 1800  # 30 分钟
 
 def in_trading(dt: datetime) -> bool:
     t = dt.strftime("%H:%M")
-    return ("09:25" <= t <= "11:30") or ("13:00" <= t <= "14:50")
+    in_window = ("09:25" <= t <= "11:30") or ("13:00" <= t <= "14:50")
+    if not in_window:
+        return False
+    # 节假日门禁：法定节假日（含国庆）+ 周末不监管也不告警（补班开市日仍监管）
+    try:
+        from common.trading_calendar import is_a_share_trading_day
+        return is_a_share_trading_day(dt)
+    except Exception:
+        return dt.weekday() < 5  # 兜底：至少排除周末
 
 
 def parse_ts(raw) -> datetime | None:

@@ -182,10 +182,16 @@ def build_fund_switch_card(sw: dict, hhmm: str) -> dict:
 
 def in_trading() -> bool:
     n = datetime.now()
-    if n.weekday() >= 5:  # 周六日
-        return False
     hm = n.hour * 60 + n.minute
-    return (9 * 60 + 15 <= hm <= 11 * 60 + 30) or (13 * 60 <= hm <= 15 * 60)
+    in_window = (9 * 60 + 15 <= hm <= 11 * 60 + 30) or (13 * 60 <= hm <= 15 * 60)
+    if not in_window:
+        return False
+    # 节假日门禁：法定节假日（含国庆）不推送，调休补班开市日仍推送（is_a_share_trading_day 为唯一权威）
+    try:
+        from common.trading_calendar import is_a_share_trading_day
+        return is_a_share_trading_day(n)
+    except Exception:
+        return n.weekday() < 5  # 兜底：common 不可用，至少排除周末
 
 
 def load(p: Path) -> dict:
