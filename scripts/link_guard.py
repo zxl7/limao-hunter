@@ -66,9 +66,20 @@ def _save(path: Path, value) -> None:
 
 
 def _in_session(now: datetime) -> bool:
-    """仅交易日 + 交易时段内生效（周末与盘后不打扰）。"""
-    if now.weekday() >= 5:
-        return False
+    """仅交易日 + 交易时段内生效（周末/法定节假日/盘后不打扰）。
+
+    ⛔ 2026-10-06 国庆误报事故：原实现只判 weekday<5 + 时段，未豁免法定节假日，
+       休市日（如 10-06 周二）被当盘中 → data_ready.ready=false（休市无数据，本属正常）
+       → 误判断链狂推「盘面数据断了」。现把「是否交易日」完全委托
+       is_a_share_trading_day（唯一真源，含调休补班），仅 import 失败才兜底判周末。
+    """
+    try:
+        from common.trading_calendar import is_a_share_trading_day
+        if not is_a_share_trading_day(now):
+            return False
+    except Exception:
+        if now.weekday() >= 5:
+            return False
     return SESSION_START_HHMM <= now.hour * 100 + now.minute < SESSION_END_HHMM
 
 

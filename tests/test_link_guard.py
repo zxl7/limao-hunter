@@ -118,3 +118,35 @@ def test_out_of_session_does_not_alert(guard, monkeypatch):
     for _ in range(8):
         guard.main()
     assert guard.sent == []
+
+
+def test_in_session_exempts_holiday_and_honors_makeup():
+    """真实 _in_session：休市日（含国庆）False，补班周六/普通交易日 True。
+
+    2026-10-06 国庆误报事故回归：原实现只判 weekday<5，把休市周二当盘中，
+    看到 data_ready.ready=false（休市无数据本属正常）即误判「盘面数据断了」。
+    现委托 is_a_share_trading_day，须正确识别节假日与调休补班。
+    """
+    m = _load()  # 不 mock _in_session，测真实实现
+    cases = [
+        (datetime(2026, 10, 1, 10, 0), False),   # 国庆假期周四
+        (datetime(2026, 10, 6, 10, 0), False),   # 国庆假期周二（事故日）
+        (datetime(2026, 10, 8, 10, 0), True),    # 节后首个交易日周四
+        (datetime(2026, 10, 10, 10, 0), True),   # 周六调休补班开市
+        (datetime(2026, 10, 4, 10, 0), False),   # 周日周末
+        (datetime(2026, 10, 6, 7, 0), False),    # 国庆清晨（非时段，兜底也为 False）
+    ]
+    for dt, expected in cases:
+        assert m._in_session(dt) is expected, f"_in_session({dt}) 应为 {expected}"
+
+
+def test_holiday_does_not_alert(guard, monkeypatch):
+    """法定节假日（如 2026-10-06 国庆）整体短路，绝不告警。"""
+    # 用真实 _in_session 覆盖 fixture 的 mock（真实实现会判国庆→False→main 直接 return）
+    real = _load()
+    monkeypatch.setattr(guard, "_in_session", real._in_session)
+    now = datetime(2026, 10, 6, 10, 0)
+    _write_ready(guard, False, "2026-10-05", now.isoformat(timespec="seconds"))
+    for _ in range(8):
+        guard.main()
+    assert guard.sent == [], "国庆休市日不应推送任何链路断档告警"
