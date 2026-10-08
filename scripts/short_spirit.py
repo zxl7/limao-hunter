@@ -78,6 +78,33 @@ SPIRIT_AMT_EXEMPT_MIN_PCT = 15.0   # 20cm 票涨幅门槛（15%≈20cm 冲板线
 SPIRIT_AMT_EXEMPT_MIN_YI = 1.0     # 豁免仍保留的绝对流动性下限（亿）
 LEADER_FALLBACK_20CM_MIN_PCT = 19.0  # C 兜底池纳入「首板 20cm 涨停」的涨幅门槛（≈20cm 涨停线）
 
+# ── 板块接力方向（2026-10-08 用户核心功能 · 选项 A「盘中即时」）──────────────────
+# 用户原话：「当你捕获到这个板块的强势股涨停时，我们要顺势推出应该买什么」。
+# 定位：短线精灵从「只报谁涨了」升级为「报谁涨了 + 该方向该买什么」。
+# 输出两段（对应龙头战法体系 · 梯队分级）：
+#   ① 🔒 已封板身位梯队（来自 limit_up_stocks 同板块，按板数降序）→ 今日买不到，
+#      是「明日竞价看龙一溢价」的参考，⛔ 不当作可买标的；
+#   ② 🎯 可接力（未封板）：来自 latest.json 的 **leaders 识别度榜** 中同板块、
+#      涨幅≥RELAY_HINT_MIN_PCT、且**未在涨停清单**的强势票 → 这才是「现在能买什么」。
+#     （实证 10-08：锂电池 8 家封板，leaders 里金银河(300619)+16.24% / 理奇智能(301599)
+#      +10.83% 同属锂电池且未封板 = 可接力标的；已封板的是时代万恒4板/紫竹3板/领湃20cm。）
+# ⛔ 只对 top5 主线板块提示 —— 非主线不推（体系：跟风杂毛禁做；只推主线梯队身位票）。
+# ⛔ 排除：ST / 科创板688（无权限）/ 黑名单（京能系·金能科技）/ 本轮已推 / 涨幅不足。
+# ⛔ 可逆开关：ENABLE_SPIRIT_RELAY_HINT=False 即回到「只报异动、不给方向」的改动前行为。
+ENABLE_SPIRIT_RELAY_HINT = True
+RELAY_HINT_MIN_PCT = 7.5        # 可接力票涨幅下限（确保是「强势」而非滞涨跟风）
+RELAY_HINT_MAX_ITEMS = 3        # 可接力票最多列几只（防刷屏）
+RELAY_HINT_LADDER_MAX = 4       # 已封板身位行最多列几只
+RELAY_EXCLUDE_NAME_KEYS = ("京能", "金能")   # 黑名单（宪法：京能系 / 金能科技）
+# 触发口径（用户原话「捕获到这个板块的强势股涨停时」）：只在卡内含**涨停/接近涨停**信号时给方向；
+# 快速拉升（低强度）不给 —— 避免每张卡都挂一行方向。
+RELAY_TRIGGER_TYPES = ("涨停", "接近涨停")
+# 限频（09-15 铁律：**冷却 ∧ 内容指纹变化**，二者需同时满足才重发；⛔ 禁纯时间冷却）：
+# 指纹 = 板块名 + 涨停家数 + 身位梯队 codes + 可接力 codes@涨幅。
+# 指纹变了（如可接力票涨停进梯队）→ 立即重发；指纹不变 → 须过冷却才重发，防同板块连卡刷屏。
+# 设为 0 = 每张相关卡都显示（等于关闭限频）。
+RELAY_COOLDOWN_MIN = 20
+
 # ── 低强度合并（2026-09-17 用户「前后端都改」）──────────────────────────────
 # 用户规则：① 低强度推送合并（1 分钟内只推了一个、强度不高的合并）
 #          ② 高强度联动爆发（多板块联动 → 即时聚合成一张）
@@ -275,6 +302,147 @@ def _boards_map(d):
             if mm:
                 m[c[:6]] = int(mm.group(1))
     return m
+
+
+def _sector_match(a: str, b: str) -> bool:
+    """板块名匹配（⛔ 防「裸双向子串」假命中，同 09-15 回流前兆铁律）：
+    精确相等，或短名 ≥3 字且被包含（挡 电子⊄电子布 / 电网⊄智能电网 这类泛行业名）。
+    此处两边命名体系不同（东财行业名 vs top5 概念名），故双向都判，但均需 ≥3 字。"""
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if len(a) >= 3 and a in b:
+        return True
+    if len(b) >= 3 and b in a:
+        return True
+    return False
+
+
+def _relay_sector_of(signals, d):
+    """定位接力板块：本轮信号里第一只「涨停/接近涨停」且 sector 命中 top5 主线板块的。
+    ⛔ 无命中返回 None —— 非主线不给方向（体系：只推主线梯队，不推跟风）。"""
+    top5 = [str(s.get("name") or "") for s in (d.get("top5") or [])[:5] if s.get("name")]
+    for sig in (signals or []):
+        if str(sig.get("type") or "") not in RELAY_TRIGGER_TYPES:
+            continue
+        sec = str(sig.get("sector") or "")
+        if not sec:
+            continue
+        for nm in top5:
+            if _sector_match(nm, sec):
+                return nm
+    return None
+
+
+def _relay_state_path() -> Path:
+    """接力块限频状态（随 ROOT 动态计算 —— 测试切临时根目录时不触生产，同 _lock_path）。"""
+    return ROOT / "cache" / "short_spirit_relay_state.json"
+
+
+def _relay_fingerprint(r) -> str:
+    """内容指纹（09-15 铁律）：板块 + 涨停家数 + 身位 codes + 可接力 codes@涨幅。"""
+    return "|".join([
+        str(r.get("sector") or ""), str(r.get("zt_count") or 0),
+        ",".join(str(x.get("code")) for x in (r.get("ladder") or [])),
+        ",".join(f"{x.get('code')}@{x.get('pct')}" for x in (r.get("tradable") or [])),
+    ])
+
+
+def _relay_should_emit(r, now):
+    """限频判定（返回 (是否发, 指纹)）。⛔ = 冷却 ∧ 指纹变化（禁纯时间冷却）。"""
+    fp = _relay_fingerprint(r)
+    if RELAY_COOLDOWN_MIN <= 0:
+        return True, fp
+    try:
+        state = json.loads(_relay_state_path().read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            state = {}
+    except Exception:
+        state = {}
+    prev = state.get(str(r.get("sector") or "")) or {}
+    if prev.get("sig") != fp:          # 内容变了 → 立即发（信息不丢）
+        return True, fp
+    try:                                # 内容没变 → 须过冷却
+        last = datetime.strptime(str(prev.get("ts") or ""), "%Y-%m-%d %H:%M:%S")
+        return (now - last).total_seconds() >= RELAY_COOLDOWN_MIN * 60, fp
+    except Exception:
+        return True, fp
+
+
+def _relay_mark(r, fp, now) -> None:
+    """记录本次已发（指纹 + 时间）。"""
+    try:
+        state = json.loads(_relay_state_path().read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            state = {}
+    except Exception:
+        state = {}
+    state[str(r.get("sector") or "")] = {"sig": fp, "ts": now.strftime("%Y-%m-%d %H:%M:%S")}
+    p = _relay_state_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _relay_hint(signals, d):
+    """板块接力方向（2026-10-08 用户核心功能·A 盘中即时）。
+
+    捕获到主线板块的强势票涨停时，顺势给出「该方向该买什么」：
+      ① ladder   = 已封板身位梯队（limit_up_stocks 同板块 → 今日买不到，明日竞价参考）
+      ② tradable = 未封板可接力（leaders 同板块·涨幅≥门槛·未在涨停清单 → 现在能买）
+    返回 {"sector", "zt_count", "ladder":[...], "tradable":[...]} 或 None。
+    """
+    if not ENABLE_SPIRIT_RELAY_HINT:
+        return None
+    sector = _relay_sector_of(signals, d)
+    if not sector:
+        return None
+
+    def _b(v):
+        m = re.search(r"(\d+)", str(v or ""))
+        return int(m.group(1)) if m else 0
+
+    # ① 已封板身位梯队（按板数降序，其次涨幅降序）
+    ladder = []
+    for x in (d.get("limit_up_stocks") or []):
+        if not isinstance(x, dict):
+            continue
+        if not _sector_match(sector, str(x.get("sector") or "")):
+            continue
+        ladder.append({"name": x.get("name"), "code": str(x.get("code") or "")[:6],
+                       "boards": x.get("boards"), "pct": float(x.get("pct") or 0)})
+    ladder.sort(key=lambda x: (-_b(x["boards"]), -x["pct"]))
+    zt_codes = {x["code"] for x in ladder}
+
+    # ② 未封板可接力（leaders 同板块，排除已推/已封/ST/科创/黑名单/涨幅不足）
+    pushed_codes = {str(s.get("code") or "")[:6] for s in (signals or [])}
+    tradable = []
+    for l in (d.get("leaders") or []):
+        if not isinstance(l, dict):
+            continue
+        code = str(l.get("code") or "")[:6]
+        name = str(l.get("name") or "")
+        if not code or code in zt_codes or code in pushed_codes:
+            continue
+        if not _sector_match(sector, str(l.get("sector") or "")):
+            continue
+        if code.startswith("688"):                       # 科创板：用户无权限
+            continue
+        if "ST" in name.upper().replace(" ", ""):        # ST 不参与
+            continue
+        if any(k in name for k in RELAY_EXCLUDE_NAME_KEYS):   # 黑名单
+            continue
+        pct = float(l.get("pct") or 0)
+        if pct < RELAY_HINT_MIN_PCT:
+            continue
+        tradable.append({"name": name, "code": code, "pct": pct})
+    tradable.sort(key=lambda x: -x["pct"])
+
+    if not ladder and not tradable:
+        return None
+    return {"sector": sector, "zt_count": len(ladder),
+            "ladder": ladder[:RELAY_HINT_LADDER_MAX],
+            "tradable": tradable[:RELAY_HINT_MAX_ITEMS]}
 
 
 def _leaders_as_pool(d):
@@ -745,7 +913,7 @@ def _pct_tag(pct: float) -> str:
     return f"<text_tag color='neutral'>{pct:+.2f}%</text_tag>"
 
 
-def build_card(signals, sess, now):
+def build_card(signals, sess, now, relay=None):
     """飞书卡（2026-08-18 用户定·向窗口卡事件流风格看齐）：
     按异动类型分组（🔥涨停/🚀冲板/⚡快速拉升），一行一只，字段压缩到一行。
     ⛔ 2026-08-25 修复（用户抓包「又忘了红涨绿跌」+「红色颜色不对」）：
@@ -787,6 +955,26 @@ def build_card(signals, sess, now):
             lines.append(
                 f"　<text_tag color='{col}'>{s['name']}({s['code']})</text_tag> "
                 f"{_pct_tag(s['pct'])}（{s['sector']}）｜⚡{s['reason']}")
+    # 🎯 板块接力方向（2026-10-08 用户核心功能·A 盘中即时）：
+    #   「捕获到主线板块强势票涨停 → 顺势给该方向该买什么」。
+    #   🔒 已封板行 = 身位梯队（今日买不到，明日竞价参考）；🎯 可接力行 = 未封板能买的。
+    if relay:
+        sec = relay.get("sector") or ""
+        zt_n = relay.get("zt_count") or 0
+        lines.append("")
+        lines.append(f"**🎯 接力方向｜{sec}**（今日 {zt_n} 家涨停）")
+        lad = relay.get("ladder") or []
+        if lad:
+            seg = "｜".join(
+                f"{x['name']}({x['boards']})" if x.get("boards") else f"{x['name']}"
+                for x in lad)
+            lines.append(f"　🔒 已封板：{seg}")
+        tr = relay.get("tradable") or []
+        if tr:
+            seg2 = "｜".join(f"{x['name']}({x['code']}) {_pct_tag(x['pct'])}" for x in tr)
+            lines.append(f"　🎯 可接力：{seg2}")
+        else:
+            lines.append("　🎯 该方向已无未封板身位票 → 等明日竞价看龙一溢价，不追高")
     lines.append("")
     return {
         "title": f"短线精灵·异动信号 | {now.strftime('%H:%M')} | 命中{len(signals)}只",
@@ -1052,7 +1240,18 @@ def _run(args):
         return
 
     card_signals = sorted(pending, key=lambda x: -x["strength"])[: cfg["max_signals"]]
-    card = build_card(card_signals, sess, now)
+    # 🎯 板块接力方向（2026-10-08 用户核心功能·A 盘中即时）：由本轮实际入卡信号定位主线板块。
+    # 限频（09-15 铁律 冷却∧指纹变化）：同板块内容未变且未过冷却 → 本卡不带方向，防连卡刷屏。
+    relay = _relay_hint(card_signals, d)
+    if relay:
+        emit, fp = _relay_should_emit(relay, now)
+        if emit:
+            _relay_mark(relay, fp, now)
+            append_event({"kind": "relay", "sector": relay["sector"], "zt_count": relay["zt_count"],
+                          "tradable": [x["code"] for x in relay["tradable"]]})
+        else:
+            relay = None
+    card = build_card(card_signals, sess, now, relay=relay)
     cf = ROOT / "cache" / "short_spirit_card.json"
     save_json(cf, card)
     # ⛔ 有界修复（2026-09-17）：入池后、任何发送尝试之前可靠落盘 pending（update_last=False）。
