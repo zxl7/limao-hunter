@@ -5,7 +5,9 @@ C=东财涨幅榜抓取失败(下午沙箱常 RemoteDisconnected→池0)时, 用
    latest.json 的连板龙头(boards>=2)兜底, 确保连板龙头盘中任何时段可推。
 ⛔ 同时锁死 _boards_map 对 boards="3天3板" 中文格式的解析(之前 int(b) 抛异常→A豁免失效):
   1. _boards_map("3天3板") 必须 = 3
-  2. _leaders_as_pool 只返回 boards>=2
+  2. _leaders_as_pool 返回 boards>=2；**2026-10-08 扩展**：首板 20cm 涨停
+     （boards 空 + 涨幅≥19% + 创业板 300/301）也纳入（领湃科技 300530 事故），
+     但主板首板仍不入池（防刷屏）—— 见 tests/test_short_spirit_20cm_amount.py
   3. 降级项 market_cap_yi=9999(触发A豁免) + prev_close 反推(涨停标正确)
 """
 import importlib.util

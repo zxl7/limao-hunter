@@ -61,6 +61,23 @@ SPIRIT_LOWCAP_YI = 30             # B：开启 LOWCAP 后非豁免票市值门�
 ENABLE_SPIRIT_LOWCAP = True       # B：非豁免票市值门槛降至 30 亿（2026-09-07 用户「直接开始执行」盘中激活）
 ENABLE_SPIRIT_LEADER_FALLBACK = True  # C：东财抓取失败(下午常空池)→用 latest.json 连板龙头(boards>=2)兜底（同上盘中激活）
 
+# ── 20cm 高辨识度豁免成交额门槛（2026-10-08 用户「直接盘中开始做」）──────────────
+# 背景：领湃科技(300530) 10-08 首板 20cm 涨停（锂电池），全天成交仅 3.47 亿 < 下午门槛
+#   10 亿 → 被 noise_filter 成交额门槛剔除；而同方向连板龙头(时代万恒4板/传艺科技3板)
+#   走 _leaders_as_pool 硬塞 amount_yi=999 绕过了门槛 → 被推。
+#   即「首板 20cm 高辨识度票」成系统性盲区（既非连板、又够不到成交额门槛）。
+# 规则（_amount_exempt）：创业板 20cm(300/301) + 涨幅≥SPIRIT_AMT_EXEMPT_MIN_PCT（冲板强度）
+#   + 已被识别为主线票（latest leaders / top5 核心 / 连板≥1 / 行业命中热点）
+#   + 成交额≥SPIRIT_AMT_EXEMPT_MIN_YI（保底流动性，挡无成交小票）。
+# 两条路径同源（2026-10-08 修开关不一致 bug）：
+#   ① 东财池可用 → noise_filter 内 _amount_exempt 放行；
+#   ② 东财池失败 → _leaders_as_pool 兜底池纳入首板 20cm 涨停。
+# ⛔ 二者共用本开关：ENABLE_SPIRIT_AMT_EXEMPT_20CM=False 即整体回到改动前行为（与 A/B/C 同套路）。
+ENABLE_SPIRIT_AMT_EXEMPT_20CM = True
+SPIRIT_AMT_EXEMPT_MIN_PCT = 15.0   # 20cm 票涨幅门槛（15%≈20cm 冲板线，含首板/前强）
+SPIRIT_AMT_EXEMPT_MIN_YI = 1.0     # 豁免仍保留的绝对流动性下限（亿）
+LEADER_FALLBACK_20CM_MIN_PCT = 19.0  # C 兜底池纳入「首板 20cm 涨停」的涨幅门槛（≈20cm 涨停线）
+
 # ── 低强度合并（2026-09-17 用户「前后端都改」）──────────────────────────────
 # 用户规则：① 低强度推送合并（1 分钟内只推了一个、强度不高的合并）
 #          ② 高强度联动爆发（多板块联动 → 即时聚合成一张）
@@ -274,14 +291,19 @@ def _leaders_as_pool(d):
             mm = re.search(r"(\d+)", str(b))
             if mm:
                 nb = int(mm.group(1))
-        if nb < 2:
-            continue
         code = str(l.get("code") or "")
         if not code:
             continue
         code = code[:6]
         pct = float(l.get("pct") or 0)
         price = float(l.get("price") or 0)
+        # 2026-10-08 用户「直接盘中开始做」：首板 20cm 涨停（高辨识度但非连板）也纳入兜底池。
+        #   否则东财抓取失败时，领湃科技(300530·首板20cm涨停·boards 为空)全天无路径进入推送池。
+        # ⛔ 与 _amount_exempt 共用同一总开关 ENABLE_SPIRIT_AMT_EXEMPT_20CM（一条开关整体可逆）。
+        _is20 = bool(l.get("is_20cm")) or code[:3] in ("300", "301")
+        if nb < 2 and not (ENABLE_SPIRIT_AMT_EXEMPT_20CM and _is20
+                           and pct >= LEADER_FALLBACK_20CM_MIN_PCT):
+            continue
         prev_close = price / (1 + pct / 100) if pct > 0 else 0.0
         out.append({
             "code": code,
@@ -383,14 +405,48 @@ def _timeliness_gate_down(signals, pool, now):
     return keep
 
 
-def noise_filter(pool, cfg, now, exempt_codes=None, boards_map=None):
-    """噪音过滤链：ST/次新/市值/成交额/涨幅下限"""
+def _amount_exempt(s, identified_codes=None, boards_map=None, hot_kws=None):
+    """20cm 高辨识度票豁免成交额门槛（2026-10-08 用户「直接盘中开始做」）。
+
+    背景：领湃科技(300530) 10-08 首板 20cm 涨停（锂电池），全天成交仅 3.47 亿 < 下午门槛
+    10 亿 → 被成交额门槛剔除；而同方向连板龙头(时代万恒4板/传艺科技3板)走 `_leaders_as_pool`
+    硬塞 amount_yi=999 绕过了门槛 → 被推。于是「首板 20cm 高辨识度」成系统性盲区。
+    规则：创业板 20cm(300/301) + 涨幅≥SPIRIT_AMT_EXEMPT_MIN_PCT（冲板强度）
+      + 已被识别为主线票（latest leaders / top5 核心 / 连板≥1 / 行业命中热点关键词）
+      + 成交额≥SPIRIT_AMT_EXEMPT_MIN_YI（保底流动性）。
+    ⛔ 科创板(688)不纳入（用户无权限）；⛔ 主板不纳入（非 20cm，成交额门槛即其保护）。
+    """
+    if not ENABLE_SPIRIT_AMT_EXEMPT_20CM:
+        return False
+    code = str(s.get("code") or "")
+    if code[:3] not in ("300", "301"):
+        return False
+    if float(s.get("pct") or 0) < SPIRIT_AMT_EXEMPT_MIN_PCT:
+        return False
+    if float(s.get("amount_yi") or 0) < SPIRIT_AMT_EXEMPT_MIN_YI:
+        return False
+    if code in (identified_codes or set()):
+        return True
+    if int((boards_map or {}).get(code, 0) or 0) >= 1:
+        return True
+    return str(s.get("industry") or "") in (hot_kws or set())
+
+
+def noise_filter(pool, cfg, now, exempt_codes=None, boards_map=None,
+                 identified_codes=None, hot_kws=None):
+    """噪音过滤链：ST/次新/市值/成交额/涨幅下限
+
+    `identified_codes`（2026-10-08 新增）= 高辨识度票集（latest leaders ∪ top5 核心），
+    仅用于 20cm 成交额豁免判定（_amount_exempt），**不影响**市值门槛的 exempt_codes 语义。
+    """
     keep = []
     min_cap = cfg["min_market_cap_yi"]
     amt_thr = cfg["amount_morning_yi"] if session() == "morning" else cfg["amount_afternoon_yi"]
     cutoff = now - timedelta(days=int(cfg["max_new_stock_days"]))
     _exempt_set = exempt_codes or set()
     _bmap = boards_map or {}
+    _ident = identified_codes if identified_codes is not None else _exempt_set
+    _hot = hot_kws or set()
     for s in pool:
         if "ST" in s["name"] or "退" in s["name"] or "*" in s["name"]:
             continue
@@ -406,7 +462,8 @@ def noise_filter(pool, cfg, now, exempt_codes=None, boards_map=None):
             _cap_thr = SPIRIT_LOWCAP_YI if ENABLE_SPIRIT_LOWCAP else min_cap
             if mc < _cap_thr:
                 continue
-        if s["amount_yi"] < amt_thr:
+        # 成交额门槛（2026-10-08：20cm 高辨识度票可豁免，见 _amount_exempt）
+        if s["amount_yi"] < amt_thr and not _amount_exempt(s, _ident, _bmap, _hot):
             continue
         # 次新：上市日期距今 < max_new_stock_days
         if s["list_date"] and len(s["list_date"]) == 8:
@@ -514,7 +571,13 @@ def build_signals(d, now, cfg):
     t5codes = top5_codes(d)
     t5names = [str(s.get("name") or "") for s in (d.get("top5") or [])[:5]]
     boards_map = _boards_map(d)
-    keep = noise_filter(pool, cfg, now, exempt_codes=t5codes, boards_map=boards_map)
+    # 高辨识度票集（2026-10-08 用户「直接盘中开始做」）：top5 板块核心票 ∪ latest leaders 全部 code。
+    #   leaders 是系统自身的「识别度榜」，领湃科技(300530·首板20cm涨停·boards 空)即在榜内 ——
+    #   使 20cm 高辨识度票可豁免成交额门槛（_amount_exempt），修复「首板20cm被成交额门槛误杀」盲区。
+    identified_codes = set(t5codes) | {
+        str(l.get("code") or "")[:6] for l in (d.get("leaders") or []) if l.get("code")}
+    keep = noise_filter(pool, cfg, now, exempt_codes=t5codes, boards_map=boards_map,
+                        identified_codes=identified_codes, hot_kws=kws)
     # 板块龙头保留：同行业按涨幅取 top_per_sector
     sec_groups = {}
     for s in keep:
