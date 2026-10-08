@@ -24,9 +24,17 @@
   ④ 低于预期区间下沿    → 放弃（不及预期）
   ⑤ 没红开（gap ≤ 0）   → 观察
   ⑥ 红开但量能不足      → 观察（无量的高开＝诱多）
-  ⑦ 其余                → 候选
+  ⑦ 同线核心已断板的跟风 → 观察（跟风闸·不占名额）
+  ⑧ 所属方向资金失血     → 观察（方向净流出 ≥30 亿·不占名额）        ← 土壤
+  ⑨ 位置高 + 二波反抽    → 观察（断板 ≥3 个交易日后重启 ∧ 上一波最高板 ≥3·不占名额）← 位置
+  ⑩ 前一日派发特征       → 观察（换手大 ∧ 封单薄 ∧ 封得晚·三条全中·不占名额）← 盘口
+  ⑪ 其余                → 候选
   候选先按「地位 → 带动 → 连续性 → 竞争身位」，再沿用同线核心、预案/机械强龙等旧排序键，取前 N 只 → 参与；
   其余候选 → 观察（附「池内今天只买前 N 只」）。
+  ⛔ ⑦~⑩ 的判据全部来自**前一交易日收盘**（09:25 时点已可得），不看今日盘中——所以它们能
+     在竞价落地的那一刻就生效，而不是收盘后才后悔（2026-10-08 回撤教训）。
+  ⚠️ ⑦~⑩ 的先后＝「宏观到微观」：板块有没有钱（⑧）→ 这票在什么位置（⑨）→ 它昨天封得脏不脏（⑩）。
+     位置必须排在派发前面，否则先被「换手大/封单薄」命中，卡面只说症状、说不出真原因。
 
 融合边界（2026-09-24 用户确认）：盘后 AI 的 `normal` 不能用软理由压过已核实的
 机械强龙事实。满足“接力池第1或09:30前封板”，并且没有一字/ST/成交额不足5亿/纯跟风
@@ -56,6 +64,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core import ai_caliber as _ac                      # noqa: E402
+from core import defense_gate as _dg                    # noqa: E402
 from core import market_open                             # noqa: E402
 
 # ── 开关（架构改动必留可逆开关）─────────────────────────────────────────────
@@ -103,6 +112,21 @@ MECH_LEADER_MIN_TURNOVER_YI = 5.0
 #   表达，不必硬拦——否则会误杀正常的低位接力（用户战法本就有 2 进 3 倾斜）。
 POOL_CALL_CORE_GATE = True
 CORE_GATE_MIN_GAP = 2
+
+# ── 🛡️ 买入前防守闸门（2026-10-08 大幅回撤经验固化·见 core/defense_gate.py）──────
+# 实证：10-08 只买两只（襄阳轴承 −5.85% / 南华生物 −8.18%，平均 −7.02%，净值 1.058→0.984）。
+# 两只票在**前一日收盘**就同时具备「换手 >15% + 封单/流通 <2% + 10:00 后才封板」三条特征，
+# 而同日走出来的票三条命中 0~2 条。→ 09:25 竞价达标**不再等于**可以买：
+#   · 派发特征（三条全中）→ 降级观察、**不占当日名额**（名额让给封板质量好的票）
+#   · 方向资金失血（所属方向昨日净流出 ≥30 亿）→ 同上
+#   · 位置高 + 二波反抽（断板 ≥3 个交易日后重启）→ 同上（2026-10-08 补·南华案例）
+#   · 环境差（昨收 + 今开双腿判据命中 ≥2/≥3 条）→ 名额压到 1 只 / 当日不主动买
+# ⛔ 可逆：`POOL_CALL_DEFENSE_GATE=False` → 逐字回退 10-08 前的裁决行为。
+POOL_CALL_DEFENSE_GATE = True
+POOL_CALL_DEFENSE_DISTRIBUTION = True
+POOL_CALL_DEFENSE_SECTOR_DRAIN = True
+POOL_CALL_DEFENSE_POSITION = True
+POOL_CALL_DEFENSE_ENV = True
 
 MISSING = "—"
 
@@ -353,6 +377,9 @@ def call_pool(candidates: dict[str, Any] | None,
               zt_rows: list[dict[str, Any]] | None = None,
               line_cores: dict[str, dict[str, Any]] | None = None,
               market_open: dict[str, Any] | None = None,
+              sector_flow: dict[str, dict[str, Any]] | None = None,
+              zt_series: dict[str, list[tuple[str, int]]] | None = None,
+              zt_days: list[str] | None = None,
               enabled: bool | None = None) -> dict[str, Any]:
     """9:25 池内裁决 → 今天买哪只（**唯一判据源**）。
 
@@ -362,14 +389,20 @@ def call_pool(candidates: dict[str, Any] | None,
       plan       = 盘后预案（`cache/ai_view_<执行日>.json`）—— 读 stance / views[code].bias
       stance     = 攻守基调（缺省从 plan 取）—— 决定当日可买只数上限
       line_cores = 同线最高板表（`load_line_cores`），缺省自动加载
-      market_open = 昨日完整涨停池的09:25竞价读数；仅空仓日用来保守放宽一只名额
+      market_open = 昨日完整涨停池的09:25竞价读数；环境防守腿用它，空仓日也用它放宽一只名额
+      sector_flow = 上一交易日的板块资金表（`defense_gate.load_sector_flow`）；缺省按
+                    `candidates.date` 自动加载，缺失则方向闸**不裁决**（诚实降级）
+      zt_series / zt_days = 逐票涨停序列 + 交易日历（`defense_gate.load_zt_series`）；二者
+                    都缺省（None）才按 `candidates.date` 自动加载——位置闸用。
+                    显式传任一（含空）即视为「调用方自带数据」，不再读盘（测试隔离用）
       enabled    = 覆盖开关（测试用）；None → 读模块常量 `POOL_CALL_ENABLED`
 
     返回：
       {"enabled": bool, "stance", "quota", "views": {code: {...}}, "meta": {...}}
       views[code] = {code, name, view, reason, gap_pct, zone, bias, amount_yi, need_yi,
                      theme_name, boards, line_core, line_is_core, mechanical_leader,
-                     mechanical_leader_note, quota_rank}
+                     mechanical_leader_note, quota_rank, defense_gate, defense_detail,
+                     defense_warn, position_warn, seal_quality}
       view ∈ participate / watch / skip（与既有口径同一个枚举·卡面/账本共用）
 
     ⛔ 只读：不写账本、不改阈值；落盘由调用方（pipeline_verify）负责。
@@ -387,6 +420,23 @@ def call_pool(candidates: dict[str, Any] | None,
     open_read = market_open if isinstance(market_open, dict) else {}
     open_relief = bool(_stance == "hibernate" and open_read.get("ready"))
     effective_quota = 1 if open_relief else quota
+
+    # ── 🛡️ 环境防守腿（defense_gate ①·2026-10-08 经验）──────────────────────
+    # 昨收环境（candidates.environment＝盘后 feedback 快照）+ 今日开盘读数双腿判据：
+    # 命中 ≥2 条 → 名额压到 1 只；≥3 条 → 当日不主动买（全置观察，名额让给逃生阀）。
+    _env_date = str((candidates or {}).get("date") or "").strip()
+    env_read: dict[str, Any] = {"level": "normal", "hits": [], "hit_count": 0, "notes": []}
+    if POOL_CALL_DEFENSE_GATE and POOL_CALL_DEFENSE_ENV:
+        try:
+            env_read = _dg.env_verdict((candidates or {}).get("environment"), open_read,
+                                       prev_date10=_env_date)
+        except Exception as e:                      # ⛔ 防守腿失败不得打断裁决
+            env_read = {"level": "normal", "hits": [], "hit_count": 0, "notes": [],
+                        "error": str(e)}
+        if env_read.get("level") == "block":
+            effective_quota = 0
+        elif env_read.get("level") == "defensive":
+            effective_quota = min(effective_quota, _dg.DEFENSIVE_QUOTA_CAP)
 
     cands: list[dict[str, Any]] = []
     for k in ("relay", "watch"):
@@ -407,6 +457,27 @@ def call_pool(candidates: dict[str, Any] | None,
         except Exception:
             line_cores = {}
     line_cores = line_cores or {}
+
+    # 方向资金表（上一交易日盘后归档；文件有缺口 → 缺就**不裁决**，不编造）
+    if sector_flow is None:
+        try:
+            sector_flow = _dg.load_sector_flow(_env_date) if _env_date else {}
+        except Exception:
+            sector_flow = {}
+    sector_flow = sector_flow if isinstance(sector_flow, dict) else {}
+    _drain_on = bool(POOL_CALL_DEFENSE_GATE and POOL_CALL_DEFENSE_SECTOR_DRAIN
+                     and sector_flow)
+
+    # 涨停序列（位置闸用·截到依据日 T-1；缺失/序列不足 → 位置闸不裁决，诚实降级）
+    if zt_series is None and zt_days is None:
+        if POOL_CALL_DEFENSE_GATE and POOL_CALL_DEFENSE_POSITION:
+            try:
+                zt_series, zt_days = _dg.load_zt_series(upto=_env_date)
+            except Exception:
+                zt_series, zt_days = {}, []
+    zt_series = zt_series if isinstance(zt_series, dict) else {}
+    zt_days = list(zt_days) if isinstance(zt_days, (list, tuple)) else []
+    _pos_on = bool(POOL_CALL_DEFENSE_GATE and POOL_CALL_DEFENSE_POSITION)
 
     # 同线板数排名（池内）：板数高的排前面（核心优先于跟风）
     _by_line: dict[str, list[dict[str, Any]]] = {}
@@ -458,7 +529,16 @@ def call_pool(candidates: dict[str, Any] | None,
             "leader_role": role_of(c),
             "leader_evidence": c.get("leader_evidence") or {},
             "carry_cnt": c.get("carry_cnt"),
+            "relay_stage": c.get("relay_stage"),
+            "relay_mood": c.get("relay_mood"),
+            "n_plus_n": c.get("n_plus_n"),
         }
+        # 封板质量读数（只读·审计/卡面用）：**在短路链之前**算出，被前几道闸拦下的票也留痕
+        if POOL_CALL_DEFENSE_GATE:
+            try:
+                base["seal_quality"] = _dg.seal_quality(c)
+            except Exception:
+                pass
 
         # ① 无竞价数据
         if gap is None:
@@ -492,6 +572,13 @@ def call_pool(candidates: dict[str, Any] | None,
                            "reason": (f"开在 {gap:+.2f}% 是红的，但竞价只有 {float(amt):.2f} 亿、"
                                       f"量不够（要 {float(need):.2f} 亿）→ 像诱多，先看")}
             continue
+        # 昨日同路径晋级、溢价与失败核按钮都偏弱时，须用足计划量能确认；缺量不放行。
+        if c.get("relay_mood") == "pressured" and (
+                not isinstance(amt, (int, float)) or not isinstance(need, (int, float))
+                or need <= 0 or amt < need):
+            marks[code] = {**base, "view": "watch",
+                           "reason": "这一路接力昨天反馈偏弱，今天竞价量没达到计划要求 → 先看，不买"}
+            continue
         # ⑦ 🐣 跟风闸（2026-09-21 用户抓包）：同线核心板数高出 ≥2 且已断板 → 不占名额
         _lc = base.get("line_core")
         if (POOL_CALL_CORE_GATE and isinstance(_lc, dict) and not is_core
@@ -503,7 +590,47 @@ def call_pool(candidates: dict[str, Any] | None,
                                       f"{_lc.get('name')}({_lc.get('boards')}板)，昨天已经断板；"
                                       f"它只是跟风补涨 → 今天先看核心，别追小弟")}
             continue
-        # ⑧ 候选买入
+        # ⑧ 🧊 方向资金失血 —— 先看土壤再谈个股（宪法🐲-1「先判土壤再谈板数」）
+        drain = ({"drained": False, "known": False, "note": "", "sum_yi": None, "theme": ""}
+                 if not _drain_on else _dg.sector_drain_verdict(c, sector_flow))
+        if drain.get("drained"):
+            marks[code] = {**base, "view": "watch", "defense_gate": "sector_drain",
+                           "defense_detail": drain,
+                           "reason": (f"开在 {gap:+.2f}% 达标了，但{drain['note']} "
+                                      f"→ 今天先看，不买")}
+            continue
+        # ⑨ 🧭 位置闸（2026-10-08 补·南华生物案例）——连板计数会被断板重置，
+        #   「首板」两个字盖住了「这是一只已经涨过一大轮、断板多日后重启的票」。
+        #   位置高 ∧ 断板 ≥3 个交易日后重启（上一波最高板 ≥3）→ 第二波反抽，不占名额。
+        #   ⛔ 断 1~2 天的快速 N 字回封不拦（那是情绪核心的经典形成路径·加分项）。
+        #   ⚠️ 顺序：土壤（板块有没有钱）→ 位置（这票在什么位置）→ 盘口（昨天封得脏不脏）。
+        #     位置必须排在派发**前面**——否则先被「换手大/封单薄」命中，卡面只说症状、
+        #     说不出「它是第二波高位反抽」这个真原因（10-08 南华两条都中，位置才是主因）。
+        pos = ({"level": "none", "note": "", "high_position": False, "wave": {}, "facts": {}}
+               if not _pos_on else _dg.position_verdict(c, zt_series, zt_days))
+        if pos.get("level") == "warn" and pos.get("note"):
+            base["position_warn"] = pos["note"]        # 只留痕（卡面可用·不否决）
+        if pos.get("level") == "block":
+            marks[code] = {**base, "view": "watch", "defense_gate": "high_position",
+                           "defense_detail": pos,
+                           "reason": (f"开在 {gap:+.2f}% 达标了，但{pos['note']} "
+                                      f"→ 今天先看，不买")}
+            continue
+        # ⑩ 🛡️ 前置防守闸门·盘口层（2026-10-08 大幅回撤经验固化）——**竞价达标 ≠ 可以买**
+        #   10-08 实证：两只票竞价一个 +0.85%、一个 +0.40%，都「没超 5% 上限、也没低于预期」，
+        #   机械规则照单全收 → 收盘 −5.85% / −8.18%。缺的是「买之前先看这票脏不脏」。
+        dist = ({"level": "none", "hit_count": 0, "note": "", "hits": [], "facts": {}}
+                if not (POOL_CALL_DEFENSE_GATE and POOL_CALL_DEFENSE_DISTRIBUTION)
+                else _dg.distribution_verdict(c))
+        if dist.get("note") and dist.get("level") == "warn":
+            base["defense_warn"] = dist["note"]        # 只留痕（卡面可用·不否决）
+        if dist.get("level") == "block":
+            marks[code] = {**base, "view": "watch", "defense_gate": "distribution",
+                           "defense_detail": dist,
+                           "reason": (f"开在 {gap:+.2f}% 达标了，但{dist['note']} "
+                                      f"→ 今天先看，不买")}
+            continue
+        # ⑪ 候选买入
         entries.append({**base, "view": "participate"})
         marks[code] = {**base, "view": "participate"}
 
@@ -528,6 +655,7 @@ def call_pool(candidates: dict[str, Any] | None,
         priority = leader_cycle.status_key(x) if leader_cycle.ENABLE_STATUS_PRIORITY else ()
         return priority + (
             1 if x.get("line_is_core") else 0,          # 同线最高板优先（核心 > 跟风）
+            {"supportive": 1, "pressured": -1}.get(x.get("relay_mood"), 0),  # 同身份下看接力心态
             1 if plan_or_mech_leader else 0,              # focus 或机械强龙优先
             bi,                                           # 板数
             -lr,                                          # 同线身位（靠前优先）
@@ -551,6 +679,9 @@ def call_pool(candidates: dict[str, Any] | None,
             if (ENABLE_MECH_LEADER_FUSION and e.get("mechanical_leader")
                 and e.get("bias") != BIAS_FOCUS) else ""
         )
+        _mood_note = ({"supportive": "（昨天同路径接力反馈转好）",
+                       "pressured": "（昨天同路径反馈偏弱，今天竞价量已达计划）"}
+                      .get(e.get("relay_mood"), ""))
         if i < effective_quota:
             _open_note = "（昨涨停今早整体转强，空仓日只试这一只）" if open_relief else ""
             marks[code] = {**e, "view": "participate", "quota_rank": i + 1,
@@ -558,7 +689,7 @@ def call_pool(candidates: dict[str, Any] | None,
                                       f"没超 5% 上限、也没低于预期 → 买入"
                                       + ("（这条线里板数最高的那只）"
                                          if e.get("line_is_core") else "")
-                                      + _fusion_note + _open_note)}
+                                      + _fusion_note + _mood_note + _open_note)}
         else:
             marks[code] = {**e, "view": "watch",
                            "reason": (f"今天开在 {e['gap_pct']:+.2f}% 也达标，"
@@ -574,6 +705,21 @@ def call_pool(candidates: dict[str, Any] | None,
         "market_open": open_read or None,
         "pool_size": len(pool),
         "participate": [c for c, v in marks.items() if v.get("view") == "participate"],
+        # 🛡️ 防守闸门留痕（2026-10-08 经验）：环境档位 + 两道硬闸各拦了谁
+        "defense": {
+            "enabled": bool(POOL_CALL_DEFENSE_GATE),
+            "env": env_read,
+            "distribution_blocked": [c for c, v in marks.items()
+                                     if v.get("defense_gate") == "distribution"],
+            "sector_drain_blocked": [c for c, v in marks.items()
+                                     if v.get("defense_gate") == "sector_drain"],
+            "position_blocked": [c for c, v in marks.items()
+                                 if v.get("defense_gate") == "high_position"],
+            "warned": [c for c, v in marks.items()
+                       if v.get("defense_warn") or v.get("position_warn")],
+            "sector_flow_boards": len(sector_flow),
+            "zt_history_days": len(zt_days),
+        },
         "call_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     return {"enabled": True, "stance": _stance, "quota": quota, "views": marks, "meta": meta}
@@ -602,6 +748,10 @@ def apply_to_views(pool_result: dict[str, Any], views: dict[str, Any] | None) ->
         cur["line_is_core"] = m.get("line_is_core")
         cur["line_core"] = m.get("line_core")
         cur["follower_gate"] = bool(m.get("follower_gate"))
+        cur["defense_gate"] = m.get("defense_gate")   # distribution / sector_drain / high_position
+        cur["defense_reason"] = (m.get("defense_detail") or {}).get("note") or None
+        cur["defense_warn"] = m.get("defense_warn")
+        cur["position_warn"] = m.get("position_warn")
         cur["theme_name"] = m.get("theme_name")
         if not cur.get("name"):
             cur["name"] = m.get("name")
