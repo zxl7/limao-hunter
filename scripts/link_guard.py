@@ -41,7 +41,8 @@ PUSH_CARD = ROOT / "scripts" / "push_card.py"
 ALERT_CARD = PULSE / "link_guard_card.json"
 
 # ── 阈值（单一源：要调就改这里）─────────────────────────────────
-SESSION_START_HHMM = 915     # 交易时段起（含竞价前的链路预热）
+SESSION_START_HHMM = 930     # 交易时段起（连续竞价 09:30 开盘；盘前 09:15-09:30 无连续竞价
+                            #   数据，查「数据未就绪」必误报，故守卫从开盘起算）
 SESSION_END_HHMM = 1505      # 交易时段止（含尾盘闭合）
 ALERT_STREAK = 5             # 连续多少轮不就绪才告警（×30s ≈ 2.5 分钟）
 ALERT_COOLDOWN = 1800        # 告警冷却（秒），防刷屏

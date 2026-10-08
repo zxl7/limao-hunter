@@ -56,6 +56,40 @@ def _write_ready(value: dict) -> None:
     os.replace(tmp, READY)
 
 
+def _compute_ready(*, results: dict, feedback_error, rotation_date) -> tuple[bool, str]:
+    """计算数据是否就绪（纯函数，便于回归测试）。
+
+    ⛔ 2026-10-08 修复前：`same_source` 拿 `rotation.source_ts` 与每 30s 刷新的
+       `latest.ts` 做**精确相等**比较——两者由不同进程（realtime_analytics / pulse_fetcher）
+       按不同节奏写，存在天然竞态，实际几乎永远不相等 → `ready` 永远 False → 守卫每个
+       交易日误报「盘面数据断了」。
+
+    现改为：
+      · `same_source` 用**日期级**新鲜度：题材轮动引擎已产出今日快照（date==今日）即视为
+        同步，与盘中实时时间戳解耦，彻底消除竞态。
+      · feedback_matrix 在 09:26 前盘前刻意写 `error="pre_auction"`（防未开盘假象），属
+        **良性盘前标记**而非数据断档；只有真实错误才阻断就绪。
+    """
+    required_ok = all(
+        results.get(label) == 0
+        for label in ("intraday_pulse", "feedback_matrix", "realtime_analytics", "theme_series")
+    )
+    same_source = bool(rotation_date == datetime.now().strftime("%Y-%m-%d"))
+    feedback_ok = not (feedback_error and feedback_error != "pre_auction")
+    ready = bool(required_ok and same_source and feedback_ok)
+    if ready:
+        reason = ""
+    elif not required_ok:
+        reason = "关键实时计算步骤未全部完成"
+    elif not same_source:
+        reason = f"题材轮动引擎今日快照缺失(date={rotation_date})"
+    elif not feedback_ok:
+        reason = f"反馈矩阵报错：{feedback_error}"
+    else:
+        reason = "关键实时数据未完成"
+    return ready, reason
+
+
 def _run(label: str, args: tuple[str, ...], log_name: str) -> int:
     log = PULSE / log_name
     with log.open("a", encoding="utf-8") as out:
@@ -71,9 +105,11 @@ def main() -> None:
     feedback = _json(CACHE / "feedback_matrix.json")
     rotation = _json(CACHE / "theme_rotation.json")
     source_ts = latest.get("ts")
-    required_ok = all(results.get(label) == 0 for label in ("intraday_pulse", "feedback_matrix", "realtime_analytics", "theme_series"))
-    same_source = bool(source_ts and rotation.get("source_ts") == source_ts)
-    ready = required_ok and same_source and not feedback.get("error")
+    ready, reason = _compute_ready(
+        results=results,
+        feedback_error=feedback.get("error"),
+        rotation_date=rotation.get("date"),
+    )
     # 推送只认这份标记；任一步关键计算失败，保留原因而不把旧数据当作新数据推送。
     _write_ready({
         "ready": ready,
@@ -81,7 +117,7 @@ def main() -> None:
         "source_ts": source_ts,
         "generated_ts": datetime.now().astimezone().isoformat(timespec="seconds"),
         "steps": results,
-        "reason": "" if ready else "关键实时数据未完成或题材快照与行情时间戳不一致",
+        "reason": reason,
     })
     print(f"[realtime-data] ready={ready} source={source_ts} steps={results}")
 

@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """题材序列数据层回归：不依赖已退役 HTML 展示器。"""
 import json
+from datetime import datetime
 
 from common import theme_series as ts
 from scripts import realtime_data_pipeline as pipeline
@@ -47,7 +48,10 @@ def test_data_ready_records_theme_series_step(tmp_path, monkeypatch):
     cache.mkdir()
     (pulse / "latest.json").write_text(json.dumps({"ts": "2026-09-29T10:01:00+08:00"}), encoding="utf-8")
     (cache / "feedback_matrix.json").write_text("{}", encoding="utf-8")
-    (cache / "theme_rotation.json").write_text(json.dumps({"source_ts": "2026-09-29T10:01:00+08:00"}), encoding="utf-8")
+    # ⛔ same_source 现为日期级校验：必须带 date==今日 才视为同步（不再比 source_ts 精确相等）
+    (cache / "theme_rotation.json").write_text(json.dumps(
+        {"date": datetime.now().strftime("%Y-%m-%d"), "source_ts": "2026-09-29T10:01:00+08:00"},
+        ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(pipeline, "PULSE", pulse)
     monkeypatch.setattr(pipeline, "CACHE", cache)
     monkeypatch.setattr(pipeline, "READY", pulse / "data_ready.json")
@@ -59,3 +63,44 @@ def test_data_ready_records_theme_series_step(tmp_path, monkeypatch):
     ready = json.loads((pulse / "data_ready.json").read_text(encoding="utf-8"))
     assert ready["ready"] is True
     assert ready["steps"]["theme_series"] == 0
+
+
+def test_compute_ready_date_level_and_pre_auction_benign():
+    """2026-10-08 修复回归：same_source 按日期级判定；pre_auction 属良性盘前标记。"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    ok = {k: 0 for k in ("intraday_pulse", "feedback_matrix", "realtime_analytics", "theme_series")}
+
+    # 全绿：今日快照 + 无错误 → 就绪
+    assert pipeline._compute_ready(results=ok, feedback_error=None, rotation_date=today) == (True, "")
+
+    # 盘前 pre_auction 标记：良性，不应阻断
+    assert pipeline._compute_ready(results=ok, feedback_error="pre_auction", rotation_date=today) == (True, "")
+
+    # 题材引擎今日快照缺失（date 非今日）：判未就绪，且原因指明
+    ready, reason = pipeline._compute_ready(results=ok, feedback_error=None, rotation_date="2026-09-28")
+    assert ready is False
+    assert "今日快照缺失" in reason
+
+    # 真实 feedback 错误（非 pre_auction）：判未就绪
+    ready, reason = pipeline._compute_ready(results=ok, feedback_error="timeout", rotation_date=today)
+    assert ready is False
+    assert "反馈矩阵报错" in reason
+
+    # 关键计算步骤失败：判未就绪
+    bad = dict(ok); bad["intraday_pulse"] = 1
+    ready, reason = pipeline._compute_ready(results=bad, feedback_error=None, rotation_date=today)
+    assert ready is False
+    assert "步骤未全部完成" in reason
+
+
+def test_compute_ready_old_exact_source_ts_no_longer_blocks():
+    """旧逻辑用 source_ts 精确相等判 same_source，会因竞态恒 False；新逻辑不依赖它。
+
+    即便 rotation 带一个与 latest 不同的 source_ts，只要 date==今日 即视为同步。
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    ok = {k: 0 for k in ("intraday_pulse", "feedback_matrix", "realtime_analytics", "theme_series")}
+    ready, _ = pipeline._compute_ready(
+        results=ok, feedback_error=None, rotation_date=today)
+    assert ready is True
+

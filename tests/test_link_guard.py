@@ -145,8 +145,50 @@ def test_holiday_does_not_alert(guard, monkeypatch):
     # 用真实 _in_session 覆盖 fixture 的 mock（真实实现会判国庆→False→main 直接 return）
     real = _load()
     monkeypatch.setattr(guard, "_in_session", real._in_session)
-    now = datetime(2026, 10, 6, 10, 0)
-    _write_ready(guard, False, "2026-10-05", now.isoformat(timespec="seconds"))
+    fixed = datetime(2026, 10, 6, 10, 0)
+
+    class FakeDT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr(guard, "datetime", FakeDT)
+    _write_ready(guard, False, "2026-10-05", fixed.isoformat(timespec="seconds"))
     for _ in range(8):
         guard.main()
     assert guard.sent == [], "国庆休市日不应推送任何链路断档告警"
+
+
+def test_session_start_is_market_open_not_pre_auction():
+    """2026-10-08 修复：守卫从连续竞价开盘 09:30 起算，盘前 09:15-09:30 不查。
+
+    盘前无连续竞价数据，「数据未就绪」是常态而非断档；原 09:15 起点会让守卫每个
+    交易日 09:20 左右误报「盘面数据断了」。真实 _in_session 须：09:20（盘前）→ False，
+    09:35（开盘后）→ True。
+    """
+    m = _load()  # 不 mock，测真实实现
+    assert m._in_session(datetime(2026, 10, 8, 9, 20)) is False, "盘前 09:20 不应判为盘中"
+    assert m._in_session(datetime(2026, 10, 8, 9, 35)) is True, "开盘后 09:35 应判为盘中"
+
+
+def test_pre_open_does_not_alert_even_if_data_not_ready(guard, monkeypatch):
+    """盘前（09:20 交易日）即便 data_ready=false（盘前常态），守卫也不告警。
+
+    复现 2026-10-08 误报场景：09:19 推了「盘面数据断了」，根因是盘前 + same_source
+    竞态 + pre_auction 三重叠加。修复后守卫 09:20 处于非盘中（SESSION_START=930），
+    整体短路，绝不推送。
+    """
+    real = _load()
+    monkeypatch.setattr(guard, "_in_session", real._in_session)
+    fixed = datetime(2026, 10, 8, 9, 20)
+
+    class FakeDT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr(guard, "datetime", FakeDT)
+    _write_ready(guard, False, "2026-10-05", fixed.isoformat(timespec="seconds"))
+    for _ in range(8):
+        guard.main()
+    assert guard.sent == [], "盘前 09:20 即便数据未就绪也不应告警"
