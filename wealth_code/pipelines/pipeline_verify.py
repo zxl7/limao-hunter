@@ -152,6 +152,13 @@ def _inject_pool_views(ai_decisions: dict[str, dict] | None,
         r["line_is_core"] = bool(m.get("line_is_core"))
         r["line_core"] = m.get("line_core")
         r["follower_gate"] = bool(m.get("follower_gate"))
+        # 🛡️ 前置防守闸门（2026-10-08 经验）：which / why / 只留痕的警示——卡面据此点名
+        #    「竞价达标但没买」的原因（否则读者只能自己猜）。⛔ 理由正文仍由个股段
+        #    `_ai_view_line` 渲染（pool_reason），本块不重复。
+        r["defense_gate"] = m.get("defense_gate")
+        r["defense_reason"] = (m.get("defense_detail") or {}).get("note") or None
+        r["defense_warn"] = m.get("defense_warn")
+        r["position_warn"] = m.get("position_warn")
         # 机械强龙融合留痕：盘后 bias 仍是原始预案，09:25 名额排序可由此复核。
         r["mechanical_leader"] = bool(m.get("mechanical_leader"))
         r["mechanical_leader_note"] = m.get("mechanical_leader_note")
@@ -347,6 +354,11 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
                 "line_is_core": _plan_row.get("line_is_core"),
                 "line_core": _plan_row.get("line_core"),
                 "follower_gate": bool(_plan_row.get("follower_gate")),
+                # 🛡️ 前置防守闸门（2026-10-08 经验·distribution/sector_drain/high_position）
+                "defense_gate": _plan_row.get("defense_gate"),
+                "defense_reason": _plan_row.get("defense_reason"),
+                "defense_warn": _plan_row.get("defense_warn"),
+                "position_warn": _plan_row.get("position_warn"),
                 "mechanical_leader": bool(_plan_row.get("mechanical_leader")),
                 "mechanical_leader_note": _plan_row.get("mechanical_leader_note"),
                 "leader_role": _plan_row.get("leader_role"),

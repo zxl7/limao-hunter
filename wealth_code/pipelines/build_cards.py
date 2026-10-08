@@ -372,6 +372,15 @@ _WATCH_GROUP_PLAIN = {
 }
 
 
+# 🛡️ 前置防守闸门 → 白话短标签（2026-10-08 回撤经验·`core/defense_gate.py`）
+# 只用于「竞价达标但没买」名单的一眼原因；理由正文由个股段 `_ai_view_line` 渲染（禁重复）。
+_DEFENSE_GATE_PLAIN = {
+    "distribution": "昨天封单又薄、换手又大，像是在往外倒货",
+    "sector_drain": "它这条线昨天资金一直在往外走",
+    "high_position": "位置太高了，是断板之后的第二波反抽",
+}
+
+
 def _status_plain(raw) -> str:
     """signal_status 英文档位 → 中文白话；未收录原样返回（不吞数据）。"""
     s = str(raw or "").strip()
@@ -1522,6 +1531,24 @@ def _ai_plan_block(raw: dict, records: list[dict],
                 f"{_boards_txt(r)} {gtxt}"
                 + (f"<font color='grey'>（最高板是 {_lc.get('name')}）</font>"
                    if _lc.get("name") else "")))
+
+    # 🛡️ 前置防守闸门（2026-10-08 回撤经验）：竞价明明达标、却被拦下没买——必须点名，
+    #   否则读者会问「它竞价达标了，为什么没买」。⛔ 理由正文仍由个股段 `_ai_view_line`
+    #   渲染（`pool_reason`·禁两处重复），本块只给一眼名单 + 一句原因标签。
+    _defended = [r for r in records
+                 if _oc_of(r).get("defense_gate")
+                 and str(_oc_of(r).get("ai_view") or "") != "participate"]
+    if _defended:
+        blocks.append(_div("<font color='grey'>🛡️ 竞价达标但没买（昨天这票 / 这条线就有问题）：</font>"))
+        for r in _defended[:5]:
+            oc = _oc_of(r)
+            gap = oc.get("gap_pct")
+            gtxt = f"竞价{gap:+.2f}%" if isinstance(gap, (int, float)) else "竞价数据未到"
+            _why = _DEFENSE_GATE_PLAIN.get(str(oc.get("defense_gate") or ""), "有风险")
+            blocks.append(_div(
+                f"　　{_hl(str(r.get('name') or '') + '(' + str(r.get('code') or '') + ')', 'yellow')}"
+                f"{_boards_txt(r)} {gtxt}"
+                f"<font color='grey'>（{_why}）</font>"))
 
     if others:
         shown = "、".join([o for o in others if o][:8]) + ("等" if len(others) > 8 else "")
