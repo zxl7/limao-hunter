@@ -5,10 +5,14 @@
 
 规则（本测试锁死）：
   ① 只对 top5 主线板块给方向（非主线返回 None —— 体系：不推跟风杂毛）；
-  ② ladder   = 已封板身位梯队（limit_up_stocks 同板块，板数降序）；
-  ③ tradable = 未封板可接力（leaders 同板块 + 涨幅≥7.5% + 未在涨停清单）；
-  ④ 排除：ST / 科创板688 / 黑名单（京能系·金能科技）/ 本轮已推 / 涨幅不足；
-  ⑤ ⛔ 开关 ENABLE_SPIRIT_RELAY_HINT=False → 回到「只报异动不给方向」的改动前行为。
+  ② front    = 前排（谁领涨 = 已封板里板数最高）+ front_in_signal（是否就是本轮捕捉那只）；
+  ③ ladder   = 其余已封板（limit_up_stocks 同板块，板数降序）；
+  ④ tradable = 后排可参与（leaders 同板块 + 涨幅≥7.5% + 未在涨停清单，带涨幅）；
+  ⑤ 排除：ST / 科创板688 / 黑名单（京能系·金能科技）/ 本轮已推 / 涨幅不足；
+  ⑥ ⛔ 开关 ENABLE_SPIRIT_RELAY_HINT=False → 回到「只报异动不给方向」的改动前行为。
+
+卡面固定三段（2026-10-08 用户「带上可参与后排的涨幅，逻辑就很清晰」）：
+  👑 前排：谁领涨 ｜🎯 后排可参与：买谁 + 涨幅 ｜🔒 其余已封板：参考
 
 隔离约定：文件状态全部落 tmp_path；mock `os.system`，不推送、不联网、不碰生产 cache。
 """
@@ -40,6 +44,11 @@ def _sig(name="领湃科技", code="300530", sector="锂电池", pct=19.98, typ=
     return {"name": name, "code": code, "sector": sector, "market_cap_yi": 41.4,
             "amount_yi": 3.47, "pct": pct, "type": typ, "tags": [],
             "resonance": 100, "flow_yi": 1.0, "strength": 0.9, "reason": f"共振[{sector}]"}
+
+
+def _body(card):
+    """卡片正文全文（各 element 的 lark_md 内容拼接）。"""
+    return "\n".join((el.get("text") or {}).get("content", "") for el in card["elements"])
 
 
 # 今日真实形态快照（简版）：锂电池主线 + 已封板梯队 + leaders 里未封板的同板块强势票
@@ -78,11 +87,14 @@ def test_sector_match_exact_and_containment():
     assert ss._sector_match("", "锂电池") is False
 
 
-# ── ② 主线板块 → 输出身位梯队 + 可接力 ──────────────────────────
+# ── ② 主线板块 → 输出前排 + 其余已封板 + 后排可参与 ──────────────
 def test_relay_hint_returns_ladder_and_tradable():
     r = ss._relay_hint([_sig()], LATEST)
     assert r is not None and r["sector"] == "锂电池"
     assert r["zt_count"] == 5, "锂电池今日 5 家封板（简版快照）"
+    # 前排 = 已封板里板数最高（身位最高），不是本轮捕捉的那只首板
+    assert r["front"]["name"] == "时代万恒" and r["front"]["boards"] == "4天4板"
+    assert r["front_in_signal"] is False, "本轮捕捉 领湃科技(首板) 不是前排；前排是时代万恒(4板)"
     # 身位行按板数降序
     assert r["ladder"][0]["name"] == "时代万恒" and r["ladder"][0]["boards"] == "4天4板"
     # 可接力只留未封板 + 涨幅达标 + 非ST/688/黑名单
@@ -92,6 +104,27 @@ def test_relay_hint_returns_ladder_and_tradable():
     assert "300700" not in codes, "涨幅不足（3.2%）不得进可接力"
     assert "300701" not in codes and "688700" not in codes and "603113" not in codes, \
         "ST / 688 / 黑名单必须排除"
+
+
+def test_relay_front_in_signal_when_captured_is_front():
+    """用户场景「如果他是前排」：本轮捕捉的正是前排 → front_in_signal=True。"""
+    sig = _sig(name="时代万恒", code="600241", pct=9.98)
+    r = ss._relay_hint([sig], LATEST)
+    assert r["front"]["code"] == "600241"
+    assert r["front_in_signal"] is True
+
+
+def test_relay_front_falls_back_to_signal_when_no_sealed(monkeypatch):
+    """板块在 top5 但涨停清单里无同板块记录（ladder 空）→ front 退回本轮信号，zt_count=0。"""
+    d = {k: v for k, v in LATEST.items()}
+    d["limit_up_stocks"] = [x for x in LATEST["limit_up_stocks"] if x["sector"] != "锂电池"]
+    r = ss._relay_hint([_sig()], d)
+    assert r is not None and r["zt_count"] == 0
+    assert r["front"]["code"] == "300530" and r["front_in_signal"] is True
+    card = ss.build_card([_sig()], "afternoon", NOW, relay=r)
+    body = _body(card)
+    assert "今日 0 家涨停" not in body, "无已封板记录时不显示「今日 0 家涨停」"
+    assert "👑 前排：领湃科技(300530)" in body
 
 
 def test_relay_tradable_sorted_by_pct_desc():
@@ -118,6 +151,31 @@ def test_relay_none_when_no_signal():
     assert ss._relay_hint(None, LATEST) is None
 
 
+# ── ③b 跨命名体系对齐（2026-10-08 生产实证·接力块整块没出来）──────────
+def test_relay_sector_resolved_by_code_when_industry_name_differs():
+    """信号 sector = 东财**行业名**「电池」，top5 = **概念名**「锂电池」→ 名称匹配判不中，
+    必须靠 code 反查 limit_up_stocks/leaders 的概念名对齐（否则 领湃科技 那张卡没有接力块）。"""
+    assert ss._sector_match("锂电池", "电池") is False, "2 字泛名不参与包含判定（防裸子串）"
+    sig = _sig(sector="电池")                       # 300530 在 limit_up_stocks/leaders 里 sector=锂电池
+    assert ss._relay_sector_of([sig], LATEST) == "锂电池", "code 反查须跨体系对齐"
+    r = ss._relay_hint([sig], LATEST)
+    assert r is not None and r["sector"] == "锂电池"
+    body = _body(ss.build_card([sig], "afternoon", NOW, relay=r))
+    assert "🎯 接力方向｜锂电池" in body and "🎯 后排可参与：" in body
+
+
+def test_relay_sector_still_none_for_unknown_code_and_name():
+    """未放宽口径：名称不匹配且 code 不在任何板块清单里 → 仍不给方向（不误推）。"""
+    sig = _sig(name="某票", code="600000", sector="纺织服装")
+    assert ss._relay_sector_of([sig], LATEST) is None
+
+    d = {k: v for k, v in LATEST.items()}
+    d["top5"] = [{"name": "锂电池", "zt_count": 8}]
+    d["limit_up_stocks"] = []
+    d["leaders"] = []
+    assert ss._relay_hint([sig], d) is None
+
+
 def test_relay_ladder_only_when_no_tradable():
     """该方向全封板（leaders 无未封板同板块票）→ ladder 有、tradable 空，仍返回（不返回 None）。"""
     d = {k: v for k, v in LATEST.items()}
@@ -138,31 +196,49 @@ def test_production_default_is_on():
     assert "ENABLE_SPIRIT_RELAY_HINT = True" in src
 
 
-# ── ⑤ 卡面渲染 ────────────────────────────────────────────────
+# ── ⑤ 卡面渲染：👑 前排 / 🎯 后排可参与（带涨幅）/ 🔒 其余已封板 ────
 def test_build_card_renders_relay_block():
     r = ss._relay_hint([_sig()], LATEST)
     card = ss.build_card([_sig()], "afternoon", NOW, relay=r)
-    body = "\n".join((el.get("text") or {}).get("content", "") for el in card["elements"])
-    assert "🎯 接力方向｜锂电池" in body
-    assert "🔒 已封板" in body and "时代万恒(4天4板)" in body
-    assert "🎯 可接力" in body and "金银河(300619)" in body and "理奇智能(301599)" in body
+    body = _body(card)
+    assert "🎯 接力方向｜锂电池" in body and "今日 5 家涨停" in body
+    # ① 前排 = 谁领涨（带板数与涨幅）；本轮捕捉的是后排 → 明确标出，逻辑无歧义
+    assert "👑 前排：时代万恒(600241) 4天4板" in body
+    assert "（本轮这只属后排）" in body, "本轮捕捉的领湃非前排 → 卡面须点明"
+    # ② 后排可参与 = 买谁 + 涨幅（用户核心诉求：「带上可参与后排的涨幅」）
+    #    涨幅走 _pct_tag → 卡面是 `<text_tag color='red'>+16.53%</text_tag>`，故分别断言。
+    back = body.split("🎯 后排可参与：")[1].split("\n")[0]
+    assert "金银河(300619)" in back and "理奇智能(301599)" in back
+    assert "+16.53%" in back and "+11.04%" in back, "后排必须带可参与涨幅"
+    # ③ 其余已封板 = 参考（前排/本轮已捕捉的不重复列）
+    assert "🔒 其余已封板：" in body and "紫竹高科(3天3板)" in body
+    assert "时代万恒" not in body.split("🔒 其余已封板：")[1], "前排不重复出现在其余已封板"
+    assert "领湃科技" not in body.split("🔒 其余已封板：")[1], "本轮捕捉的不重复出现在其余已封板"
+
+
+def test_build_card_marks_front_when_captured_this_round():
+    """本轮捕捉的就是前排 → 👑 行带「← 本轮捕捉」标记（用户「如果他是前排」）。"""
+    sig = _sig(name="时代万恒", code="600241", pct=9.98)
+    r = ss._relay_hint([sig], LATEST)
+    body = _body(ss.build_card([sig], "afternoon", NOW, relay=r))
+    assert "👑 前排：时代万恒(600241) 4天4板" in body and "← 本轮捕捉" in body
 
 
 def test_build_card_without_relay_has_no_block():
     """无 relay（非主线/开关关）→ 卡面不得出现接力块（保持改动前形态）。"""
     card = ss.build_card([_sig()], "afternoon", NOW, relay=None)
-    body = "\n".join((el.get("text") or {}).get("content", "") for el in card["elements"])
+    body = _body(card)
     assert "接力方向" not in body
 
 
 def test_build_card_all_sealed_hint():
-    """全封板 → 输出「等明日竞价看龙一溢价」提示，不得空白。"""
+    """全封板 → 输出「等明日竞价看前排溢价」提示，不得空白。"""
     d = {k: v for k, v in LATEST.items()}
     d["leaders"] = [l for l in LATEST["leaders"] if l["code"] == "300530"]
     r = ss._relay_hint([_sig()], d)
     card = ss.build_card([_sig()], "afternoon", NOW, relay=r)
-    body = "\n".join((el.get("text") or {}).get("content", "") for el in card["elements"])
-    assert "等明日竞价看龙一溢价" in body
+    body = _body(card)
+    assert "等明日竞价看前排溢价" in body
 
 
 # ── ⑥ 触发口径：只认「强势股涨停」，快速拉升不给方向 ─────────────
@@ -264,7 +340,8 @@ def test_e2e_card_file_contains_relay_block(tmp_path, monkeypatch):
     assert cf.exists(), "应产出卡文件"
     body = json.dumps(json.loads(cf.read_text(encoding="utf-8")), ensure_ascii=False)
     assert "接力方向｜锂电池" in body
-    assert "可接力" in body and "金银河" in body
+    assert "后排可参与" in body and "金银河" in body
+    assert "👑 前排：" in body, "卡面须先给前排（谁领涨）"
 
 
 def test_e2e_switch_off_card_has_no_relay(tmp_path, monkeypatch):

@@ -81,27 +81,29 @@ LEADER_FALLBACK_20CM_MIN_PCT = 19.0  # C 兜底池纳入「首板 20cm 涨停」
 # ── 板块接力方向（2026-10-08 用户核心功能 · 选项 A「盘中即时」）──────────────────
 # 用户原话：「当你捕获到这个板块的强势股涨停时，我们要顺势推出应该买什么」。
 # 定位：短线精灵从「只报谁涨了」升级为「报谁涨了 + 该方向该买什么」。
-# 输出两段（对应龙头战法体系 · 梯队分级）：
-#   ① 🔒 已封板身位梯队（来自 limit_up_stocks 同板块，按板数降序）→ 今日买不到，
-#      是「明日竞价看龙一溢价」的参考，⛔ 不当作可买标的；
-#   ② 🎯 可接力（未封板）：来自 latest.json 的 **leaders 识别度榜** 中同板块、
-#      涨幅≥RELAY_HINT_MIN_PCT、且**未在涨停清单**的强势票 → 这才是「现在能买什么」。
-#     （实证 10-08：锂电池 8 家封板，leaders 里金银河(300619)+16.24% / 理奇智能(301599)
-#      +10.83% 同属锂电池且未封板 = 可接力标的；已封板的是时代万恒4板/紫竹3板/领湃20cm。）
-# ⛔ 只对 top5 主线板块提示 —— 非主线不推（体系：跟风杂毛禁做；只推主线梯队身位票）。
+# 输出三段（对应龙头战法体系 · 前排/后排分级）：
+#   ① 👑 前排（谁领涨）= 该板块今日**已封板里板数最高**者（limit_up_stocks 按板数降序取首）；
+#      带涨幅；若它正是本轮捕捉的那只 → 追加「← 本轮捕捉」标记。
+#   ② 🎯 后排可参与（买谁）= latest.json 的 **leaders 识别度榜** 中同板块、涨幅≥
+#      RELAY_HINT_MIN_PCT、且**未在涨停清单**的强势票 → 这才是「现在能买什么」，**必须带涨幅**。
+#   ③ 🔒 其余已封板（参考）= 前排与本轮已捕捉之外的已封板票，仅供看身位，⛔ 不当作可买标的。
+#     （实证 10-08：锂电池 8 家封板 → 前排 时代万恒(4天4板)；
+#      后排可参与 金银河(300619)+16.11% / 尚水智能(301513)+12.17%；
+#      其余已封板 紫竹高科3板/传艺科技3板/龙蟠科技2板。）
+# ⛔ 只对 top5 主线板块提示 —— 非主线不推（体系：跟风杂毛禁做；只推主线身位票）。
 # ⛔ 排除：ST / 科创板688（无权限）/ 黑名单（京能系·金能科技）/ 本轮已推 / 涨幅不足。
 # ⛔ 可逆开关：ENABLE_SPIRIT_RELAY_HINT=False 即回到「只报异动、不给方向」的改动前行为。
 ENABLE_SPIRIT_RELAY_HINT = True
-RELAY_HINT_MIN_PCT = 7.5        # 可接力票涨幅下限（确保是「强势」而非滞涨跟风）
-RELAY_HINT_MAX_ITEMS = 3        # 可接力票最多列几只（防刷屏）
-RELAY_HINT_LADDER_MAX = 4       # 已封板身位行最多列几只
+RELAY_HINT_MIN_PCT = 7.5        # 后排可参与票涨幅下限（确保是「强势」而非滞涨跟风）
+RELAY_HINT_MAX_ITEMS = 3        # 后排可参与票最多列几只（防刷屏）
+RELAY_HINT_LADDER_MAX = 4       # 已封板参考行最多列几只
 RELAY_EXCLUDE_NAME_KEYS = ("京能", "金能")   # 黑名单（宪法：京能系 / 金能科技）
 # 触发口径（用户原话「捕获到这个板块的强势股涨停时」）：只在卡内含**涨停/接近涨停**信号时给方向；
 # 快速拉升（低强度）不给 —— 避免每张卡都挂一行方向。
 RELAY_TRIGGER_TYPES = ("涨停", "接近涨停")
 # 限频（09-15 铁律：**冷却 ∧ 内容指纹变化**，二者需同时满足才重发；⛔ 禁纯时间冷却）：
-# 指纹 = 板块名 + 涨停家数 + 身位梯队 codes + 可接力 codes@涨幅。
-# 指纹变了（如可接力票涨停进梯队）→ 立即重发；指纹不变 → 须过冷却才重发，防同板块连卡刷屏。
+# 指纹 = 板块名 + 前排 code + 涨停家数 + 已封板 codes + 后排可参与 codes@涨幅。
+# 指纹变了（如后排票涨停进前排）→ 立即重发；指纹不变 → 须过冷却才重发，防同板块连卡刷屏。
 # 设为 0 = 每张相关卡都显示（等于关闭限频）。
 RELAY_COOLDOWN_MIN = 20
 
@@ -319,18 +321,43 @@ def _sector_match(a: str, b: str) -> bool:
     return False
 
 
+def _code_sector_map(d):
+    """code → {板块名...}（来自 limit_up_stocks / leaders 各自的 `sector` 字段）。
+
+    ⛔ 为什么需要它（2026-10-08 生产卡实证）：信号的 `sector` 是**东财行业名**（如「电池」），
+    而 top5 是**概念名**（「锂电池」）—— 两套命名体系，名称匹配天然判不中：
+    领湃科技(300530) 信号 sector=「电池」 vs top5=「锂电池」→ 接力块整块没出来（用户看不到）。
+    但同一只票在 `limit_up_stocks` / `leaders` 里存的是**概念名**「锂电池」→ 用 code 反查即可跨体系对齐。
+    ⛔ 严格不放宽 `_sector_match`（避免 电子⊄电子布 那类裸子串假命中重现）。
+    """
+    m = {}
+    for key in ("limit_up_stocks", "leaders"):
+        for x in (d.get(key) or []):
+            if not isinstance(x, dict):
+                continue
+            c = str(x.get("code") or "")[:6]
+            s = str(x.get("sector") or "")
+            if c and s:
+                m.setdefault(c, set()).add(s)
+    return m
+
+
 def _relay_sector_of(signals, d):
-    """定位接力板块：本轮信号里第一只「涨停/接近涨停」且 sector 命中 top5 主线板块的。
-    ⛔ 无命中返回 None —— 非主线不给方向（体系：只推主线梯队，不推跟风）。"""
+    """定位接力板块：本轮信号里第一只「涨停/接近涨停」命中 top5 主线板块的所属板块。
+    命中口径 = 名称匹配（signal.sector ↔ top5 概念名）**或** code 反查
+    （`_code_sector_map`：该 code 在 limit_up_stocks/leaders 里的概念名 ↔ top5）——
+    后者解决「行业名 vs 概念名」跨体系判不中（实证：电池 ↔ 锂电池）。
+    ⛔ 无命中返回 None —— 非主线不给方向（体系：只推主线身位票，不推跟风）。"""
     top5 = [str(s.get("name") or "") for s in (d.get("top5") or [])[:5] if s.get("name")]
+    csmap = _code_sector_map(d)
     for sig in (signals or []):
         if str(sig.get("type") or "") not in RELAY_TRIGGER_TYPES:
             continue
         sec = str(sig.get("sector") or "")
-        if not sec:
-            continue
+        code = str(sig.get("code") or "")[:6]
+        names = {sec} | csmap.get(code, set())
         for nm in top5:
-            if _sector_match(nm, sec):
+            if any(_sector_match(nm, x) for x in names if x):
                 return nm
     return None
 
@@ -341,9 +368,10 @@ def _relay_state_path() -> Path:
 
 
 def _relay_fingerprint(r) -> str:
-    """内容指纹（09-15 铁律）：板块 + 涨停家数 + 身位 codes + 可接力 codes@涨幅。"""
+    """内容指纹（09-15 铁律）：板块 + 前排 code + 涨停家数 + 身位 codes + 可接力 codes@涨幅。"""
+    fr = r.get("front") or {}
     return "|".join([
-        str(r.get("sector") or ""), str(r.get("zt_count") or 0),
+        str(r.get("sector") or ""), str(fr.get("code") or ""), str(r.get("zt_count") or 0),
         ",".join(str(x.get("code")) for x in (r.get("ladder") or [])),
         ",".join(f"{x.get('code')}@{x.get('pct')}" for x in (r.get("tradable") or [])),
     ])
@@ -388,9 +416,10 @@ def _relay_hint(signals, d):
     """板块接力方向（2026-10-08 用户核心功能·A 盘中即时）。
 
     捕获到主线板块的强势票涨停时，顺势给出「该方向该买什么」：
-      ① ladder   = 已封板身位梯队（limit_up_stocks 同板块 → 今日买不到，明日竞价参考）
-      ② tradable = 未封板可接力（leaders 同板块·涨幅≥门槛·未在涨停清单 → 现在能买）
-    返回 {"sector", "zt_count", "ladder":[...], "tradable":[...]} 或 None。
+      ① front    = 前排（谁领涨·已封板里板数最高；带 front_in_signal = 是否就是本轮捕捉的那只）
+      ② ladder   = 其余已封板（limit_up_stocks 同板块 → 今日买不到，明日竞价参考）
+      ③ tradable = 后排可参与（leaders 同板块·涨幅≥门槛·未在涨停清单 → 现在能买，带涨幅）
+    返回 {"sector", "zt_count", "front", "front_in_signal", "ladder":[...], "tradable":[...]} 或 None。
     """
     if not ENABLE_SPIRIT_RELAY_HINT:
         return None
@@ -402,7 +431,7 @@ def _relay_hint(signals, d):
         m = re.search(r"(\d+)", str(v or ""))
         return int(m.group(1)) if m else 0
 
-    # ① 已封板身位梯队（按板数降序，其次涨幅降序）
+    # ① 已封板（按板数降序，其次涨幅降序）→ ladder[0] 即「前排」
     ladder = []
     for x in (d.get("limit_up_stocks") or []):
         if not isinstance(x, dict):
@@ -414,7 +443,7 @@ def _relay_hint(signals, d):
     ladder.sort(key=lambda x: (-_b(x["boards"]), -x["pct"]))
     zt_codes = {x["code"] for x in ladder}
 
-    # ② 未封板可接力（leaders 同板块，排除已推/已封/ST/科创/黑名单/涨幅不足）
+    # ② 后排可参与（leaders 同板块，排除已推/已封/ST/科创/黑名单/涨幅不足）
     pushed_codes = {str(s.get("code") or "")[:6] for s in (signals or [])}
     tradable = []
     for l in (d.get("leaders") or []):
@@ -440,7 +469,24 @@ def _relay_hint(signals, d):
 
     if not ladder and not tradable:
         return None
-    return {"sector": sector, "zt_count": len(ladder),
+
+    # ③ 前排定位（2026-10-08 用户：「如果他是前排，记得把这个后排也给我标记出来」）：
+    #    板块内今日身位最高者 = 已封板里板数最高（ladder 已按板数降序）。
+    #    卡面顺序 = 谁领涨(前排) → 买谁(后排可参与) → 其余已封板(参考)。
+    #    ⛔ 前排只在「已封板」里取；ladder 空时退回本轮信号（罕见：板块在 top5 但无涨停清单）。
+    if ladder:
+        front = dict(ladder[0])
+    else:
+        front = None
+        for sig in (signals or []):
+            if (str(sig.get("type") or "") in RELAY_TRIGGER_TYPES
+                    and _sector_match(sector, str(sig.get("sector") or ""))):
+                front = {"name": sig.get("name"), "code": str(sig.get("code") or "")[:6],
+                         "boards": None, "pct": float(sig.get("pct") or 0)}
+                break
+    return {"sector": sector, "zt_count": len(ladder), "front": front,
+            "front_in_signal": bool(front) and front["code"] in pushed_codes,
+            "signal_in_ladder": bool(pushed_codes & zt_codes),
             "ladder": ladder[:RELAY_HINT_LADDER_MAX],
             "tradable": tradable[:RELAY_HINT_MAX_ITEMS]}
 
@@ -957,24 +1003,45 @@ def build_card(signals, sess, now, relay=None):
                 f"{_pct_tag(s['pct'])}（{s['sector']}）｜⚡{s['reason']}")
     # 🎯 板块接力方向（2026-10-08 用户核心功能·A 盘中即时）：
     #   「捕获到主线板块强势票涨停 → 顺势给该方向该买什么」。
-    #   🔒 已封板行 = 身位梯队（今日买不到，明日竞价参考）；🎯 可接力行 = 未封板能买的。
+    #   2026-10-08 二改（用户：「如果他是前排，记得把这个后排也标记出来，带上可参与后排的涨幅」）：
+    #   卡面固定三段 → 👑 前排（谁领涨·板数最高）｜🎯 后排可参与（买谁·带涨幅）｜🔒 其余已封板（参考）。
     if relay:
         sec = relay.get("sector") or ""
         zt_n = relay.get("zt_count") or 0
+        head = f"**🎯 接力方向｜{sec}**"
+        if zt_n:
+            head += f"（今日 {zt_n} 家涨停）"
         lines.append("")
-        lines.append(f"**🎯 接力方向｜{sec}**（今日 {zt_n} 家涨停）")
-        lad = relay.get("ladder") or []
-        if lad:
-            seg = "｜".join(
-                f"{x['name']}({x['boards']})" if x.get("boards") else f"{x['name']}"
-                for x in lad)
-            lines.append(f"　🔒 已封板：{seg}")
+        lines.append(head)
+        fr = relay.get("front") or {}
+        fcode = str(fr.get("code") or "")
+        if fr.get("name"):
+            fseg = f"{fr['name']}" + (f"({fcode})" if fcode else "")
+            if fr.get("boards"):
+                fseg += f" {fr['boards']}"
+            fseg += f" {_pct_tag(float(fr.get('pct') or 0))}"
+            # 本轮这只到底是前排还是后排 —— 用户「逻辑就很清晰」的关键一句
+            if relay.get("front_in_signal"):
+                mark = "　← 本轮捕捉"
+            elif relay.get("signal_in_ladder"):
+                mark = "　（本轮这只属后排）"
+            else:
+                mark = ""
+            lines.append(f"　👑 前排：{fseg}{mark}")
         tr = relay.get("tradable") or []
         if tr:
             seg2 = "｜".join(f"{x['name']}({x['code']}) {_pct_tag(x['pct'])}" for x in tr)
-            lines.append(f"　🎯 可接力：{seg2}")
+            lines.append(f"　🎯 后排可参与：{seg2}")
         else:
-            lines.append("　🎯 该方向已无未封板身位票 → 等明日竞价看龙一溢价，不追高")
+            lines.append("　🎯 该方向已无未封板票 → 等明日竞价看前排溢价，不追高")
+        # 其余已封板（前排与本轮已捕捉的不重复列 → 卡面不自我重复）
+        seen = {fcode} | {str(s.get("code") or "")[:6] for s in (signals or [])}
+        others = [x for x in (relay.get("ladder") or []) if str(x.get("code") or "") not in seen]
+        if others:
+            seg3 = "｜".join(
+                f"{x['name']}({x['boards']})" if x.get("boards") else f"{x['name']}"
+                for x in others)
+            lines.append(f"　🔒 其余已封板：{seg3}")
     lines.append("")
     return {
         "title": f"短线精灵·异动信号 | {now.strftime('%H:%M')} | 命中{len(signals)}只",
