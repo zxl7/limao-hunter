@@ -31,6 +31,17 @@ if str(ROOT) not in sys.path:
 
 from common.json_io import append_jsonl, load_json, load_jsonl, save_json
 
+# 东财官方板块映射（2026-10-08 用户「系统自造聚合名改为东财官方板块名！！」）：
+# 板块名后挂官方 BK 码，让「系统说的锂电池 = 东财 锂电池 BK1303」一目了然，
+# 不再与东财板块体系各说各话。纯读表（cache/sector_official_map.json），**不联网**；
+# 映射层缺失/异常 → 静默降级（不挂码，卡面同改动前）。
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
+try:
+    from sector_official import official_tag as _official_tag
+except Exception:                                  # pragma: no cover - 环境缺失降级
+    _official_tag = None
+
 CFG_PATH = ROOT / "config" / "short_spirit.json"
 OUT_PATH = ROOT / "cache" / "short_spirit_signals.json"
 PUSHED_PATH = ROOT / "cache" / "short_spirit_pushed.json"
@@ -1008,7 +1019,10 @@ def build_card(signals, sess, now, relay=None):
     if relay:
         sec = relay.get("sector") or ""
         zt_n = relay.get("zt_count") or 0
-        head = f"**🎯 接力方向｜{sec}**"
+        # 官方码（2026-10-08 用户「改为东财官方板块名」）：锂电池 → 锂电池(BK1303)。
+        # 只有名字证据充分时才挂；聚合别名（大消费）不挂，避免误导。
+        o_tag = _official_tag(sec) if _official_tag else ""
+        head = f"**🎯 接力方向｜{sec}{o_tag}**"
         if zt_n:
             head += f"（今日 {zt_n} 家涨停）"
         lines.append("")

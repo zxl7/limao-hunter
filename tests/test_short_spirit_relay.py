@@ -22,6 +22,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 spec = importlib.util.spec_from_file_location("short_spirit_relay", SCRIPTS / "short_spirit.py")
 ss = importlib.util.module_from_spec(spec)
@@ -365,3 +367,31 @@ def test_e2e_second_identical_card_drops_relay(tmp_path, monkeypatch):
     _run(monkeypatch)
     body = json.dumps(json.loads(cf.read_text(encoding="utf-8")), ensure_ascii=False)
     assert "接力方向" not in body, "同内容第二张卡不应重复带接力块"
+
+
+# ── ⑥ 东财官方板块码（2026-10-08 用户「系统自造聚合名改为东财官方板块名！！」）──
+@pytest.fixture(autouse=True)
+def _isolate_official(monkeypatch):
+    """官方码来源必须隔离 —— 不得读生产 cache/sector_official_map.json（默认不挂码）。"""
+    monkeypatch.setattr(ss, "_official_tag", None)
+
+
+def _card_body(card):
+    return "\n".join((el.get("text") or {}).get("content", "") for el in card["elements"])
+
+
+def test_card_appends_official_code(monkeypatch):
+    """映射层可用 → 接力方向行末挂官方 BK 码（名字对齐东财）。"""
+    monkeypatch.setattr(ss, "_official_tag",
+                        lambda n: "(BK1303)" if n == "锂电池" else "")
+    r = ss._relay_hint([_sig()], LATEST)
+    body = _card_body(ss.build_card([_sig()], "afternoon", NOW, relay=r))
+    assert "🎯 接力方向｜锂电池(BK1303)" in body
+
+
+def test_card_omits_code_when_mapper_missing():
+    """映射层缺失（_official_tag=None）→ 不挂码，卡面形态同改动前。"""
+    r = ss._relay_hint([_sig()], LATEST)
+    body = _card_body(ss.build_card([_sig()], "afternoon", NOW, relay=r))
+    assert "🎯 接力方向｜锂电池**" in body
+    assert "BK" not in body, "映射层不可用时不得出现任何 BK 码"

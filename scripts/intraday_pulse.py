@@ -26,6 +26,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from common.json_io import save_json as _save_json, load_json as _load_json
 from common.em_flow import fetch_sector_flow_details, sector_flow_structure  # P2-18 分层（CapitalPulse 吸收）
 
+# 选股宝板块 → 东财官方板块 映射（2026-10-08 用户「系统自造聚合名改为东财官方板块名」）。
+# 纯读表（`cache/sector_official_map.json`，由 scripts/sector_official.py --build 离线生成），
+# 运行时不发任何网络请求；映射层缺失/异常 → 静默降级（top5 不带 official 字段，行为同改动前）。
+_P_DIR = str(Path(__file__).resolve().parent)
+if _P_DIR not in sys.path:
+    sys.path.insert(0, _P_DIR)
+try:
+    from sector_official import lookup as _official_lookup
+except Exception:                       # pragma: no cover - 环境缺失时降级
+    _official_lookup = None
+
 # ── Config ────────────────────────────────────────────
 
 BJ_TZ = timezone(timedelta(hours=8))
@@ -1607,6 +1618,11 @@ def build_summary_json(sectors, plates, diagnoses, total_zt, zt_count, risks, po
             "positives": sector_pos[:3],
             "delta": _sector_status(sec["name"], sec["zt"], intraday_prev_map) if intraday_prev_map else "new",
             "zt_prev": previous_theme_zt,
+            # 东财官方板块身份（2026-10-08）：{"boards":[{bk,name,score,coverage}...],
+            # "method":"name+members|members|alias", "members":N}；未映射=None（保持原名）。
+            # ⚠️ 只**新增字段**、不改 name —— name 是下游（live_signal/short_spirit/
+            # theme_rotation/sector_family）的既有主键，改它会连带打穿已验证链路。
+            "official": _official_lookup(sec["name"]) if _official_lookup else None,
         })
     ebb = detect_ebb(sectors, stocks, total_zt)
     index = index or []
