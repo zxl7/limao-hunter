@@ -186,7 +186,7 @@
 
 **外部新闻融合落地路径（已开始·P1-7 深化）**：
 - **已落地**：newsflash 日归档（newsflash_history/daily_YYYY-MM-DD.json），5 日汇总已预留 `news` 维度（当日硬信号标题 Top8）。
-- **下一步（P1-7）**：①接财联社/金十多源（**A1·待拍板·需 API 凭据**）；②按「事件→题材→个股」落库（**待拍板**）；③情绪极性标注（利好/利空/中性）融入 5 日汇总（**✅ A2·2026-10-10 第一批已落地**：`capture_daily.capture_newsflash` 增量标 `polarity` + `gen_sentiment_summary` 聚合 `news_polarity_total` + md 注脚，语义复用 `newsflash_express._direction` 涨→利好/跌→利空）。
+- **下一步（P1-7）**：①接财联社/金十多源（**A1·搁置·2026-10-10 用户确认无 API 凭据**）；②按「事件→题材→个股」落库（**待拍板**）；③情绪极性标注（利好/利空/中性）融入 5 日汇总（**✅ A2·2026-10-10 第一批已落地**：`capture_daily.capture_newsflash` 增量标 `polarity` + `gen_sentiment_summary` 聚合 `news_polarity_total` + md 注脚，语义复用 `newsflash_express._direction` 涨→利好/跌→利空；A2 仅依赖现有快讯源，与 A1 多源解耦，A1 搁置不影响）。
 - **卡片落地**：盘前/盘后卡在"情绪演变"行后加 `📰 催化：{当日硬催化标题 1-2 条}`，让事件成为情绪演变的解释变量。
 
 ---
