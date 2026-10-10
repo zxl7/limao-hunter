@@ -47,6 +47,12 @@ DAILY_DIR = CACHE / "short_term" / "daily"
 TOP_THEMES = 10          # 每天最多存前 10 个爆发题材
 STOCKS_PER_THEME = 8     # 每题材最多存前 8 只成分股
 
+# ── D2 钩子开关（2026-10-10 批·可逆）─────────────────────────────────
+# False = 不挂 sector_official --build（下游 lookup 仍读旧映射表，行为等同改动前）。
+# 盘后链末步增量刷新「选股宝板块 → 东财官方板块」映射（只读 top5 + 本地缓存，
+# 仅查新 code 才联网，失败不影响主链路）。
+ENABLE_SECTOR_OFFICIAL_REFRESH = True
+
 
 def _today():
     return datetime.now().strftime("%Y-%m-%d")
@@ -58,13 +64,22 @@ def _archive_dirs() -> tuple[Path, ...]:
 
 
 def _guard_trading_day(today: str) -> bool:
-    """交易日守卫：读 feedback_matrix.json 的 error 标记判断今日是否为可归档交易日。
+    """交易日守卫：**日历硬门禁** + feedback_matrix 数据可靠性标记（双重）。
 
-    feedback_matrix 已有双保险守卫（P0-1：weekday + 涨停池空/自交拦截节假日假数据），
-    capture_daily 复用它作为信号源——error 含 non_trading_day / zt_pool_unreliable
-    → 非交易日或数据不可靠，跳过归档（防周末/节假日假数据污染 5 日窗口）。
-    若 feedback_matrix.json 缺失（首次运行），回退 weekday 检查。
+    ⛔ 2026-10-09 修正：原实现只读 feedback_matrix 的 error 标记，而 feedback_matrix
+    当时的交易日判定仅判 `weekday()` → **工作日休市**（2026-09-25 中秋）漏网：那天数据源
+    回吐 09-24 的完整池（非空、且未触发自交守卫）→ 无 error 标记 → 本守卫放行 → 归档出
+    与 09-24 **逐字段相同**的幽灵日。故把日历判定**前置**，不再依赖上游是否识别出节假日。
     """
+    # ① 日历硬门禁（唯一真源·含法定休市日与周末）
+    try:
+        from common.trading_calendar import is_a_share_trading_day
+        if not is_a_share_trading_day(today):
+            print(f"[capture_daily] {today} 非A股交易日（交易日历），跳过归档")
+            return False
+    except Exception:  # pragma: no cover - 极端环境退回下游守卫
+        pass
+    # ② 数据可靠性守卫（feedback_matrix 的 non_trading_day / zt_pool_unreliable）
     fb = CACHE / "feedback_matrix.json"
     if fb.exists():
         try:
@@ -74,7 +89,7 @@ def _guard_trading_day(today: str) -> bool:
                 return False
         except Exception:
             pass
-    if datetime.now().weekday() >= 5:
+    if datetime.now().weekday() >= 5:  # trading-day-fallback: 唯一真源不可用时的周末兜底
         print(f"[capture_daily] {today} 周末，跳过归档")
         return False
     return True
@@ -450,6 +465,8 @@ def capture_newsflash(today: str) -> int:
 
     盘中快讯只进 latest.json（当日覆盖），盘后归档留存当日全部硬信号快讯，
     供 5 日汇总/复盘做「事件/催化」维度引用（情绪判断的事件驱动源头）。
+    A2（2026-10-10）：每条快讯增量标注 `polarity`（利好/利空/中性），语义复用
+    newsflash_express._direction（涨→利好/跌→利空/均无→中性），供 5 日汇总按极性聚合。
     """
     src = CACHE / "pulse_snapshots" / "latest.json"
     if not src.exists():
@@ -461,13 +478,34 @@ def capture_newsflash(today: str) -> int:
     nf = d.get("newsflash") or []
     if not nf:
         return 0
+    # ── A2 极性标注（仅增字段，不破坏既有消费方契约）─────────────────────
+    pol = _newsflash_polarity
+    out_items = []
+    for it in nf:
+        item = dict(it) if isinstance(it, dict) else {"title": str(it)}
+        txt = (item.get("title") or item.get("text") or "")
+        item["polarity"] = pol(txt)
+        out_items.append(item)
     NEWSFLASH_DIR.mkdir(parents=True, exist_ok=True)
     (NEWSFLASH_DIR / f"daily_{today}.json").write_text(json.dumps({
         "date": today,
         "generated_ts": datetime.now().isoformat(),
-        "newsflash": nf,
+        "newsflash": out_items,
     }, ensure_ascii=False, indent=1))
-    return len(nf)
+    return len(out_items)
+
+
+# ── A2 极性判定（2026-10-10）─────────────────────────────────────────────
+# 单一词源 = scripts/newsflash_express.py::_direction（涨类→up / 跌类→down / 均无→neutral）。
+# 此处转译为「利好/利空/中性」业务语义（5 日汇总聚合口径），避免两处维护词表。
+def _newsflash_polarity(title: str) -> str:
+    """返回 利好 / 利空 / 中性。标题缺字段或两词类均无 → 中性（不误导）。"""
+    try:
+        from newsflash_express import _direction
+        d = _direction(title or "")
+    except Exception:
+        d = "neutral"
+    return {"up": "利好", "down": "利空", "neutral": "中性"}.get(d, "中性")
 
 
 def capture_risk_watch(today: str, limit: int = 8) -> int:
@@ -680,7 +718,21 @@ def main():
     except Exception as e:
         rwm_msg = f"risk_watch ERR:{e}"
 
-    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | pruned={removed}")
+    # 9) D2（2026-10-10）：选股宝→东财官方板块 映射增量刷新（盘后链末步）。
+    #    latest.json top5 盘中已沉淀 → 此刻读得到；仅新 code 才联网 slist，失败降级不阻断。
+    if ENABLE_SECTOR_OFFICIAL_REFRESH:
+        try:
+            import subprocess as _sp
+            _so = _sp.run([sys.executable, str(Path(__file__).resolve().parent / "sector_official.py"), "--build"],
+                          capture_output=True, text=True, timeout=240)
+            _tail = (_so.stdout or "").strip().splitlines()[-1:] or [""]
+            so_msg = _tail[0][:80] if _so.returncode == 0 else f"ERR:{_so.stderr.strip()[:80]}"
+        except Exception as e:
+            so_msg = f"sector_official ERR:{e}"
+    else:
+        so_msg = "sector_official=skip(开关关闭)"
+
+    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | pruned={removed}")
 
 
 if __name__ == "__main__":

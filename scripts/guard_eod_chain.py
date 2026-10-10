@@ -82,6 +82,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 # 盘后口径时间线（HHMM）：产出 mtime 必须 ≥ 此值才算「被盘后链覆盖过」
 EOD_COVER_HHMM = 1600
 
+# ── D1 钩子开关（2026-10-10 批·可逆）─────────────────────────────────
+# False = 不挂 archive_decision（决策黑匣子仍可用 `python3 scripts/archive_decision.py`
+#         手动/回填，行为等同改动前）。True = 17:50 落盘守护末步自动归档当日决策产物
+#         （候选/竞价/池内裁决/AI判断/涨停池/当日全部卡片，含 17:18 复盘卡）。
+ENABLE_DECISION_ARCHIVE_HOOK = True
+
 
 def _today() -> str:
     return datetime.now().strftime("%Y-%m-%d")
@@ -229,6 +235,23 @@ def main():
               f"theme_rotation / carrier_state（无法回看，避免误报）")
 
     missing = _missing_of(today, live=live)
+
+    # ── D1（2026-10-10）：决策黑匣子自动归档 ──────────────────────────
+    # 17:50 落盘守护晚于全部卡片产出（含 17:18 复盘卡），此刻归档 = 当日全量决策产物。
+    # 失败不影响落盘自检主流程（best-effort）；非交易日已在上方守卫提前返回，不会触达。
+    if ENABLE_DECISION_ARCHIVE_HOOK:
+        try:
+            ad = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "archive_decision.py"),
+                 "--date", today],
+                capture_output=True, text=True, timeout=120,
+            )
+            ad_tail = (ad.stdout or "").strip().splitlines()[-1:] or [""]
+            ad_msg = ad_tail[0][:80] if ad.returncode == 0 else f"ERR:{ad.stderr.strip()[:80]}"
+            print(f"[guard_eod_chain] D1 决策归档：{ad_msg}")
+        except Exception as e:
+            print(f"[guard_eod_chain] D1 决策归档 ERR:{e}")
+
     if not missing:
         print(f"[guard_eod_chain] {today} 盘后链产出齐全 ✓（{len(CHECKS) + len(DATED_JSON)} 项）")
         return 0

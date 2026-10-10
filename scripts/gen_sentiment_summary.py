@@ -248,17 +248,24 @@ def build():
             row["main_themes"] = [t.get("name", "") for t in (er.get("themes") or []) if t.get("name")][:3]
         days.append(row)
 
-    # 新闻催化维度（最近 5 日）
+    # 新闻催化维度（最近 5 日）· A2（2026-10-10）：每条含 polarity 聚合（利好/利空/中性）
     news_rows = []
     for ds in sorted(news_files):
         nf = _load(news_files[ds]) or {}
+        items = nf.get("newsflash") or []
         titles = []
-        for it in (nf.get("newsflash") or []):
+        pol: dict[str, int] = {"利好": 0, "利空": 0, "中性": 0}
+        for it in items:
             t = it.get("title") or it.get("text") or ""
             if t and t not in titles:
                 titles.append(t)
+            p = it.get("polarity") or "中性"
+            if p not in pol:
+                p = "中性"
+            pol[p] += 1
         if titles:
-            news_rows.append({"date": ds, "count": len(nf.get("newsflash") or []), "titles": titles[:8]})
+            news_rows.append({"date": ds, "count": len(items),
+                              "titles": titles[:8], "polarity": pol})
 
     summary = {
         "generated_ts": __import__("datetime").datetime.now().isoformat(),
@@ -276,6 +283,12 @@ def build():
         },
         "cycle_hint": _cycle_hint(days),
         "news": news_rows,
+        # A2（2026-10-10）：5 日窗口新闻极性汇总（利好/利空/中性），卡片可直接引用
+        "news_polarity_total": {
+            "利好": sum((n.get("polarity") or {}).get("利好", 0) for n in news_rows),
+            "利空": sum((n.get("polarity") or {}).get("利空", 0) for n in news_rows),
+            "中性": sum((n.get("polarity") or {}).get("中性", 0) for n in news_rows),
+        },
     }
     # ── P2-20 情绪因果链 + 轮动反哺（2026-09-10 落地）──
     # ① rotation：theme_rotation 轮动状态（回流候选/新爆发/相位/题材涨停趋势）作为情绪周期输入维度；
@@ -355,6 +368,13 @@ def _refresh_md(days, why=None, rotation=None):
     # P2-20 注脚：情绪因果链 + 轮动反哺（机械归因·供 AI 定调引用）
     if why and why.get("text"):
         block += f"\n\n> 🧭 情绪因果（{why.get('date')}）：{why['text']}"
+    # A2（2026-10-10）：新闻极性聚合（利好/利空/中性）· 供盘前/复盘 AI 定调引用
+    if news_rows:
+        last_news = news_rows[-1]
+        pol = last_news.get("polarity") or {}
+        if pol:
+            block += (f"\n> 📰 当日催化极性：利好 {pol.get('利好', 0)} / 利空 {pol.get('利空', 0)} "
+                      f"/ 中性 {pol.get('中性', 0)}（5 日窗口共 {sum(n.get('count', 0) for n in news_rows)} 条·含当日）")
     if rotation:
         _ph = "、".join(f"{k}{v}" for k, v in (rotation.get("phase_dist") or {}).items())
         _ztd = ""
