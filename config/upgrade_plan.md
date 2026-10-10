@@ -2,7 +2,7 @@
 
 > **用途**：本文件是系统升级目标的**单一参考基准**。所有卡片生成任务（盘前/盘中猎手×11/盘中快照×3/盘后/财富密码 eod+verify）在启动后除 Read `shared_rules.md` 外，**必须 Read 本文件**，将已落地/待办方案与注意事项纳入当卡判断，避免重复说明或遗漏关键要点。
 > **维护者**：主助手（Claw）会话负责增改；定时任务只读不写。
-> **最近更新**：2026-09-09（CapitalPulse 全方位吸收盘点 + P2-18/19/20/L0 立项）
+> **最近更新**：2026-10-10（非交易时段系统梳理 + 守卫闸门/交易日历补录 + tasks.yaml 同步）
 
 ---
 
@@ -61,10 +61,14 @@
 | 🤖📒 AI 判断平行台账 | **2026-09-10 用户「能否把你的判断记到真实台账·和 Python 固定脚本对比」**：开**AI 判断轨**——`wealth_code/scripts/ai_ledger.py`（record 记录 AI 每日决策含理由/因素/入场规则·append-only；settle 用**与 Python 轨同源行情口径**结算：T+1 竞价价买入 → T+1 收盘 `return_pct=(close−auction)/auction`·等权·nav 递推；compare 双轨对比胜率/日均/净值；status 看待结算）。存储 `wealth_code/cache/ai_decisions.jsonl`（决策+结算态）+ `ai_nav_history.jsonl`（AI 轨账本·strategy=ai_judgement_next_day_close）。铁律：reason 必填、禁演示数据、竞价缺数据诚实 skip、幂等防重复记账。test_ai_ledger 6 例。⛔ 影子轨不自动下单（验证 AI 收益用） | wealth_code/scripts/ai_ledger.py + tests/test_ai_ledger.py | ✅ |
 | P2-15 | 复盘卡冗余重构 · R3 龙虎榜独立速览卡（**2026-09-03 方向 A 用户拍板落地**） | 复盘 17:18 不再渲染 🏦 模块、不再 18:00 后补推整版（8/25 双卡作古）；新建「【盘后】龙虎榜速览卡」automation-1145135d-7ef4-4100-bc95-977462d615cd 每交易日 18:20 触发（lhb_fetch→机构 Top5+游资 Top5+资金性质·hithink 交叉·空窗跳过不硬拼）；复盘精简 9 模块（①删无源"全天轨迹"改定调+五日轨迹行·⑩延续并入⑨·⑥.5只答核心生死·R5/R6）；复盘 prompt/財神-复盘 SKILL/卡片总览 9.6/tasks.yaml/中枢台账同步；18:20 首推验收 | ✅ |
 | 🔁 学习层收益导向（L1+L2+L4） | **2026-09-18 用户「命中率降低这不重要…成功率和收益才是我们需要提高的」→ 拍板「可以 先做124！」**：①**L2 冻结 R1/R4 自动回写**（`RULE_RISK` low→high + 新增 `_writable()` 总闸，在 tiered / legacy `high_only` / `apply_suggestion()` 入口**三处**拦截 —— 堵死「legacy 分支按 severity 筛选绕过冻结」的真实漏洞）②**L1 反事实账本接入学习层**（`decision_audit.json` → `audit_window`：各池 EV/胜率/`exec_ret_n` + 采信门 n≥30；R1/R2 evidence 附对照旁证·措辞避卡面 Tier-1 词）③**L4 收益口径多周期**（`common.tencent_kline.fetch_kline_ohlc` 同源补开盘价；t0收/t+1开/t+1收/t+3收/最差收盘 5 档·每档自带可用条数·缺一律 None；交易日历改取**日K实际日期**防 t+1 静默位移）④**L4b 回滚快照修正**（原实现无条件备份 expectation_rules.json → 改 relay 时「备份 A 改 B」、`--rollback` 还原错文件；现按真实目标备份 + 快照名携带原文件名）。实测：`applied=[]` 零回写、审计报告 5 档出齐、全量 **502 passed/1 skipped**、新锁变异 **6/6 被杀**。⛔ 未做 L3 收益规则与 L5~L8（待拍板） | scripts/learning.py + scripts/decision_audit.py + common/tencent_kline.py + tests/test_learning_tiered.py + tests/test_decision_audit.py + tests/test_backtest.py | ✅ |
+| 09:25 池内裁决·买入前防守闸门（含位置维度） | **2026-10-08 落地**：四判据（方向资金 / 位置高位二波 / 派发三特征 / 环境降档）接 `core/pool_call.call_pool` 裁决链，顺序宏观→微观（⑧方向→⑨位置→⑩派发→⑪候选）；位置闸=位置高(dev_10d≥45%/dev_30d≥50%) **且** zt_history 断板≥3交易日重启∧上一波最高板≥3 → 不占名额（只有高位只留痕）；⛔ 位置闸≠禁N字(断1~2天快速回封仍加分)；29 例防守测试 + 全量 **894 passed**（现 959）；15:30 接力卡 prompt 步骤5.2 已同步「派发三特征+高位二波」；3 个 commit 分批落地。详见 skill 财神-选股 / MEMORY | wealth_code/core/defense_gate.py + wealth_code/core/pool_call.py + wealth_code/pipelines/build_cards.py + wealth_code/pipelines/pipeline_verify.py + tests/test_defense_gate.py(29) | ✅ |
+| 交易日历单源重构（周末恒休市） | **2026-10-09 落地（全仓清扫）**：`common/trading_calendar.py` 定为「某天是否交易日」唯一真源——周末硬规则(`weekday()>=5` 直接 False·不读配置) + 法定休市表 `closed_dates`；**废弃 `open_dates`**（旧把 6 个周末补班日列开市→`next_a_share_trading_day('2026-10-09')` 错返 10-10）；`test_trading_day_single_source.py` 静态扫描拦截仓库内 `weekday()` 自行判定（白名单除外）；同步修 09-25 中秋漏列→已 `closed_dates` 补录 + 清 09-25 幽灵日归档。27 例扫描全过 | common/trading_calendar.py + config/a_share_calendar.json + tests/test_trading_day_single_source.py(27) | ✅ |
 
 ---
 
 ## 三、待办方案（按优先级 · 未落地）
+
+> ⚠️ **待办清单校准（2026-10-10）**：本节下表内标记「✅ …已落地」的行**实际已落地**（权威记录见【二、已落地方案】对应行：P1-6/P2-8/P2-9/❄️➡️🌀/P1-8/回流引擎ABC/🔁学习层）；**真正未落地 = 未标 ✅ 的项**（P1-7 / P2-11 / P2-13 / P2-16 / L0-体检④）。新增的 2026-10 观察项见【三.5】。
 
 | 优先级 | 方案 | 要点 |
 |---|---|---|
@@ -146,6 +150,21 @@
 ---
 
 
+
+### 三.6 2026-10 非交易时段系统梳理·遗留观察项（2026-10-10 盘点）
+
+> 本轮（2026-10-10 周六·非交易日）对全系统做了盘点 + 回归基线 + 安全升级，详见下方「本轮交付」。
+> 以下为**未实施、待拍板**的项，按风险分层：
+
+| 风险 | 项 | 当前状态 / 处置建议 |
+|---|---|---|
+| 低·数据新鲜度 | **sector_official 映射表刷新归属任务** | `scripts/sector_official.py --build` 生成的 `cache/sector_official_map.json` 目前**无定时任务刷新** → 每日新板块 `official=None`。建议挂到盘后链（capture_daily 末步）或独立每日任务；⛔ 不挂则次日新板块缺官方 BK 码（仅影响卡面展示字段，不阻断主链路） |
+| 中·设计决策 | **展示层统一走选股宝名（撤 BK 码）+ 信号 sector 归一化** | 三套命名体系（选股宝 / 东财题材 / 东财官方 BK）并存；是否撤 BK 码、信号 `sector` 字段归一化属用户未决设计，待拍板后实施 |
+| 高·需多日对照 | **relay_shadow 切换主流程（P2-13）** | 影子模式已启（relay_shadow.py）；切换主流程 = 高风险改动，须数日对照后再拍板 |
+| 待拍板 | **archive_decision 挂复盘链（N2）** | 归档器 + 25 天回填已完成；是否挂 17:18 复盘链自动每日归档待用户拍板（尊重用户对任务配置的最终决定权） |
+| 低·覆盖盲区 | **sector_family.SECTOR_ALIAS 键命中** | top5 题材名现来自选股宝，SECTOR_ALIAS 键（大消费/大农业…）若为东财聚合名则与选股宝不匹配 → 静默跳过、资金行退化为「💤资金未入榜」。需验证实际命中或扩键（注释已于 2026-10-10 校正） |
+| 低·测试卫生 | **测试套件 I/O 隔离** | 部分测试直写真实 cache 目录 / 发起网络请求（非全量 tmp 隔离），在受限沙箱环境无法跑全量（235 ERROR 为沙箱 I/O 拦截伪像，非代码缺陷）；生产无沙箱环境全量 **959 passed**。建议逐步加 `_guard_test_write` 式守卫，但非紧急 |
+| 已作废 | **10-10 周六补班开市日 rrule** | 旧「24 任务 rrule 仅 MO~FR→周六不触发」待办项，已被 2026-10-09 交易日历重构作废——A股周末恒休市，今日(10-10)正确判非交易日，无需改 rrule |
 
 ## 三.5 三段式流程校验 + 外部新闻融合评估（2026-08-16 审计）
 

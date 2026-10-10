@@ -107,11 +107,10 @@ tasks:
   - name: "【盘中】盘中猎手-1430"
     id: "automation-1785767450595"
     kind: "骨架B"
-    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=14;BYMINUTE=30"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=14;BYMINUTE=45"
     webhook: "auto"
     writeback: "盘中猎手-1430"
-    # 2026-09-03 停用(PAUSED)：与尾盘潜伏卡 14:30 AI研判撞车（同刻+主题都偏尾盘/次日预判），
-    # 次日预判职责由尾盘潜伏卡接管；14:00 猎手=尾盘收口卡。恢复需用户拍板。
+    # 2026-09-03 曾 PAUSED（与尾盘潜伏卡 14:30 撞车）；2026-10-10 同步DB：用户已移回 ACTIVE 并改至 14:45（与尾盘潜伏卡 14:30 错峰）
 
   # ---------- 盘中快照 ×3（骨架B.5）----------
   - name: "【盘中】盘中快照-1000"
@@ -129,10 +128,10 @@ tasks:
   - name: "【盘中】盘中快照-1445"
     id: "automation-1786674820935"
     kind: "骨架B.5"
-    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=14;BYMINUTE=45"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=14;BYMINUTE=30"
     webhook: "auto"
     writeback: "盘中快照-1445"
-    # PAUSED（2026-08-25 DB 校准）：尾盘横向全景已由猎手14:00 + 尾盘潜伏14:30 覆盖
+    # 2026-08-25 曾 PAUSED；2026-10-10 同步DB：用户已移回 ACTIVE 并改至 14:30（与猎手-1430 14:45 错峰）
 
   # ---------- 盘后选股（pipeline）----------
   - name: "【财富密码】财富密码·接力卡"
@@ -141,13 +140,29 @@ tasks:
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=15;BYMINUTE=30"
     webhook: "auto"
     writeback: null
-  - name: "【财富密码】财富密码·尾盘潜伏卡（14:30 AI研判）"
+  - name: "【财富密码】尾盘潜伏卡（14:30 阴线回踩·AI研判）"
     id: "automation-1787803870793"
     kind: "pipeline"
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=14;BYMINUTE=30"
     webhook: "auto"
     writeback: null
     # 2026-08-28 14:50→14:30 + AI研判层（双层：机械数据层 + AI 研判注入·build_ambush_card）
+    # 2026-10-10 同步DB真名（平台改名：去掉冗余「财富密码·」前缀 + 「阴线回踩」语义）
+
+  - name: "【财富密码】尾盘潜伏·当日买入价（兜底）"
+    id: "43d2b2fd-e0ce-4a68-9ff8-41e9e4b1f2af"
+    kind: "pipeline"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=14;BYMINUTE=50"
+    webhook: "auto"
+    writeback: null
+    # 2026-10-10 补登：尾盘潜伏卡（14:30）当日买入价兜底推送（DB 已 ACTIVE·rrule 14:50）
+  - name: "【财富密码】尾盘潜伏·次日10:00卖出结算收益"
+    id: "dd24c803-1750-4889-8032-a8f6f21a8d54"
+    kind: "pipeline"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=10;BYMINUTE=0"
+    webhook: "auto"
+    writeback: null
+    # 2026-10-10 补登：尾盘潜伏仓次日 10:00 卖出结算（DB 已 ACTIVE·rrule 10:00）
 
   # ---------- 盘后长卡/复盘系 ----------
   - name: "【盘后】盘后复盘"
@@ -163,9 +178,10 @@ tasks:
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=17;BYMINUTE=40"
     webhook: "auto"
     writeback: null
+    retired: true
     # 2026-09-03 R3 方向A 新建：复盘 17:18 摘掉 🏦 龙虎榜（18:00+ 才披露·原"待披露+补推整版"=双卡冗余），
     # 独立速览小卡承担（机构 Top5+游资 Top5+资金性质结论）·挂财神-复盘技能
-    # ⚠️ 2026-09-09 用户自改 DB=17:40（yaml 已随 DB 对齐·用户明确"自己改的不用管"）
+    # ⚠️ 2026-09-09 用户自改 DB=17:40；2026-10-10 平台已 deleted_at（任务删除）→ 此处仅留档，校验跳过
 
   # ---------- 回测自学习（2026-09-01 · 财神-回测）----------
   - name: "【系统迭代】推测回测-每日"
@@ -182,6 +198,14 @@ tasks:
     writeback: null
     # ⚠️ DB 为 FR 17:40，早于「推测回测-每日 17:50」→ 周五先出优化方案后出当日回测，次序待用户拍板
 
+  - name: "【系统迭代】盘后链落盘守护"
+    id: "4dd1c48e-4d16-41aa-b3eb-b446de853852"
+    kind: "脚本"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=17;BYMINUTE=50"
+    webhook: "auto"
+    writeback: null
+    # 2026-10-10 补登：盘后链落盘完整性自检（DB 已 ACTIVE·rrule 17:50，与推测回测-每日同刻）
+
   # ---------- 机构投研（财神-机构调研 · Gangtise MCP）----------
   - name: "【机构调研】机构研报·早盘卡"
     id: "36303687-5795-4204-a1b7-96b74282f387"
@@ -194,7 +218,8 @@ tasks:
   - name: "【机构调研】机构晚报速览卡"
     id: "ed5fd591-9d28-4a6f-a7af-3b6c519c21a4"
     kind: "机构投研"
-    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=21;BYMINUTE=0"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=20;BYMINUTE=0"
     webhook: "auto"
     writeback: null
     # 2026-09-03 用户「建机构晚报 21:00·现在推一篇到正式群」：Gangtise 晚报 evening → 6-8 主线块 v5 版式（validFrom 09-04·产物 cache/gangtise_evening_research.json）
+    # 2026-10-10 同步DB：用户已将时刻由 21:00 改为 20:00
