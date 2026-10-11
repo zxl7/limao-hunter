@@ -159,13 +159,14 @@
 | 风险 | 项 | 当前状态 / 处置建议 |
 |---|---|---|
 | 低·已落地 | **sector_official 映射表刷新归属任务（D2）** | ✅ **2026-10-10 第一批已落地**：挂 `capture_daily` 盘后链末步（`ENABLE_SECTOR_OFFICIAL_REFRESH` 可逆开关，240s 超时 + 失败降级，仅新 code 才联网），次日新板块自动补官方 BK 码；⛔ 关开关退回「不刷新」旧行为（仅影响卡面展示字段，不阻断主链路） |
-| 中·设计决策 | **展示层统一走选股宝名（撤 BK 码）+ 信号 sector 归一化（B2）** | 三套命名体系（选股宝 / 东财题材 / 东财官方 BK）并存；是否撤 BK 码、信号 `sector` 字段归一化属用户未决设计，**待拍板**后实施（D3 扩键方案并入此项） |
-| 高·需多日对照 | **relay_shadow 切换主流程（P2-13 / C1）** | 影子模式已启（relay_shadow.py）；切换主流程 = 高风险改动，须数日对照后再**拍板** |
+| 中·已落地 | **展示层统一（B2·撤平行表）** | ✅ **2026-10-11 已落地**：核心动作=消除 `sector_official.ALIAS` 与 `sector_family.SECTOR_ALIAS` 的**平行表**——`sector_family.SECTOR_ALIAS` 升为【聚合名→东财板块】唯一权威源（并入资产重组/智能电网/机器人/国产芯片 4 项），`sector_official.py` 改为 `from sector_family import SECTOR_ALIAS`（带兜底），59 例回归全过。⚠️ 原"BK 码/信号 sector 归一化"两点经核查**不建议动**：撤码违背用户"改东财官方板块名"硬需求（BK 码即官方标识，`official_tag` 已极克制）；归一化会打穿全下游链路（违反 D2"只增字段不改 name"铁律） |
+| 高·阻断（功能缺失） | **relay_shadow 切换主流程（P2-13 / C1）** | ⚠️ **2026-10-11 核查：无法出对照报告**——核心依赖 `wealth_code/core/relay_score.py`（五维评分 `rank_relay_candidates`）**不存在**；全仓库无 candidates 历史文件、`cache/shadow/` 不存在 → 影子模式**从未运行、零数据**。"已跑数日"为误判。C1 实为**未完成半成品**：要谈切主流程，须先补建 relay_score + 让 eod 产出 candidates + 挂 relay_shadow 影子积累数日，之后才有对照可拍板。**待用户决策：补建 C1 链路，或暂时搁置** |
 | 低·已落地 | **archive_decision 挂复盘链（D1）** | ✅ **2026-10-10 第一批已落地**：挂 `guard_eod_chain` 17:50 末步（`ENABLE_DECISION_ARCHIVE_HOOK` 可逆开关，best-effort 120s 超时），覆盖含 17:18 复盘卡的当日全量决策产物；仅脚本级挂钩、未改任何 automation（尊重用户对任务配置的最终决定权） |
 | 低·已验证 | **sector_family.SECTOR_ALIAS 键命中（D3）** | ✅ **2026-10-10 验证完成**：SECTOR_ALIAS 键（大消费/大农业/大金融/闪存/油服/影视/数字人民币）设计正确 = 选股宝名键（与 `live_signal._alias_members` 消费口径一致），非死表；样本 3/7 命中（大农业/大消费/影视），其余未出现 = 行情依赖非缺陷；真实盲区（锂电池/医药/网络安全等）由 D2 每日 `--build` 累积官方映射逐步覆盖；**扩键方案并入 B2**，本轮未改生产 |
 | 低·已落地 | **盘前预测卡模块梳理（B1）** | ✅ **2026-10-10 第一批已落地**：仿复盘 R1-R6 审查盘前预测卡模块 → ①宪法骨架 A 模块⑤明确「持仓为空→整模块省略·不写凑数」（与【隐私铁律】对齐）；②新增【P2-16 审查铁律】三段（数据源真实性 / 去凑数去重复 / 每模块紧扣"今天会发生什么"）。纯宪法级文案增量，零行为改动 |
 | 低·测试卫生 | **测试套件 I/O 隔离** | 部分测试直写真实 cache 目录 / 发起网络请求（非全量 tmp 隔离），在受限沙箱环境无法跑全量（235 ERROR 为沙箱 I/O 拦截伪像，非代码缺陷）；生产无沙箱环境全量 **959 passed**。建议逐步加 `_guard_test_write` 式守卫，但非紧急 |
 | 已作废 | **10-10 周六补班开市日 rrule** | 旧「24 任务 rrule 仅 MO~FR→周六不触发」待办项，已被 2026-10-09 交易日历重构作废——A股周末恒休市，今日(10-10)正确判非交易日，无需改 rrule |
+| 低·系统级（待用户操作） | **恢复 launchd 双守护（D5）** | 🔍 **2026-10-11 诊断**：plist 完好（`com.limao.pulse-fetcher` / `com.limao.wealth-verify` 均 `plutil -lint OK`）、脚本在，但 `launchctl list` 无 `com.limao.*` 项 = 未加载；`launchctl bootstrap/load` 报 `I/O error` 因 agent 执行环境为 `Aqua` 非 `gui/<uid>` session（无 GUI 会话连接）。**非文件损坏**。**恢复方式（二选一）**：①重启 Mac（登录时 launchd 自动 load `~/Library/LaunchAgents/`）；②在**终端.app/iTerm**（GUI 会话内）手动 `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.limao.pulse-fetcher.plist`；wealth-verify 同样。⛔ agent 环境无法代执行 |
 
 ## 三.5 三段式流程校验 + 外部新闻融合评估（2026-08-16 审计）
 

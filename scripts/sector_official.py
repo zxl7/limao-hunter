@@ -46,9 +46,18 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# scripts 目录注入 path，供 import sector_family（B2：复用其 SECTOR_ALIAS 单一权威源）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from common.http_client import http_get          # 统一出口铁律（2026-08-17）
 from common.json_io import load_json, save_json
+
+# B2（2026-10-11）：别名兜底统一走 sector_family.SECTOR_ALIAS（消除与 sector_official.ALIAS 平行表）。
+# 导入失败兜底为空表 → 不影响主链路（仅聚合别名映射退化为 none）。
+try:
+    from sector_family import SECTOR_ALIAS as _XGB_ALIAS
+except Exception:
+    _XGB_ALIAS = {}
 
 ROOT = Path(__file__).resolve().parent.parent    # ⚠️ 测试可替换（隔离生产 cache）
 
@@ -97,21 +106,8 @@ def _is_noise_board(name: str) -> bool:
 
 
 # ── 别名兜底（聚合名 → 东财板块名列表）──────────────────────────────
-# 只用于「东财确实没有同名/近似名」的选股宝聚合概念（如实测「大消费」东财查无此名）。
-# ⚠️ 成员名必须与东财官方板块名一致（优先与 sector_family.SECTOR_ALIAS 同源，避免两处维护）。
-ALIAS: dict[str, list[str]] = {
-    "大消费": ["食品饮料", "商贸零售", "一般零售", "新零售", "食品加工", "旅游及景区"],
-    "大农业": ["农业种植", "生态农业", "养殖业", "生猪养殖", "农药", "化肥"],
-    "大金融": ["非银金融", "多元金融", "金融控股", "银行", "互联网金融"],
-    "闪存": ["存储芯片"],
-    "油服": ["炼油化工", "油气开采"],
-    "影视": ["影视院线", "影视动漫制作"],
-    "数字人民币": ["数字货币"],
-    "资产重组": ["并购重组", "重组概念"],
-    "智能电网": ["电网设备", "特高压"],
-    "机器人": ["机器人概念", "人形机器人", "工业母机"],
-    "国产芯片": ["国产芯片", "半导体", "芯片概念"],
-}
+# B2（2026-10-11）：别名表已迁至 sector_family.SECTOR_ALIAS（唯一权威源），
+# 本模块通过顶部 `from sector_family import SECTOR_ALIAS as _XGB_ALIAS` 复用，不再另写一份。
 
 # ── 打分参数 ─────────────────────────────────────────────────────────
 MIN_COVERAGE = 0.5          # 名字相似（非精确）时的最低成分覆盖率
@@ -275,9 +271,9 @@ def resolve_sector(name: str, member_codes: Iterable[str],
         return {"boards": [_hit(nm, n) for _, _, _, nm, n in cands[:MAX_BOARDS]],
                 "method": "name+members", "members": valid}
 
-    # ② 别名兜底（东财无同名板块的聚合概念，如「大消费」）
-    if name in ALIAS:
-        return {"boards": [_hit(nm, cnt.get(nm, 0)) for nm in ALIAS[name][:MAX_BOARDS_ALIAS]],
+    # ② 别名兜底（东财无同名板块的聚合概念，如「大消费」；复用 sector_family 唯一权威源）
+    if name in _XGB_ALIAS:
+        return {"boards": [_hit(nm, cnt.get(nm, 0)) for nm in _XGB_ALIAS[name][:MAX_BOARDS_ALIAS]],
                 "method": "alias", "members": valid}
 
     # ③ 纯交集兜底（只有足够多成员、且覆盖极高才敢认）
