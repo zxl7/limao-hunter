@@ -18,8 +18,6 @@
 
 from __future__ import annotations
 
-import json
-import re
 import time
 from typing import Any
 
@@ -49,7 +47,18 @@ THEME_KEYWORDS: list[tuple[str, str, str]] = [
     ("半导体", "半导体", "国产替代·晶圆厂扩产"),
     ("芯片", "半导体", "国产芯片·自主可控"),
     ("晶圆", "半导体", "晶圆厂扩产·资本开支"),
-    ("AI", "AI算力", "AI算力·大模型资本开支"),
+    # 传媒/影视（2026-10-12 用户当场抓包·从泛「AI」规则拆出）：原泛 `("AI","AI算力")`
+    #   规则把 中文在线/掌阅科技（plates=影视）的「AI影视/AI阅读」全吞成「AI算力」
+    #   → 与真算力票（传艺科技）同线 → 被跟风闸整条误杀 → 10-12 传媒全涨停却没推。
+    ("影视", "影视传媒", "影视·内容制作"),
+    ("短剧", "影视传媒", "短剧·互动影游"),
+    ("院线", "影视传媒", "院线·电影"),
+    ("传媒", "影视传媒", "传媒·内容"),
+    ("出版", "影视传媒", "出版·传媒"),
+    ("阅读", "影视传媒", "数字阅读·AI应用"),
+    ("游戏", "影视传媒", "游戏·内容"),
+    # ⛔ 2026-10-12 删除泛「AI」规则：desc 含「AI」不再一律算「AI算力」，
+    #   仅下列**具体**算力词才归算力；否则落到 plates 概念（如 影视）正确归类。
     ("算力", "AI算力", "AI算力·数据中心"),
     ("液冷", "液冷散热", "AI服务器液冷·热管理"),
     ("服务器", "AI算力", "AI服务器·算力硬件"),
@@ -173,7 +182,6 @@ def annotate_candidate(
       - core_theme_heat: 热度等级 H/M/L（按板块涨停数）
     无题材数据 → core_theme="—"（诚实降级，不编造）。
     """
-    code = str(cand.get("code") or "").strip()
     cand["industry_sector"] = str(cand.get("theme") or cand.get("sector") or "—")
     if not theme_info:
         cand["core_theme"] = "—"
