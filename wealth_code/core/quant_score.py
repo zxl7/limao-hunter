@@ -51,6 +51,8 @@ OPEN_MAX_CORE = 12       # 主线接力档（原 8）
 # 原值：boards==1(+4.0) / boards==2(+3.0)（1进2 优先）——回退旧行为还原两组数值即可。
 RELAY_BONUS_2TO3 = 4.0   # 2进3（2板进3板·已现龙头雏形）
 RELAY_BONUS_1TO2 = 3.0   # 1进2（首板·龙头辨识度未现）
+RELAY_MOOD_SUPPORT_ADJUST = 5.0
+RELAY_MOOD_PRESSURE_ADJUST = -5.0
 # ============================================================================
 # 2026-08-18「重溢价·轻大盘」tide 门控修正（用户定·最高优先级）
 # 实证：8/18 晋级率16%+核按钮17+真破位2 → risk_off → tide 一票否决清零接力池，
@@ -59,6 +61,16 @@ RELAY_BONUS_1TO2 = 3.0   # 1进2（首板·龙头辨识度未现）
 # 主线接力/1进2 中位档 tideRelayGate>=0 继续收严）；ice（情绪分≤2）冰点禁买保留清零。
 # ⛔ 可逆开关：True=旧行为(risk_off 一票否决清零) / False=新行为(risk_off 降档收严)
 TIDE_BLOCK_ON_RISK_OFF = False
+# ============================================================================
+# 🔒 低板孤军不进接力池（2026-10-12 用户「你推了一个没有板块的独苗！这在接力中
+#    非常不可取」·C 方案）：低板（boards ≤ LONE_LOWBOARD_MAX）且孤军
+#    （行业/题材只剩自己，或 core_theme 无有效题材 {空/其他/—}）→ 移出接力池
+#    （line 593 自动回落观察池）。
+# ⛔ 高标独立龙头（boards ≥ 3 的孤军）**保留**——2026-08-24 用户原意「认可独立总龙头」。
+# ⛔ 可逆：ENABLE_LONE_LOWBOARD_EXCLUDE=False → 逐字回到改动前（孤军照进接力池）。
+ENABLE_LONE_LOWBOARD_EXCLUDE = True
+LONE_LOWBOARD_MAX = 2
+# ============================================================================
 # ----------------------------------------------------------------------------
 # 2026-09-09 用户「冰点也要给我推接力池·买不买由人来决定」：解除 P1-6 ice freeze——
 # ice（情绪≤2）不再强制清零接力池，改「跳过 strict 直接走 relaxed→broad→emergency
@@ -116,8 +128,6 @@ def compute_raw_score(cand: dict[str, Any], env: dict[str, Any], pulse: dict[str
     ladder = _to_num(cand.get("ladder_health"), 0.0)  # 0~10
     boards = int(_to_num(cand.get("boards"), 1))
     zbc = int(_to_num(cand.get("zbc"), 0))
-    is_20cm = bool(cand.get("is_20cm"))
-    is_one_word = bool(cand.get("is_one_word"))
     is_dragon = bool(cand.get("is_sector_dragon"))
     theme_bonus = _to_num(cand.get("themeBonus")) or _to_num((cand.get("reason") or {}).get("themeBonus"))
     tags = cand.get("tags") or []
@@ -156,11 +166,15 @@ def compute_raw_score(cand: dict[str, Any], env: dict[str, Any], pulse: dict[str
     # 原 `0.0 if is_20cm else 12.0` = 主板 +12 / 创业板 +0 的倾斜。
     # 正确反转 = 创业板也拿同等 +12（板中性常量），而非把主板降级。
     # 主板/创业板按同一套封板质量→竞价溢价情绪周期对称参与，不叠加 20cm 折让。
+    # 同路径的真实晋级、竞价溢价、失败核按钮只微调接力维度；小样本不调分。
+    mood_adjust = {"supportive": RELAY_MOOD_SUPPORT_ADJUST,
+                   "pressured": RELAY_MOOD_PRESSURE_ADJUST}.get(cand.get("relay_mood"), 0.0)
     relay_factor_score = _clamp(
         45.0 + 12.0 + ladder * 4.0
         + (10.0 if boards >= 3 else (5.0 if boards >= 2 else 0.0))   # 高度加分（保留，不反转）
         + (8.0 if "main" in dv_flags else 0.0)
         + (RELAY_BONUS_2TO3 if boards == 2 else (RELAY_BONUS_1TO2 if boards == 1 else 0.0))    # 低位接力倾斜：2进3优先（2026-09-01 用户）
+        + mood_adjust
     )
 
     # —— 5) capacity_score（容量因子，系统真实）——
@@ -247,6 +261,7 @@ def compute_raw_score(cand: dict[str, Any], env: dict[str, Any], pulse: dict[str
         "sector_sentiment_score": round(sector_sentiment_score, 2),
         "leader_factor_score": round(leader_factor_score, 2),
         "relay_factor_score": round(relay_factor_score, 2),
+        "relay_mood_adjust": mood_adjust,
         "capacity_score": round(capacity_score, 2),
         "risk_control_score": round(risk_control_score, 2),
         "opportunity_score": round(opportunity_score, 2),
@@ -279,13 +294,9 @@ def map_tactics_fields(cand: dict[str, Any], env: dict[str, Any], pulse: dict[st
     seal_amt = _to_num(cand.get("seal_amt"))
     hs = _to_num(cand.get("hs"))
     cje = _to_num(cand.get("cje_yi"))
-    is_20cm = bool(cand.get("is_20cm"))
     is_one_word = bool(cand.get("is_one_word"))
     is_dragon = bool(cand.get("is_sector_dragon"))
     regime = env.get("regime") or "neutral"
-    sentiment_score = _to_num(env.get("sentiment_score"), 5.0)
-    nuke = int(env.get("nuke_count") or 0)
-    broken = _to_num(env.get("broken_rate"), 0.0)
 
     is_shrink = bool(hs > 0 and hs < 3 and cje < 5 and zbc == 0)
     # 题材泛化（广度无效应）：仅当题材本身属泛化/宽度标签才判 broad；选股宝真实板块默认非泛化
@@ -478,12 +489,12 @@ def _relay_emergency_ok(row: dict[str, Any]) -> bool:
     )
 
 
-def _relay_fallback(by_raw: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+def _relay_fallback(by_raw: list[dict[str, Any]], *, selection_key=None) -> tuple[list[dict[str, Any]], str]:
     """非 strict 场景的收严级联（risk_off 降档 / ice 解冻共用）：relaxed → broad → emergency → none。
     每档取 raw_score 前 3；无候选则自然下探，全无 → ([], "none")（诚实空，不强制塞）。"""
     def _top(pred, cap=3):
         return sorted([m for m in by_raw if pred(m)],
-                      key=lambda m: _to_num(m.get("_raw")), reverse=True)[:cap]
+                      key=selection_key or (lambda m: _to_num(m.get("_raw"))), reverse=True)[:cap]
     relaxed = _top(_relay_relaxed_ok)
     if relaxed:
         return relaxed, "relaxed"
@@ -494,7 +505,21 @@ def _relay_fallback(by_raw: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
     return (emg, "emergency") if emg else ([], "none")
 
 
-def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse: dict[str, Any] | None, ai: dict[str, Any] | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], str]:
+def _is_lone_lowboard(cand: dict[str, Any]) -> bool:
+    """低板孤军（2026-10-12 用户「你推了一个没有板块的独苗！这在接力中非常不可取」·C 方案）。
+
+    True = 低板（boards ≤ LONE_LOWBOARD_MAX）**且**孤军：
+      · 行业/题材只剩自己（`sector_is_lone` / `theme_is_lone`），或
+      · 无有效题材（`core_theme` ∈ {空 / "其他" / "—"}，即"没提炼出板块"）。
+    ⛔ 高标（boards ≥ 3）的孤军返回 False —— 保留独立总龙头（2026-08-24 用户原意）。
+    """
+    _ct = str(cand.get("core_theme") or "").strip()
+    lone = (bool(cand.get("sector_is_lone")) or bool(cand.get("theme_is_lone"))
+            or _ct in ("", "其他", "—"))
+    return _to_num(cand.get("boards"), 1) <= LONE_LOWBOARD_MAX and lone
+
+
+def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse: dict[str, Any] | None, ai: dict[str, Any] | None, *, comparison=None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], str]:
     """
     faithful §4.4 四档接力选择 + 观察池生成。
 
@@ -502,6 +527,15 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
     relay/watch 元素为原始 pipeline_eod 候选（带 raw_score / relay_rank / bucket），
     不含 tactics 中间字段，供 pipeline_eod 继续回填 dim_panel/expectation/narrative。
     """
+    from copy import deepcopy
+    from core import leader_cycle
+    scored = deepcopy(scored)
+    entries = (comparison or {}).get("entries") or {}
+    active = bool(leader_cycle.ENABLE_PRESELECT_STATUS and entries
+                  and all(str(c.get("code")) in entries for c in scored))
+    def selection_key(m):
+        return (*entries[str(m.get("code"))]["key"], _to_num(m.get("_raw")))
+    raw_key = selection_key if active else lambda m: _to_num(m.get("_raw"))
     # 1) 计算 raw_score + 映射 tactics 字段
     mapped: list[dict[str, Any]] = []
     raw_by_code: dict[str, dict[str, Any]] = {}
@@ -534,7 +568,8 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
         )
 
     # 2) 四档（严格）集合
-    by_raw = sorted(mapped, key=lambda m: _to_num(m.get("_raw")), reverse=True)
+    by_raw = sorted(mapped, key=raw_key, reverse=True)
+    priority_key = selection_key if active else _leader_preference_key
     height = _tier(by_raw, _relay_height_breakout_ok)
     high = _tier(by_raw, _relay_high_mark_ok)
     core = _tier(by_raw, _relay_core_ok)
@@ -558,22 +593,35 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
         if ICE_FREEZE_RELAY:                    # 回退开关：旧 freeze 清零
             relay_mapped, mode = [], "freeze"
         else:                                   # 解冻：跳过 strict 走收严级联
-            relay_mapped, mode = _relay_fallback(by_raw)
+            relay_mapped, mode = _relay_fallback(by_raw, selection_key=raw_key)
     elif strict_pool:
-        relay_mapped = sorted(strict_pool, key=lambda m: _to_num(m.get("_raw")), reverse=True)[:8]
-        mode = "strict"
+        # 三项市场反馈同时走弱才收窄接力名额；个股四档资格和排序不变。
+        pressure = bool((env.get("relay_feedback") or {}).get("pressure"))
+        relay_mapped = sorted(strict_pool, key=raw_key, reverse=True)[:3 if pressure else 8]
+        mode = "strict_pressure" if pressure else "strict"
     else:
-        relay_mapped, mode = _relay_fallback(by_raw)
+        relay_mapped, mode = _relay_fallback(by_raw, selection_key=raw_key)
 
     # 四档决定“能否入池”；池内按龙头战法聚焦第一，避免低位高分压过题材龙与空间高度。
-    relay_mapped = sorted(relay_mapped, key=_leader_preference_key, reverse=True)
+    relay_mapped = sorted(relay_mapped, key=priority_key, reverse=True)
+
+    # 🔒 低板孤军过滤（2026-10-12 用户「接力不推没板块的独苗」·C 方案）：
+    #   低板（boards ≤ LONE_LOWBOARD_MAX）且孤军 → 移出接力池（下方 593 行自动回落观察池）。
+    #   孤军 = 行业/题材只剩自己（sector_is_lone/theme_is_lone）**或** 无有效题材
+    #   （core_theme ∈ {空/其他/—}，即"没提炼出板块"）。
+    #   ⛔ 高标独立龙头（boards≥3 的孤军）保留 —— 2026-08-24 用户「认可独立总龙头」原意。
+    if ENABLE_LONE_LOWBOARD_EXCLUDE:
+        relay_mapped = [
+            m for m in relay_mapped
+            if not _is_lone_lowboard(m.get("_cand") if isinstance(m.get("_cand"), dict) else {})
+        ]
+
     relay_codes = {str(m.get("code")) for m in relay_mapped}
-    relay_names = {str(m.get("name")) for m in relay_mapped}
 
     # 3) 观察池：排除接力，按 raw_score 排序，容量/高标分组，最多 8
     watch_cands = [m for m in by_raw if str(m.get("code")) not in relay_codes]
     # 梯队必须观察（题材龙一若未进接力，纳入）——保留 spec watch 完整性
-    watch_sorted = sorted(watch_cands, key=_leader_preference_key, reverse=True)
+    watch_sorted = sorted(watch_cands, key=priority_key, reverse=True)
     watch_mapped = watch_sorted[:8]
 
     # 4) 还原为原始候选并附 rank/bucket
@@ -581,6 +629,11 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
         c = dict(m.get("_cand") or {})
         c["raw_score"] = m.get("_raw")
         c["quant_dims"] = raw_by_code.get(str(c.get("code")), {})
+        if active:
+            evidence = entries[str(c.get("code"))]
+            for key in ("leader_role", "leader_evidence", "core_theme"):
+                c[key] = deepcopy(evidence[key])
+            c["preselect_evidence"] = deepcopy(evidence)
         return c
 
     relay = [_restore(m) for m in relay_mapped]
@@ -632,6 +685,31 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
         "relay_count": len(relay),
         "watch_count": len(watch),
         "selection_mode": mode,
+        "relay_feedback": env.get("relay_feedback"),
         "mean_raw_score": round(sum(_to_num(c.get("raw_score")) for c in scored) / max(1, len(scored)), 2),
     }
+    if active:
+        old_relay, old_watch, _, old_mode = select_relay_watch(scored, env, pulse, ai)
+        old_positions = {c["code"]: (bucket, i) for bucket, rs in (("relay", old_relay), ("watch", old_watch))
+                         for i, c in enumerate(rs, 1)}
+        new_positions = {c["code"]: (bucket, i) for bucket, rs in (("relay", relay), ("watch", watch))
+                         for i, c in enumerate(rs, 1)}
+        predicates = {"height": _relay_height_breakout_ok, "high": _relay_high_mark_ok,
+                      "core": _relay_core_ok, "one2": _relay_one_to_two_ok,
+                      "relaxed": _relay_relaxed_ok, "broad": _relay_broad_ok, "emergency": _relay_emergency_ok}
+        diagnostics["preselect_status"] = {"asof": comparison["asof"], "cutoff": comparison["cutoff"],
+            "quality": comparison["quality"], "old_mode": old_mode,
+            "rows": [{"code": m["code"], "raw": m["_raw"], "evidence": entries[m["code"]],
+                      "eligible": {k: bool(pred(m)) for k, pred in predicates.items()},
+                      "old_position": old_positions.get(m["code"]),
+                      "new_position": new_positions.get(m["code"]),
+                      "selection_rank": next(i for i, row in enumerate(by_raw, 1) if row["code"] == m["code"]),
+                      "one2_rank": next((i for i, row in enumerate([r for r in by_raw if _relay_one_to_two_ok(r)], 1)
+                                         if row["code"] == m["code"]), None),
+                      "watch_rank_before_cap": next((i for i, row in enumerate(watch_sorted, 1)
+                                                     if row["code"] == m["code"]), None),
+                      "outcome": "selected" if m["code"] in new_positions else "watch_capacity_cutoff"}
+                     for m in mapped]}
+        for c in relay + watch:
+            c["leader_preference_note"] = "当前角色→带动与连续性→已核实历史地位→竞争→原始分"
     return relay, watch, diagnostics, mode
