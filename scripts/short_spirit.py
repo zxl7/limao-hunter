@@ -104,6 +104,14 @@ LEADER_FALLBACK_20CM_MIN_PCT = 19.0  # C 兜底池纳入「首板 20cm 涨停」
 # ⛔ 只对 top5 主线板块提示 —— 非主线不推（体系：跟风杂毛禁做；只推主线身位票）。
 # ⛔ 排除：ST / 科创板688（无权限）/ 黑名单（京能系·金能科技）/ 本轮已推 / 涨幅不足。
 # ⛔ 可逆开关：ENABLE_SPIRIT_RELAY_HINT=False 即回到「只报异动、不给方向」的改动前行为。
+# ── 板块联动归纳（2026-10-12 用户「尽量进行板块联动的观察归纳」）──────────────
+# 把本轮信号按板块（东财行业名）聚合 → 卡面「🔥 板块联动」段：每板块一行
+#   「板块 N只(涨停M)｜最强 X(+pct)」。纯呈现层·零新数据源·渲染 try/except 降级。
+# ⛔ 关开关即回到改动前卡面（与 A/B/C/relay 同套路）。
+ENABLE_SPIRIT_SECTOR_GROUP = True
+SECTOR_GROUP_MIN_ITEMS = 2      # 至少 N 只才列为「联动」（单只不成板块联动）
+SECTOR_GROUP_MAX = 8            # 最多列几个板块（防刷屏）
+
 ENABLE_SPIRIT_RELAY_HINT = True
 RELAY_HINT_MIN_PCT = 7.5        # 后排可参与票涨幅下限（确保是「强势」而非滞涨跟风）
 RELAY_HINT_MAX_ITEMS = 3        # 后排可参与票最多列几只（防刷屏）
@@ -166,6 +174,20 @@ def load_cfg():
                 "weight": {"pct": 0.4, "amount": 0.2, "resonance": 0.3, "flow": 0.1}}
 
 
+def is_trading_day(now=None) -> bool:
+    """A股交易日 —— **唯一真源 = common.trading_calendar**（2026-10-09 唯一化）。
+
+    ⛔ 本文件不得自行判 `weekday()`：`in_trading` 与 `in_early_realtime_window`
+       曾各写一份周末判定，把工作日休市（中秋 2026-09-25）与调休补班周末当交易日。
+    """
+    now = now or datetime.now()
+    try:
+        from common.trading_calendar import is_a_share_trading_day
+        return is_a_share_trading_day(now)
+    except Exception:  # pragma: no cover - 极端环境兜底
+        return now.weekday() < 5  # trading-day-fallback: 唯一真源不可用时的周末兜底
+
+
 def in_trading() -> bool:
     now = datetime.now()
     hm = now.hour * 60 + now.minute
@@ -174,12 +196,8 @@ def in_trading() -> bool:
     in_window = (9 * 60 + 25) <= hm <= (11 * 60 + 30) or (13 * 60) <= hm <= (15 * 60)
     if not in_window:
         return False
-    # 节假日门禁：法定节假日（含国庆）不推送，调休补班开市日仍推送（is_a_share_trading_day 为唯一权威）
-    try:
-        from common.trading_calendar import is_a_share_trading_day
-        return is_a_share_trading_day(now)
-    except Exception:
-        return now.weekday() < 5  # 兜底：common 不可用，至少排除周末
+    # 节假日门禁：法定节假日与周末（含调休补班日）一律不推送
+    return is_trading_day(now)
 
 
 def session() -> str:
@@ -195,7 +213,7 @@ def in_early_realtime_window(now=None) -> bool:
     该窗口内用户最高优先级要求「接口有信号就立刻推」，故**低强度合并豁免**。
     """
     now = now or datetime.now()
-    if now.weekday() >= 5:
+    if not is_trading_day(now):
         return False
     hm = now.hour * 60 + now.minute
     return EARLY_REALTIME_START_MIN <= hm <= EARLY_REALTIME_END_MIN
@@ -837,6 +855,9 @@ def build_signals(d, now, cfg):
         reason = f"共振[{t5[:8]}]" if t5 else typ
         signals.append({
             "name": s["name"], "code": s["code"], "sector": s["industry"],
+            # 板块联动口径（2026-10-12）：题材名优先（top5 成分票）、东财行业兜底 ——
+            #   与「🎯 接力方向」同为题材名，卡面板块口径一致；非 top5 票才落到行业。
+            "theme": code_t5.get(s["code"], "") or s["industry"],
             "market_cap_yi": s["market_cap_yi"], "amount_yi": s["amount_yi"],
             "pct": s["pct"], "type": typ, "tags": tags,
             "resonance": round(res * 100), "flow_yi": s["main_flow_yi"],
@@ -928,6 +949,9 @@ def build_signals_down(d, now, cfg):
         reason = f"共振[{t5[:8]}]" if t5 else typ
         signals.append({
             "name": s["name"], "code": s["code"], "sector": s["industry"],
+            # 板块联动口径（2026-10-12）：题材名优先（top5 成分票）、东财行业兜底 ——
+            #   与「🎯 接力方向」同为题材名，卡面板块口径一致；非 top5 票才落到行业。
+            "theme": code_t5.get(s["code"], "") or s["industry"],
             "market_cap_yi": s["market_cap_yi"], "amount_yi": s["amount_yi"],
             "pct": s["pct"], "type": typ, "tags": tags,
             "resonance": round(res * 100), "flow_yi": s["main_flow_yi"],
@@ -968,6 +992,28 @@ def _pct_tag(pct: float) -> str:
     if pct < 0:
         return f"<text_tag color='green'>{pct:+.2f}%</text_tag>"
     return f"<text_tag color='neutral'>{pct:+.2f}%</text_tag>"
+
+
+def _sector_group_summary(signals):
+    """板块联动归纳（纯函数·2026-10-12 用户「尽量进行板块联动的观察归纳」）。
+
+    把本轮信号按板块聚合（题材名 `theme` 优先·东财行业 `sector` 兜底 → 与接力段同口径）。
+    返回 [(sector, total, zt_count, top_signal), ...]，
+    排序 = 涨停数降 → 家数降 → 组内最强强度降（「有涨停 + 家数多」的板块顶到前面）。
+    """
+    groups: dict = {}
+    for s in (signals or []):
+        sec = str(s.get("theme") or s.get("sector") or "").strip() or "其他"
+        g = groups.setdefault(sec, {"items": [], "zt": 0})
+        g["items"].append(s)
+        if s.get("type") == "涨停":
+            g["zt"] += 1
+    out = []
+    for sec, g in groups.items():
+        g["items"].sort(key=lambda x: -float(x.get("strength") or 0))
+        out.append((sec, len(g["items"]), g["zt"], g["items"][0]))
+    out.sort(key=lambda x: (-x[2], -x[1], -float(x[3].get("strength") or 0)))
+    return out
 
 
 def build_card(signals, sess, now, relay=None):
@@ -1012,6 +1058,24 @@ def build_card(signals, sess, now, relay=None):
             lines.append(
                 f"　<text_tag color='{col}'>{s['name']}({s['code']})</text_tag> "
                 f"{_pct_tag(s['pct'])}（{s['sector']}）｜⚡{s['reason']}")
+    # 🔥 板块联动归纳（2026-10-12 用户「尽量进行板块联动的观察归纳」）：
+    #   把本轮异动按板块聚合 → 「风电 3只(涨停1)｜最强 X」。纯呈现层；异常降级不影响主卡。
+    if ENABLE_SPIRIT_SECTOR_GROUP:
+        try:
+            _summ = _sector_group_summary(signals)
+            _linked = [x for x in _summ if x[1] >= SECTOR_GROUP_MIN_ITEMS or x[2] >= 1]
+            if _linked:
+                lines.append("")
+                lines.append(f"**🔥 板块联动 {len(_linked)}个**：")
+                for _sec, _n, _zt, _top in _linked[:SECTOR_GROUP_MAX]:
+                    _seg = f"　**{_sec}** {_n}只"
+                    if _zt:
+                        _seg += f"(涨停{_zt})"
+                    _seg += (f"｜最强 {_top.get('name')}({_top.get('code')}) "
+                             f"{_pct_tag(float(_top.get('pct') or 0))}")
+                    lines.append(_seg)
+        except Exception as e:  # ⛔ 盘中链路安全第一：新段异常不得影响主卡
+            print(f"[short_spirit] 板块联动段降级(已忽略): {e}")
     # 🎯 板块接力方向（2026-10-08 用户核心功能·A 盘中即时）：
     #   「捕获到主线板块强势票涨停 → 顺势给该方向该买什么」。
     #   2026-10-08 二改（用户：「如果他是前排，记得把这个后排也标记出来，带上可参与后排的涨幅」）：
