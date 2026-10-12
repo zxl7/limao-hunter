@@ -112,6 +112,12 @@ ENABLE_SPIRIT_SECTOR_GROUP = True
 SECTOR_GROUP_MIN_ITEMS = 2      # 至少 N 只才列为「联动」（单只不成板块联动）
 SECTOR_GROUP_MAX = 8            # 最多列几个板块（防刷屏）
 
+# ── B 档·后排关联（2026-10-12 用户「取选股宝题材分类下的数据·含已封板」）──────────
+# 用选股宝题材 top5[题材].zt_stocks（该题材涨停票·含 code）补全 relay 后排池，
+#   比按 limit_up_stocks.sector 名称匹配更准（选股宝直接标注的该题材票）。
+# ⛔ 关开关即回退到仅用 limit_up_stocks 匹配的改动前行为。
+ENABLE_SPIRIT_THEME_BACKSEAT = True
+
 ENABLE_SPIRIT_RELAY_HINT = True
 RELAY_HINT_MIN_PCT = 7.5        # 后排可参与票涨幅下限（确保是「强势」而非滞涨跟风）
 RELAY_HINT_MAX_ITEMS = 3        # 后排可参与票最多列几只（防刷屏）
@@ -471,6 +477,25 @@ def _relay_hint(signals, d):
                        "boards": x.get("boards"), "pct": float(x.get("pct") or 0)})
     ladder.sort(key=lambda x: (-_b(x["boards"]), -x["pct"]))
     zt_codes = {x["code"] for x in ladder}
+
+    # B 档（2026-10-12 用户「取选股宝题材分类下的数据·含已封板」）：
+    # 用选股宝题材 top5[题材].zt_stocks 补全该题材涨停票（选股宝权威口径·含 code），
+    # 合并进 ladder（去重）→ 「后排关联」列全，不依赖全市场 limit_up 的 sector 名称匹配。
+    if ENABLE_SPIRIT_THEME_BACKSEAT:
+        try:
+            for t5 in (d.get("top5") or []):
+                if not _sector_match(sector, str(t5.get("name") or "")):
+                    continue
+                for z in (t5.get("zt_stocks") or []):
+                    c = str(z.get("code") or "").split(".")[0]
+                    if c and c not in zt_codes:
+                        ladder.append({"name": z.get("name"), "code": c,
+                                       "boards": None, "pct": float(z.get("pct") or 0)})
+                        zt_codes.add(c)
+                break
+            ladder.sort(key=lambda x: (-_b(x["boards"]), -x["pct"]))
+        except Exception as e:  # ⛔ 盘中链路安全第一：补全异常不得影响 relay 主流程
+            print(f"[short_spirit] 后排关联补全降级(已忽略): {e}")
 
     # ② 后排可参与（leaders 同板块，排除已推/已封/ST/科创/黑名单/涨幅不足）
     pushed_codes = {str(s.get("code") or "")[:6] for s in (signals or [])}
@@ -1079,7 +1104,8 @@ def build_card(signals, sess, now, relay=None):
     # 🎯 板块接力方向（2026-10-08 用户核心功能·A 盘中即时）：
     #   「捕获到主线板块强势票涨停 → 顺势给该方向该买什么」。
     #   2026-10-08 二改（用户：「如果他是前排，记得把这个后排也标记出来，带上可参与后排的涨幅」）：
-    #   卡面固定三段 → 👑 前排（谁领涨·板数最高）｜🎯 后排可参与（买谁·带涨幅）｜🔒 其余已封板（参考）。
+    #   卡面固定三段 → 👑 前排（谁领涨·板数最高）｜🎯 后排可参与（买谁·带涨幅）｜🔒 后排关联（含已封板·参考）。
+    #   2026-10-12 B 档：第三段后排池用选股宝题材 top5[题材].zt_stocks 补全（见 _relay_hint）。
     if relay:
         sec = relay.get("sector") or ""
         zt_n = relay.get("zt_count") or 0
@@ -1119,7 +1145,7 @@ def build_card(signals, sess, now, relay=None):
             seg3 = "｜".join(
                 f"{x['name']}({x['boards']})" if x.get("boards") else f"{x['name']}"
                 for x in others)
-            lines.append(f"　🔒 其余已封板：{seg3}")
+            lines.append(f"　🔒 后排关联：{seg3}")
     lines.append("")
     return {
         "title": f"短线精灵·异动信号 | {now.strftime('%H:%M')} | 命中{len(signals)}只",

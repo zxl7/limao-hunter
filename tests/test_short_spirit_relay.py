@@ -213,9 +213,9 @@ def test_build_card_renders_relay_block():
     assert "金银河(300619)" in back and "理奇智能(301599)" in back
     assert "+16.53%" in back and "+11.04%" in back, "后排必须带可参与涨幅"
     # ③ 其余已封板 = 参考（前排/本轮已捕捉的不重复列）
-    assert "🔒 其余已封板：" in body and "紫竹高科(3天3板)" in body
-    assert "时代万恒" not in body.split("🔒 其余已封板：")[1], "前排不重复出现在其余已封板"
-    assert "领湃科技" not in body.split("🔒 其余已封板：")[1], "本轮捕捉的不重复出现在其余已封板"
+    assert "🔒 后排关联：" in body and "紫竹高科(3天3板)" in body
+    assert "时代万恒" not in body.split("🔒 后排关联：")[1], "前排不重复出现在后排关联"
+    assert "领湃科技" not in body.split("🔒 后排关联：")[1], "本轮捕捉的不重复出现在后排关联"
 
 
 def test_build_card_marks_front_when_captured_this_round():
