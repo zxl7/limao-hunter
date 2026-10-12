@@ -410,3 +410,41 @@ def test_run_verify_real_run_freezes_once(monkeypatch, tmp_path):
     quotes2 = {"000001": _q(10.0, -5.0, amt=5.0)}
     pv.run_verify(candidates=cands, quotes=quotes2, out_nav=False, persist=True)
     assert json.loads(p1.read_text(encoding="utf-8")) == first
+
+
+# ── ⑩ 跟风闸「归并一致性守卫」（2026-10-12 传媒事故回归锁）──────────────────
+def test_core_gate_blocks_normal_follower():
+    """跟风闸正常生效：核心 3 板已断板、候选 1 板、线族归并一致 → 拦（不占名额）。"""
+    cand = _cand("000001", "真跟风", boards=1, sector="半导体")
+    res = pool_call.call_pool(
+        {"relay": [cand], "watch": []}, {"000001": _q(10.0, 2.0)},
+        plan=_plan({"000001": "normal"}, stance="defend"),
+        line_cores={"AI算力": {"code": "666666", "name": "传艺科技",
+                               "boards": 3, "broken": True}})
+    assert res["views"]["000001"].get("follower_gate") is True
+
+
+def test_core_gate_skipped_when_line_inconsistent():
+    """⛔ 10-12 传媒事故回归：候选 core_theme 归线 与 sector 归线**矛盾**
+    （core_theme 被误标「AI算力」、sector=数字媒体→传媒）→ 归并可疑 → ⛔ 不硬拦。"""
+    cand = _cand("000001", "疑似误归", boards=1, sector="数字媒体")
+    cand["core_theme"] = "AI算力"          # 模拟被已删的泛「AI」规则误标
+    res = pool_call.call_pool(
+        {"relay": [cand], "watch": []}, {"000001": _q(10.0, 2.0)},
+        plan=_plan({"000001": "normal"}, stance="defend"),
+        line_cores={"AI算力": {"code": "666666", "name": "传艺科技",
+                               "boards": 3, "broken": True}})
+    assert not res["views"]["000001"].get("follower_gate"), "归并矛盾 → 守卫应阻止硬拦"
+
+
+def test_core_gate_consistency_switch_off(monkeypatch):
+    """⛔ 可逆：POOL_CALL_LINE_CONSISTENCY_GATE=False → 回到「只看板数差 + 断板」硬拦。"""
+    monkeypatch.setattr(pool_call, "POOL_CALL_LINE_CONSISTENCY_GATE", False)
+    cand = _cand("000001", "疑似误归", boards=1, sector="数字媒体")
+    cand["core_theme"] = "AI算力"
+    res = pool_call.call_pool(
+        {"relay": [cand], "watch": []}, {"000001": _q(10.0, 2.0)},
+        plan=_plan({"000001": "normal"}, stance="defend"),
+        line_cores={"AI算力": {"code": "666666", "name": "传艺科技",
+                               "boards": 3, "broken": True}})
+    assert res["views"]["000001"].get("follower_gate") is True, "关开关 → 恢复硬拦"

@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -65,7 +65,6 @@ if str(ROOT) not in sys.path:
 
 from core import ai_caliber as _ac                      # noqa: E402
 from core import defense_gate as _dg                    # noqa: E402
-from core import market_open                             # noqa: E402
 
 # ── 开关（架构改动必留可逆开关）─────────────────────────────────────────────
 # True  = 9:25 池内裁决（本模块接管「买哪只」）
@@ -112,6 +111,12 @@ MECH_LEADER_MIN_TURNOVER_YI = 5.0
 #   表达，不必硬拦——否则会误杀正常的低位接力（用户战法本就有 2 进 3 倾斜）。
 POOL_CALL_CORE_GATE = True
 CORE_GATE_MIN_GAP = 2
+# ── 归并一致性守卫（2026-10-12 传媒事故结构性兜底）────────────────────────────
+# 跟风闸拦票前，校验候选 `core_theme` 归线 与 `sector` 归线是否**矛盾**——
+# 矛盾（如 core_theme 被误标「AI算力」而 sector=数字媒体→传媒）说明题材归并可疑
+# → ⛔ 不硬拦（防「一次归并错误就整条误杀」，10-12 中文在线/掌阅被误杀即此）。
+# ⛔ 可逆：False → 回到只看「板数差 ≥2 + 核心已断板」。
+POOL_CALL_LINE_CONSISTENCY_GATE = True
 
 # ── 🛡️ 买入前防守闸门（2026-10-08 大幅回撤经验固化·见 core/defense_gate.py）──────
 # 实证：10-08 只买两只（襄阳轴承 −5.85% / 南华生物 −8.18%，平均 −7.02%，净值 1.058→0.984）。
@@ -580,10 +585,26 @@ def call_pool(candidates: dict[str, Any] | None,
                            "reason": "这一路接力昨天反馈偏弱，今天竞价量没达到计划要求 → 先看，不买"}
             continue
         # ⑦ 🐣 跟风闸（2026-09-21 用户抓包）：同线核心板数高出 ≥2 且已断板 → 不占名额
+        #   ⊕ 归并一致性守卫（2026-10-12 传媒事故）：候选 core_theme 归线 与 sector 归线矛盾
+        #     → 归并可疑 → ⛔ 不硬拦（防一次归并错误就整条误杀）。
         _lc = base.get("line_core")
+        _lc_ok = True
+        if _lc and POOL_CALL_LINE_CONSISTENCY_GATE:
+            try:
+                from core import sector_support as _ss
+                _ct = str(c.get("core_theme") or "")
+                _sec = str(c.get("sector") or "")
+                _fam_t = _ss._theme_key({"core_theme": _ct}) if (_ct and _ct != "—") else ""
+                _fam_s = _ss._theme_key({"sector": _sec}) if _sec else ""
+                # 两条路径都归了线、且归到**不同**线 → 归并可疑
+                _lc_ok = not (_fam_t and _fam_s and _fam_t != _fam_s)
+                if not _lc_ok:
+                    base["line_consistency_warn"] = True
+            except Exception:  # 守卫异常 → 保守放行，不因守卫本身误拦
+                _lc_ok = True
         if (POOL_CALL_CORE_GATE and isinstance(_lc, dict) and not is_core
                 and int(_lc.get("boards") or 0) - boards_i >= CORE_GATE_MIN_GAP
-                and _lc.get("broken")):
+                and _lc.get("broken") and _lc_ok):
             marks[code] = {**base, "view": "watch",
                            "follower_gate": True,
                            "reason": (f"开在 {gap:+.2f}% 是达标的，但这条线真正的核心是"

@@ -53,6 +53,11 @@ STOCKS_PER_THEME = 8     # 每题材最多存前 8 只成分股
 # 仅查新 code 才联网，失败不影响主链路）。
 ENABLE_SECTOR_OFFICIAL_REFRESH = True
 
+# ── 机制4 钩子开关（2026-10-12 传媒事故「哨兵」·可逆）─────────────────────
+# 盘后链末步跑题材归并巡检（只读）：高置信「跨大类错配」→ 推异动群告警 + 落归并快照。
+# False = 不跑（行为等同改动前）。
+ENABLE_THEME_LINE_AUDIT = True
+
 
 def _today():
     return datetime.now().strftime("%Y-%m-%d")
@@ -732,7 +737,21 @@ def main():
     else:
         so_msg = "sector_official=skip(开关关闭)"
 
-    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | pruned={removed}")
+    # 10) 机制4（2026-10-12）：题材归并巡检「哨兵」（盘后链末步·只读·高置信错配推异动群）
+    if ENABLE_THEME_LINE_AUDIT:
+        try:
+            import subprocess as _sp
+            _ta = _sp.run([sys.executable,
+                           str(Path(__file__).resolve().parent / "theme_line_audit.py"), "--push"],
+                          capture_output=True, text=True, timeout=120)
+            _tl = [x for x in (_ta.stdout or "").splitlines() if "theme_line_audit]" in x]
+            ta_msg = (_tl[0].split("]", 1)[-1].strip()[:60] if _tl else "ok")
+        except Exception as e:
+            ta_msg = f"theme_line_audit ERR:{e}"
+    else:
+        ta_msg = "theme_line_audit=skip(开关关闭)"
+
+    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | pruned={removed}")
 
 
 if __name__ == "__main__":
