@@ -378,6 +378,7 @@ _DEFENSE_GATE_PLAIN = {
     "distribution": "昨天封单又薄、换手又大，像是在往外倒货",
     "sector_drain": "它这条线昨天资金一直在往外走",
     "high_position": "位置太高了，是断板之后的第二波反抽",
+    "old_dragon_rebound": "是炒过的老票，断了很久才又拉首板，不是新方向",
 }
 
 

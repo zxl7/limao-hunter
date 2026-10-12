@@ -36,7 +36,7 @@
      「三条全中」在本例中**精确命中两只亏损票、零误伤**。
 
   ④ 位置 —— 南华生物实为**第二波反抽**：`cache/zt_history/` 实录 09-21(3板) → 09-22(4板)
-     → 断板 5 个交易日 → 09-30 重新涨停（计数被重置成「首板」）。系统的位置维度原本缺失
+     → 断板 4 个交易日（09-25 中秋休市，原按幽灵日误计为 5）→ 09-30 重新涨停（计数被重置成「首板」）。系统的位置维度原本缺失
      ——「首板」这两个字把「这是一只已经涨过一大轮的票」整个盖住了。
      **本轮把它补成独立硬闸**（`position_verdict`）：近 10 日相对大盘超额 ≥45%（或近 30 日
      ≥50%）＝已经涨了一大截，**并且**涨停序列显示「断板 ≥3 个交易日后重新涨停、上一波最高板
@@ -78,6 +78,8 @@ DEFENSE_SECTOR_DRAIN_ENABLED = True
 DEFENSE_DISTRIBUTION_ENABLED = True
 # ④ 位置（高位二波）
 DEFENSE_POSITION_ENABLED = True
+# ⑤ 老龙复燃（炒过的老票沉寂很久后又拉首板）
+DEFENSE_OLD_DRAGON_ENABLED = True
 
 # ── ② 方向资金失血 ───────────────────────────────────────────────────────────
 # 数据源 = `cache/sector_flow_history/sector_flow_<上一交易日>.json`（盘后 19 点生成，
@@ -125,11 +127,26 @@ POSITION_PRIOR_BOARD_MIN = 3      # 上一波最高板 ≥ 该值才算「上一
 POSITION_GAP_MIN_DAYS = 3         # 断板间隔 ≥ 该值（交易日）算「断板多日后重启（二波）」
 POSITION_LOOKBACK_DAYS = 20       # 涨停序列回看窗口（交易日）
 # ⛔ 门槛校准（10-08 实测，零误伤）：
-#   南华生物 000504  dev10=50.3 → 高位 ✓；序列 09-21(3板)→09-22(4板)→断板 5 天→09-30(1板)
+#   南华生物 000504  dev10=50.3 → 高位 ✓；序列 09-21(3板)→09-22(4板)→断板 4 天→09-30(1板)
 #     → prior_max=4 ≥3 ✓、gap=5 ≥3 ✓ → **拦**（当日 −8.18%）
 #   襄阳轴承 000678  dev10=51.1 → 高位 ✓；序列 09-24~09-30 连续 → gap=0 → **位置闸不拦**
 #     （它由派发闸拦下；两条闸各管一段，不重复计数）
 #   同日走出来的票（龙蟠 603906 dev10=6.3、时代万恒、紫竹高科）→ 位置都不高 → **零误伤**
+
+# ── ⑤ 老龙复燃（数据源同 ④＝`cache/zt_history/`）────────────────────────────────
+# 国芳集团案例（2026-10-12 用户抓包）：9 月已炒过 2 连板、断板 7 个交易日后
+# 10-09 又拉首板，被当成「低位新方向首板」买入 → 次日 −8.5%。同期另一只老龙
+# 哈药股份当日跌停（那批老票**整体**已退潮的写照）。
+OLD_DRAGON_MIN_BOARD = 2          # 上一波最高板 ≥ 该值 ＝ 前期老龙（炒过一轮）
+OLD_DRAGON_GAP_MIN = 5            # 断板 ≥ 该值（交易日）＝ 沉寂够久，**不是** N 字快速回封
+OLD_DRAGON_REBOUND_MAX_BOARD = 1  # 复燃首日板数 ≤ 该值（＝刚从 0 到首板）
+# ⛔ 门槛校准（2026-10-12 实测·全历史仅 7 次触发，拦掉它避开的损失 > 拦错的收益）：
+#   国芳集团 601086  上一波 2 板@09-21、断 7 日、10-09 首板 → 拦 ✓（次日 −8.5%）
+#   超声电子 000823  09-29 触发 → 之后连续阴跌 −16% ✓
+#   众泰汽车 000980  09-28 触发 → 阴跌 −4.5% ✓
+#   万向德农 600371  10-09 触发 → −2.5% ✓
+#   金健米业 600127  10-09 触发 → +1.8%（唯一小赚）
+#   启明信息 002232 / 英联股份 002846  触发后震荡（拦错，代价可控）
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -483,6 +500,58 @@ def position_verdict_from_disk(it: dict[str, Any] | None, date10: str) -> dict[s
     """按依据日读 zt_history 再判（调用方没预载序列时的兜底入口）。"""
     series, days = load_zt_series(upto=date10)
     return position_verdict(it, series, days)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ⑤ 老龙复燃 —— 「炒过的老票沉寂很久后又拉首板」≠「低位新方向首板」
+# ─────────────────────────────────────────────────────────────────────────────
+def old_dragon_verdict(it: dict[str, Any] | None,
+                       series: dict[str, list[tuple[str, int]]] | None = None,
+                       trading_days: list[str] | None = None) -> dict[str, Any]:
+    """老龙复燃判据（**只读**）。
+
+    与 ④ 位置闸同源（`cache/zt_history/`），但管的是**另一段**：
+      · 位置闸管「**已经涨了一大截** + 断板后重启」＝ 高位接盘；
+      · 本闸管「**上一波已经炒过** + 沉寂很久 + 复燃首日只有首板」＝ 老票重新拉板。
+    国芳集团上一波只到 2 板、位置也不高 → 位置闸漏（要求上一波 ≥3 板），本闸补上。
+
+    level：
+      · "block" → 前期老龙（回看窗口内曾 ≥`OLD_DRAGON_MIN_BOARD` 连板）
+                  × 断板 ≥`OLD_DRAGON_GAP_MIN` 交易日 × 复燃首日仅首板 → 不占名额
+      · "none"  → 其余 / 数据不足（诚实降级，不裁决）
+    ⛔ 断 1~2 天的 N 字快速回封（情绪核心的经典形成路径·加分项）**不受影响**——
+      `OLD_DRAGON_GAP_MIN=5` 把它们排除在外。
+    """
+    it = it if isinstance(it, dict) else {}
+    code = str(it.get("code") or "").strip()
+    wave = position_wave(code, series, trading_days)
+    facts = {
+        "prior_max_board": wave.get("prior_max_board"),
+        "gap_days": wave.get("gap_days"),
+        "last_board": wave.get("last_board"),
+        "prev_date": wave.get("prev_date"),
+        "last_date": wave.get("last_date"),
+    }
+    base = {"level": "none", "note": "", "wave": wave, "facts": facts,
+            "known": bool(wave.get("known"))}
+    if not wave.get("known"):
+        return base
+    prior_max, gap, last_b = (wave.get("prior_max_board"), wave.get("gap_days"),
+                              wave.get("last_board"))
+    if (prior_max is None or gap is None or last_b is None
+            or prior_max < OLD_DRAGON_MIN_BOARD or gap < OLD_DRAGON_GAP_MIN
+            or last_b > OLD_DRAGON_REBOUND_MAX_BOARD):
+        return base
+    note = (f"它 {wave.get('prev_date')} 那波最高到 {prior_max} 板，"
+            f"之后断了 {gap} 个交易日，{wave.get('last_date')} 才又封了个首板——"
+            f"这是炒过的老票重新拉板，不是新方向的首板，容易一日游")
+    return {**base, "level": "block", "note": note}
+
+
+def old_dragon_verdict_from_disk(it: dict[str, Any] | None, date10: str) -> dict[str, Any]:
+    """按依据日读 zt_history 再判（调用方没预载序列时的兜底入口）。"""
+    series, days = load_zt_series(upto=date10)
+    return old_dragon_verdict(it, series, days)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

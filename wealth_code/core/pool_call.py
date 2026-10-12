@@ -27,14 +27,16 @@
   ⑦ 同线核心已断板的跟风 → 观察（跟风闸·不占名额）
   ⑧ 所属方向资金失血     → 观察（方向净流出 ≥30 亿·不占名额）        ← 土壤
   ⑨ 位置高 + 二波反抽    → 观察（断板 ≥3 个交易日后重启 ∧ 上一波最高板 ≥3·不占名额）← 位置
+  ⑨b 老龙复燃           → 观察（炒过的老票曾 ≥2 连板 ∧ 断板 ≥5 交易日 ∧ 复燃首日仅首板·不占名额）← 老龙
   ⑩ 前一日派发特征       → 观察（换手大 ∧ 封单薄 ∧ 封得晚·三条全中·不占名额）← 盘口
   ⑪ 其余                → 候选
   候选先按「地位 → 带动 → 连续性 → 竞争身位」，再沿用同线核心、预案/机械强龙等旧排序键，取前 N 只 → 参与；
   其余候选 → 观察（附「池内今天只买前 N 只」）。
   ⛔ ⑦~⑩ 的判据全部来自**前一交易日收盘**（09:25 时点已可得），不看今日盘中——所以它们能
      在竞价落地的那一刻就生效，而不是收盘后才后悔（2026-10-08 回撤教训）。
-  ⚠️ ⑦~⑩ 的先后＝「宏观到微观」：板块有没有钱（⑧）→ 这票在什么位置（⑨）→ 它昨天封得脏不脏（⑩）。
-     位置必须排在派发前面，否则先被「换手大/封单薄」命中，卡面只说症状、说不出真原因。
+  ⚠️ ⑦~⑩ 的先后＝「宏观到微观」：板块有没有钱（⑧）→ 这票在什么位置（⑨ 高位二波 / ⑨b 老龙复燃）
+     → 它昨天封得脏不脏（⑩）。位置与老龙必须排在派发前面，否则先被「换手大/封单薄」命中，
+     卡面只说症状、说不出真原因（10-08 南华＝位置是主因；10-12 国芳＝老龙是主因）。
 
 融合边界（2026-09-24 用户确认）：盘后 AI 的 `normal` 不能用软理由压过已核实的
 机械强龙事实。满足“接力池第1或09:30前封板”，并且没有一字/ST/成交额不足5亿/纯跟风
@@ -125,12 +127,14 @@ POOL_CALL_LINE_CONSISTENCY_GATE = True
 #   · 派发特征（三条全中）→ 降级观察、**不占当日名额**（名额让给封板质量好的票）
 #   · 方向资金失血（所属方向昨日净流出 ≥30 亿）→ 同上
 #   · 位置高 + 二波反抽（断板 ≥3 个交易日后重启）→ 同上（2026-10-08 补·南华案例）
+#   · 老龙复燃（炒过的老票曾 ≥2 连板、断板 ≥5 日后又拉首板）→ 同上（2026-10-12 补·国芳案例）
 #   · 环境差（昨收 + 今开双腿判据命中 ≥2/≥3 条）→ 名额压到 1 只 / 当日不主动买
 # ⛔ 可逆：`POOL_CALL_DEFENSE_GATE=False` → 逐字回退 10-08 前的裁决行为。
 POOL_CALL_DEFENSE_GATE = True
 POOL_CALL_DEFENSE_DISTRIBUTION = True
 POOL_CALL_DEFENSE_SECTOR_DRAIN = True
 POOL_CALL_DEFENSE_POSITION = True
+POOL_CALL_DEFENSE_OLD_DRAGON = True
 POOL_CALL_DEFENSE_ENV = True
 
 MISSING = "—"
@@ -473,9 +477,10 @@ def call_pool(candidates: dict[str, Any] | None,
     _drain_on = bool(POOL_CALL_DEFENSE_GATE and POOL_CALL_DEFENSE_SECTOR_DRAIN
                      and sector_flow)
 
-    # 涨停序列（位置闸用·截到依据日 T-1；缺失/序列不足 → 位置闸不裁决，诚实降级）
+    # 涨停序列（位置闸/老龙复燃闸用·截到依据日 T-1；缺失/序列不足 → 不裁决，诚实降级）
     if zt_series is None and zt_days is None:
-        if POOL_CALL_DEFENSE_GATE and POOL_CALL_DEFENSE_POSITION:
+        if POOL_CALL_DEFENSE_GATE and (POOL_CALL_DEFENSE_POSITION
+                                       or POOL_CALL_DEFENSE_OLD_DRAGON):
             try:
                 zt_series, zt_days = _dg.load_zt_series(upto=_env_date)
             except Exception:
@@ -483,6 +488,7 @@ def call_pool(candidates: dict[str, Any] | None,
     zt_series = zt_series if isinstance(zt_series, dict) else {}
     zt_days = list(zt_days) if isinstance(zt_days, (list, tuple)) else []
     _pos_on = bool(POOL_CALL_DEFENSE_GATE and POOL_CALL_DEFENSE_POSITION)
+    _od_on = bool(POOL_CALL_DEFENSE_GATE and POOL_CALL_DEFENSE_OLD_DRAGON)
 
     # 同线板数排名（池内）：板数高的排前面（核心优先于跟风）
     _by_line: dict[str, list[dict[str, Any]]] = {}
@@ -635,6 +641,18 @@ def call_pool(candidates: dict[str, Any] | None,
             marks[code] = {**base, "view": "watch", "defense_gate": "high_position",
                            "defense_detail": pos,
                            "reason": (f"开在 {gap:+.2f}% 达标了，但{pos['note']} "
+                                      f"→ 今天先看，不买")}
+            continue
+        # ⑨b 🐉 老龙复燃闸（2026-10-12 用户抓包·国芳集团）——「炒过的老票沉寂很久后又拉首板」
+        #   不是「低位新方向首板」。国芳上一波只到 2 板、位置不高 → 位置闸漏（它要求上一波 ≥3 板），
+        #   本闸补上这段。与位置闸同源（zt_history），**先于派发**——否则卡面只会说「换手大/封单薄」
+        #   这些盘口症状，说不出「它是一只炒过的老票」这个真原因。
+        od = ({"level": "none", "note": "", "facts": {}}
+              if not _od_on else _dg.old_dragon_verdict(c, zt_series, zt_days))
+        if od.get("level") == "block":
+            marks[code] = {**base, "view": "watch", "defense_gate": "old_dragon_rebound",
+                           "defense_detail": od,
+                           "reason": (f"开在 {gap:+.2f}% 达标了，但{od['note']} "
                                       f"→ 今天先看，不买")}
             continue
         # ⑩ 🛡️ 前置防守闸门·盘口层（2026-10-08 大幅回撤经验固化）——**竞价达标 ≠ 可以买**
