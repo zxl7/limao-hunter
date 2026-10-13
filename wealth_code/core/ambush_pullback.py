@@ -47,6 +47,20 @@ MAX_DROP_PCT = 5.0          # 当日跌幅上限（%，相对前收）→ 超过
 REQUIRE_CLOSE_DOWN = True   # 「阴线」须**同时收跌**（close < prev_close）：跳空高开收阴不算
 DATA_FAIL_MAX_RATIO = 0.5   # 日K抓取失败占比 ≥ 此值 且 ≥ DATA_FAIL_MIN 只 → data_ok=False
 DATA_FAIL_MIN = 20
+
+# ── ⑥ 环境读数（退潮期·**只控仓位·不砍票**）────────────────────────────────────
+# 用户 2026-10-13 原话：「还是要推，尽量推两个吧，平摊一下仓位。但是我们要控制哦，
+#   退潮期我们控制的是**仓位**，而不是通知票，这些东西还是**按照逻辑推**。」
+# → 环境闸**不过滤任何候选**（出票逻辑不变），只输出「今日怎么下注」。
+# 数据源＝`cache/pulse_snapshots/latest.json`（盘中 30s 刷新·14:30 时点可得）。
+LATEST_SNAPSHOT = "pulse_snapshots/latest.json"
+ENV_WEAK_MIN_HITS = 2          # 命中 ≥ 该条数 → 判「退潮」
+ENV_MAX_DOWN_LIMIT = 10        # 跌停家数 ≥ 该值算弱
+ENV_MIN_ZT_TOTAL = 40          # 涨停家数 < 该值算弱
+ENV_MAX_BROKEN_RATE = 35.0     # 炸板率（%）≥ 该值算弱
+WEAK_ENV_MAX_PICKS = 2         # 退潮日最多推几只（用户：尽量推两个）
+WEAK_ENV_POSITION_PCT = 50.0   # 退潮日**每只**仓位上限（2 只 → 平摊）
+NORMAL_ENV_POSITION_PCT = 50.0 # 常态每只仓位上限（既有口径：各自不超一半）
 STRATEGY = "ambush_pullback_ma10_v1"
 SIGNAL_LEDGER_NAME = "ambush_pullback_signal_log.jsonl"
 SETTLEMENT_LEDGER_NAME = "ambush_pullback_settlement_log.jsonl"
@@ -190,6 +204,65 @@ def _shape(bars: list[dict]) -> tuple[dict | None, str | None]:
     }, None
 
 
+def env_read(cache_dir: Path, path: Path | None = None) -> dict[str, Any]:
+    """当日实时环境读数（**只读** `pulse_snapshots/latest.json`）。
+
+    ⛔ 只回答「今天该下多大注」，**不参与选票**：用户 2026-10-13 明确「退潮期我们控制的是
+    仓位，而不是通知票，这些东西还是按照逻辑推」。缺失/字段不全 → `known=False`，
+    调用方按常态处理（诚实降级，不编造）。
+    """
+    p = path or (Path(cache_dir) / LATEST_SNAPSHOT)
+    base = {"known": False, "level": "unknown", "hits": [], "hit_count": 0,
+            "facts": {}, "note": ""}
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return base
+    if not isinstance(d, dict):
+        return base
+    zt = _num(d.get("total_zt"))
+    dt = _num((d.get("limit_down") or {}).get("count"))
+    broken = _num((d.get("broken") or {}).get("count"))
+    br = d.get("breadth") if isinstance(d.get("breadth"), dict) else {}
+    up, down = _num(br.get("up")), _num(br.get("down"))
+    hits: list[str] = []
+    if up is not None and down is not None and down > up:
+        hits.append(f"跌的比涨的多（{down:.0f} 家跌 vs {up:.0f} 家涨）")
+    if dt is not None and dt >= ENV_MAX_DOWN_LIMIT:
+        hits.append(f"跌停 {dt:.0f} 家")
+    if zt is not None and zt < ENV_MIN_ZT_TOTAL:
+        hits.append(f"涨停只有 {zt:.0f} 家")
+    rate = None
+    if zt is not None and broken is not None and (zt + broken) > 0:
+        rate = broken / (zt + broken) * 100
+        if rate >= ENV_MAX_BROKEN_RATE:
+            hits.append(f"炸板率 {rate:.0f}%")
+    facts = {"total_zt": zt, "limit_down": dt, "broken": broken, "up": up, "down": down,
+             "broken_rate": round(rate, 1) if rate is not None else None}
+    level = "weak" if len(hits) >= ENV_WEAK_MIN_HITS else "normal"
+    note = ("今天市场在退潮（" + "、".join(hits) + "）——票照常按形态推，但仓位要收："
+            f"最多推 {WEAK_ENV_MAX_PICKS} 只、每只 ≤{WEAK_ENV_POSITION_PCT:.0f}%（平摊）"
+            ) if level == "weak" else ""
+    return {"known": True, "level": level, "hits": hits, "hit_count": len(hits),
+            "facts": facts, "note": note}
+
+
+def position_advice(env: dict[str, Any] | None) -> dict[str, Any]:
+    """环境 → **仓位建议**（⛔ 不裁候选）。
+
+    用户 10-13：「还是要推，尽量推两个，平摊一下仓位」——退潮日**照常按形态出票**，
+    只是把下注方式收一收：最多 `WEAK_ENV_MAX_PICKS` 只、每只 `WEAK_ENV_POSITION_PCT`%（平摊）。
+    """
+    e = env if isinstance(env, dict) else {}
+    weak = str(e.get("level") or "") == "weak"
+    return {
+        "level": e.get("level", "unknown"),
+        "max_picks": WEAK_ENV_MAX_PICKS if weak else None,
+        "position_pct_each": WEAK_ENV_POSITION_PCT if weak else NORMAL_ENV_POSITION_PCT,
+        "note": e.get("note") or "",
+    }
+
+
 def scan(cache_dir: Path, bars_fetcher: Callable[[str, int], list[dict]] | None = None,
          today: str | None = None) -> dict[str, Any]:
     """生成 14:30 候选快照。bars_fetcher 仅为测试/离线复核注入点。"""
@@ -229,6 +302,8 @@ def scan(cache_dir: Path, bars_fetcher: Callable[[str, int], list[dict]] | None 
     total_fail = bool(attempted) and fetch_failed == attempted
     ratio_fail = attempted >= DATA_FAIL_MIN and (fetch_failed / attempted) >= DATA_FAIL_MAX_RATIO
     data_ok = not (total_fail or ratio_fail)
+    # ⑥ 环境读数 → 仓位建议（⛔ 不动 `candidates`：退潮期控的是**仓位**不是票）
+    env = env_read(cache_dir)
     return {
         "strategy": STRATEGY, "trade_date": day, "selection_time": f"{day} 14:30",
         "generated_at": _now().isoformat(),
@@ -239,6 +314,7 @@ def scan(cache_dir: Path, bars_fetcher: Callable[[str, int], list[dict]] | None 
                    "ma10_touch_high": MA10_TOUCH_HIGH, "volume_shrink_ratio": VOLUME_SHRINK_RATIO,
                    "max_drop_pct": MAX_DROP_PCT, "require_close_down": REQUIRE_CLOSE_DOWN},
         "stats": {"universe": len(universe), "hits": len(candidates), "rejected": rejected},
+        "env": env, "advice": position_advice(env),
         "candidates": candidates,
     }
 

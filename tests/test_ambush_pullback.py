@@ -195,3 +195,48 @@ def test_crash_beyond_drop_limit_is_rejected(tmp_path):
     # 4.5% 仍在限内 → 照常入选（既有夹具）
     ok = ap.scan(tmp_path, bars_fetcher=lambda c, n: _bars(), today=TODAY)
     assert ok["stats"]["hits"] == 1 and ok["candidates"][0]["drop_pct"] == 4.5
+
+
+# ── ⑥ 环境读数 → 仓位建议（⛔ 退潮期控仓位·不砍票）──────────────────────────────
+def _write_latest(cache, **kw):
+    d = cache / "pulse_snapshots"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "latest.json").write_text(json.dumps(kw, ensure_ascii=False), encoding="utf-8")
+
+
+def test_env_weak_on_broad_selloff(tmp_path):
+    """普跌日（10-12 真实读数：47涨停/16跌停/下跌 4026 vs 涨 1180）→ 判退潮。"""
+    _seed(tmp_path)
+    _write_latest(tmp_path, total_zt=47, limit_down={"count": 16}, broken={"count": 18},
+                  breadth={"up": 1180, "down": 4026})
+    out = ap.scan(tmp_path, bars_fetcher=lambda c, n: _bars(), today=TODAY)
+    assert out["env"]["level"] == "weak"
+    assert out["env"]["hit_count"] >= ap.ENV_WEAK_MIN_HITS
+    assert out["advice"]["max_picks"] == ap.WEAK_ENV_MAX_PICKS == 2
+    assert out["advice"]["position_pct_each"] == 50.0
+    assert "退潮" in out["advice"]["note"] and "仓位" in out["advice"]["note"]
+
+
+def test_env_normal_does_not_cut_candidates(tmp_path):
+    """⛔ 铁律：环境只改**仓位建议**，**绝不裁候选**（用户「控制的是仓位，而不是通知票」）。
+
+    同一批形态票，在「退潮」与「正常」两种环境下，`candidates` 必须**逐字一致**。
+    """
+    _seed(tmp_path)
+    weak = ap.scan(tmp_path, bars_fetcher=lambda c, n: _bars(), today=TODAY)
+    _write_latest(tmp_path, total_zt=68, limit_down={"count": 9}, broken={"count": 16},
+                  breadth={"up": 2670, "down": 2435})
+    normal = ap.scan(tmp_path, bars_fetcher=lambda c, n: _bars(), today=TODAY)
+    assert normal["env"]["level"] == "normal"
+    assert normal["advice"]["max_picks"] is None            # 常态不限只数
+    assert normal["candidates"] == weak["candidates"]       # ← 一张票都不许少
+    assert len(normal["candidates"]) == 1
+
+
+def test_env_missing_is_graceful(tmp_path):
+    """环境文件缺失 → known=False、level=unknown，按常态处理（不编造、不误判退潮）。"""
+    _seed(tmp_path)
+    out = ap.scan(tmp_path, bars_fetcher=lambda c, n: _bars(), today=TODAY)
+    assert out["env"]["known"] is False and out["env"]["level"] == "unknown"
+    assert out["advice"]["max_picks"] is None
+    assert out["candidates"] and len(out["candidates"]) == 1
