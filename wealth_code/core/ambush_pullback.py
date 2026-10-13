@@ -35,6 +35,7 @@ BJ_TZ = timezone(timedelta(hours=8))
 ENABLED = True
 LOOKBACK_DAYS = 5           # 2026-10-13 用户定：「前期的热门题材」＝ 近 5 个交易日内爆发过（原 20 日）
 MIN_HOT_SECTOR_ZT = 3
+MIN_HOT_THEME_ZT = 3        # 题材口径（选股宝/东财 getFryTomorrowList 回补）：单日涨停≥3家才算热门题材
 MIN_HISTORY_BOARDS = 2
 MA10_TOUCH_LOW = 0.98       # 收盘允许低于 MA10 最多 2%
 MA10_TOUCH_HIGH = 1.03      # 收盘允许高于 MA10 最多 3%
@@ -111,44 +112,114 @@ def _zt_days(cache_dir: Path) -> list[str]:
     return sorted(set(days))
 
 
-def _historical_universe(cache_dir: Path, today: str) -> dict[str, dict]:
-    """曾出现在热门爆发板块的个股。
+def _top5_days(cache_dir: Path) -> list[str]:
+    days = []
+    d = cache_dir / "top5_history"
+    if not d.exists():
+        return days
+    for f in d.glob("top5_*.json"):
+        stem = f.stem
+        if len(stem) >= 15 and stem[5:15][4] == "-":
+            days.append(stem[5:15])
+    return sorted(set(days))
 
-    热门爆发按历史涨停快照量化为：同板块当日至少 3 家涨停，或个股曾至少 2 连板。
-    只用已落盘涨停历史，避免把当前热度或模型标签倒灌到历史条件。
+
+def _load_top5(path: Path) -> list[tuple[str, int, list[str]]]:
+    """读某日题材快照 → [(题材名, 当日涨停家数, 成分股6位code列表)]。失败/空 → []。"""
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    themes = d.get("themes") if isinstance(d.get("themes"), list) else []
+    out: list[tuple[str, int, list[str]]] = []
+    for t in themes:
+        if not isinstance(t, dict):
+            continue
+        name = str(t.get("name") or "").strip()
+        if not name:
+            continue
+        zt = t.get("zt_count")
+        zt = int(zt) if isinstance(zt, int) else 0
+        codes = [str(c).split(".")[0].strip() for c in (t.get("codes") or [])]
+        codes = [c for c in codes if len(c) == 6]
+        out.append((name, zt, codes))
+    return out
+
+
+def _build_hot_themes(cache_dir: Path, today: str) -> tuple[dict[str, set], dict[str, int]]:
+    """近5个交易日热门题材 → (code→命中题材名集合, 题材名→近5日累计涨停家数)。
+
+    ⛔ 题材口径（选股宝 prev_top5 / 东财 getFryTomorrowList 回补）替代原「东财行业」口径：
+    用户 10-13「题材是可以积累和沉淀的」+ 调研结论——题材白名单用选股宝/东财题材名，
+    个股→题材落地用题材成分股 codes（跨命名体系必须 code 反查，禁名称匹配）。
+    单日涨停 < MIN_HOT_THEME_ZT 的题材不算热门（防脉冲一日游）。
+    """
+    days = [d for d in _top5_days(cache_dir) if d < today][-LOOKBACK_DAYS:]
+    code_to_themes: dict[str, set] = {}
+    theme_zt: dict[str, int] = {}
+    for day in days:
+        for name, zt, codes in _load_top5(cache_dir / "top5_history" / f"top5_{day}.json"):
+            if zt < MIN_HOT_THEME_ZT:
+                continue
+            theme_zt[name] = theme_zt.get(name, 0) + zt
+            for c in codes:
+                code_to_themes.setdefault(c, set()).add(name)
+    return code_to_themes, theme_zt
+
+
+def _historical_universe(cache_dir: Path, today: str) -> dict[str, dict]:
+    """曾出现在热门爆发方向的个股——三轨判定（OR）：
+
+    ① **题材轨**（新·10-13 落地）：个股 ∈ 近5日热门题材的**成分股**（题材名来自选股宝/
+       东财题材库，个股落地用成分股 code 反查）；
+    ② **行业兜底轨**：近5日同东财行业累计涨停 ≥ MIN_HOT_SECTOR_ZT；
+    ③ **独立总龙头轨**：个股自身曾 ≥ MIN_HISTORY_BOARDS 连板。
+
+    只用已落盘数据（zt_history + top5_history），绝不把当前热度/模型标签倒灌到历史条件。
+    个股池锚定 zt_history（必须近5日涨停记忆在册）；题材维度只决定「方向够不够热」。
     """
     zt_dir = cache_dir / "zt_history"
     days = [d for d in _zt_days(cache_dir) if d < today][-LOOKBACK_DAYS:]
-    out: dict[str, dict] = {}
+    sector_count: dict[str, int] = {}
+    seen: dict[str, dict] = {}
+    last_day: dict[str, str] = {}
+    boards_max: dict[str, int] = {}
     for day in days:
         rows = _load_zt(zt_dir / f"zt_{day}.json")
-        sector_count: dict[str, int] = {}
+        day_sector: dict[str, int] = {}
         for r in rows:
             sec = str(r.get("sector") or "").strip()
             if sec:
-                sector_count[sec] = sector_count.get(sec, 0) + 1
+                day_sector[sec] = day_sector.get(sec, 0) + 1
+        for sec, n in day_sector.items():
+            sector_count[sec] = sector_count.get(sec, 0) + n
         for r in rows:
             code = str(r.get("code") or "").strip()
             if not code:
                 continue
-            boards = int(r.get("boards") or 0)
-            sec = str(r.get("sector") or "").strip()
-            hot = sector_count.get(sec, 0) >= MIN_HOT_SECTOR_ZT or boards >= MIN_HISTORY_BOARDS
-            if not hot:
-                continue
-            old = out.get(code)
-            item = {
-                "code": code, "name": str(r.get("name") or ""), "sector": sec,
-                "hot_date": day, "sector_zt_count": sector_count.get(sec, 0),
-                "max_boards": boards, "turnover_yi": float(r.get("cje_yi") or 0),
-            }
-            if old is None:
-                out[code] = item
-            else:
-                old["max_boards"] = max(int(old["max_boards"]), boards)
-                if day >= str(old["hot_date"]):
-                    old.update(item)
-                    old["max_boards"] = max(int(old["max_boards"]), boards)
+            b = int(r.get("boards") or 0)
+            if code not in seen:
+                seen[code] = r
+            boards_max[code] = max(boards_max.get(code, 0), b)
+            last_day[code] = day
+    code_to_themes, theme_zt = _build_hot_themes(cache_dir, today)
+    out: dict[str, dict] = {}
+    for code, r in seen.items():
+        sec = str(r.get("sector") or "").strip()
+        sec_hot = sector_count.get(sec, 0) >= MIN_HOT_SECTOR_ZT
+        board_hot = boards_max[code] >= MIN_HISTORY_BOARDS
+        themes_hit = sorted(code_to_themes.get(code, set()))
+        theme_hot = bool(themes_hit)
+        if not (sec_hot or board_hot or theme_hot):
+            continue
+        theme_zt_max = max((theme_zt[t] for t in themes_hit), default=0)
+        out[code] = {
+            "code": code, "name": str(r.get("name") or ""),
+            "sector": sec, "sector_zt_count": sector_count.get(sec, 0),
+            "themes": themes_hit, "theme_zt_max": theme_zt_max,
+            "hot_date": last_day.get(code, ""),
+            "max_boards": boards_max[code], "turnover_yi": float(r.get("cje_yi") or 0),
+        }
     return out
 
 
@@ -291,8 +362,9 @@ def scan(cache_dir: Path, bars_fetcher: Callable[[str, int], list[dict]] | None 
                 fetch_failed += 1
             rejected[str(reason)] = rejected.get(str(reason), 0) + 1
             continue
+        hot_zt = int(meta.get("theme_zt_max") or 0) or int(meta["sector_zt_count"])
         score = round((3.0 - abs(shape["ma10_gap_pct"])) * 10 + (1 - shape["volume_ratio"]) * 20
-                      + min(int(meta["sector_zt_count"]), 8) + min(int(meta["max_boards"]), 4) * 2, 2)
+                      + min(hot_zt, 8) + min(int(meta["max_boards"]), 4) * 2, 2)
         candidates.append({**meta, **shape, "score": score})
     candidates.sort(key=lambda x: (-x["score"], x["code"]))
     # ⛔ 数据源健康度（2026-10-09 血案：腾讯停用 host → 全量日K空 → 候选 0 只被当成
@@ -310,6 +382,7 @@ def scan(cache_dir: Path, bars_fetcher: Callable[[str, int], list[dict]] | None 
         "planned_entry_time": f"{day} 推送后（≈14:50）", "planned_exit_time": "next_trade_day 10:00",
         "data_ok": data_ok, "fetch_failed": fetch_failed, "attempted": attempted,
         "params": {"lookback_days": LOOKBACK_DAYS, "min_hot_sector_zt": MIN_HOT_SECTOR_ZT,
+                   "min_hot_theme_zt": MIN_HOT_THEME_ZT,
                    "min_history_boards": MIN_HISTORY_BOARDS, "ma10_touch_low": MA10_TOUCH_LOW,
                    "ma10_touch_high": MA10_TOUCH_HIGH, "volume_shrink_ratio": VOLUME_SHRINK_RATIO,
                    "max_drop_pct": MAX_DROP_PCT, "require_close_down": REQUIRE_CLOSE_DOWN},

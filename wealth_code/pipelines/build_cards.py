@@ -10,8 +10,10 @@
                       推送，含达标买入信号(super/expected) + 竞价涨幅/额 + 净值/策略指标
                       （次日执行）。
 - build_panqian_card(): 📊 盘前预测·全量 —— 06:06 由技能组装 data 后推送（隔夜消息+今日主线）。
-- build_ambush_card(): 🎯 尾盘潜伏·次日回流预期 —— 14:50 定时，读 theme_rotation 回流引擎
-                      ＋ latest 实时板块资金，机械筛选次日回流候选（不硬编码任何板块规律）。
+- build_ambush_card(): 🎯 尾盘潜伏·阴线回踩十日线 —— 14:30 定时。选材＝「前段爆发过的板块中，
+                      今日收阴 + 十日线连续上行 + 收盘贴着十日线 + 缩量」的个股
+                      （由 core/ambush_pullback.py 在 14:30 冻结，卡片只读快照）。
+                      新主线/题材回流/断板回流三块降为背景参考，不参与次日推票。
 
 配色遵循 shared_rules：飞书 lark_md 只用命名色(red=涨/核心, purple=机会, turquoise=防御)，
 禁用 hex；语义 emoji 替代彩色圆点；页脚两行（数据源 + 免责）。
@@ -376,6 +378,7 @@ _WATCH_GROUP_PLAIN = {
 # 只用于「竞价达标但没买」名单的一眼原因；理由正文由个股段 `_ai_view_line` 渲染（禁重复）。
 _DEFENSE_GATE_PLAIN = {
     "distribution": "昨天封单又薄、换手又大，像是在往外倒货",
+    "distribution_thin_late": "昨天封得又晚、封单又薄，位置还高",
     "sector_drain": "它这条线昨天资金一直在往外走",
     "high_position": "位置太高了，是断板之后的第二波反抽",
     "old_dragon_rebound": "是炒过的老票，断了很久才又拉首板，不是新方向",
@@ -2566,10 +2569,14 @@ def _load_ambush_data() -> tuple[dict | None, dict | None]:
 
 
 def _live_confirm(theme: str, live: dict | None) -> tuple[str, str]:
-    """宽松匹配候选 theme 与今日实时板块榜，给「今日走势」确认标签。
-    命中净流入/进行中/热点 → 承接(red)；命中净流出/走弱 → 降档(green)；未命中 → 中性(以引擎为准)。"""
+    """按资金、持续活跃、热点三类独立事实确认候选题材。
+
+    热点只能说明市场关注，不能冒充资金净流入；净流出优先于其他正面信号。
+    """
     names_in: set[str] = set()
     names_out: set[str] = set()
+    names_ongoing: set[str] = set()
+    names_hot: set[str] = set()
     sr = (live or {}).get("sector_risk") or {}
     for s in (sr.get("inflow_top") or []):
         names_in.add(str(s.get("name") or ""))
@@ -2577,33 +2584,52 @@ def _live_confirm(theme: str, live: dict | None) -> tuple[str, str]:
         names_out.add(str(s.get("name") or ""))
     sd = (live or {}).get("sector_delta") or {}
     for x in (sd.get("ongoing") or []):
-        names_in.add(str(x).split("(")[0].strip())
+        names_ongoing.add(str(x).split("(")[0].strip())
     for hs in ((live or {}).get("hot_spots") or []):
-        names_in.add(str(hs.get("sector") or ""))
+        names_hot.add(str(hs.get("sector") or ""))
     t = theme or ""
 
     def hit(names: set[str]) -> bool:
-        for n in names:
-            if not n:
-                continue
-            if t and (t in n or n in t):
-                return True
-        return False
+        return any(n and t and (t in n or n in t) for n in names)
 
     if hit(names_out):
         return ("⚠️ 今日列入净流出/走弱榜·回流降档待确认", "green")
     if hit(names_in):
-        return ("✅ 今天资金和热度都还在·钱回来的机会更大", "red")
+        return ("✅ 今日资金净流入榜有确认·仍有回流观察价值", "red")
+    if hit(names_ongoing):
+        return ("⚪ 今日仍在活跃方向中·资金流向未单独确认", "neutral")
+    if hit(names_hot):
+        return ("⚪ 今日热点榜命中·仅代表热度，资金流向未确认", "neutral")
     return ("— 今日实时榜未直接命中（以系统资金趋势为准）", "neutral")
 
 
-def _pool_line(s: dict) -> str:
+def _pct_tag(pct: Any, digits: int = 2, *, lead_space: bool = True) -> str:
+    """涨跌幅标签（A股口径：涨红跌绿）。非数值一律返回空串——不补零、不编造。
+
+    2026-10-09 用户「所有个股带上涨跌幅」：卡面出现的每一只个股都必须带当日涨跌幅，
+    统一走本函数着色，避免各处各写一套（口径/精度/颜色不一致）。
+    """
+    if isinstance(pct, bool) or not isinstance(pct, (int, float)):
+        return ""
+    tone = "red" if pct >= 0 else "green"
+    body = f"<text_tag color='{tone}'>{pct:+.{digits}f}%</text_tag>"
+    return (" " + body) if lead_space else body
+
+
+def _pool_line(s: dict, live_pct: float | None = None) -> str:
+    """题材回流·相关个股行。2026-10-09 用户「所有个股带上涨跌幅」→ 必带今日实时涨跌。
+
+    优先用调用方传入的今日实时涨幅（`_pool_today_status` 实测命中），其次取池内
+    `live_pct`（盘中刷新写入）；两者都缺→不显示，不拿涨停日的历史 pct 冒充今日。
+    """
     nm = _stock_hl(s)
+    pct = live_pct if isinstance(live_pct, (int, float)) else s.get("live_pct")
+    pct_txt = _pct_tag(pct, 2)
     cap = s.get("cap_yi")
     cap_txt = f" ·市值{cap:.0f}亿" if isinstance(cap, (int, float)) and cap > 0 else ""
     risk = s.get("risk") or ""
     risk_txt = f" ·{risk}" if risk else ""
-    return f"{nm}{cap_txt}{risk_txt}"
+    return f"{nm}{pct_txt}{cap_txt}{risk_txt}"
 
 
 def _pool_today_status(pool: list[dict], live: dict | None) -> dict[str, float]:
@@ -2627,7 +2653,12 @@ def _pool_today_status(pool: list[dict], live: dict | None) -> dict[str, float]:
             p = float(pct or 0)
             hits[c] = max(hits.get(c, 0), p)
 
-    for it in (lv.get("leaders") or []):          # 今日涨停池
+    # `leaders` 是题材摘要，不保证覆盖全量涨停股；潜伏排除必须以
+    # `limit_up_stocks` 全量池为准。否则池内股票已经涨停却不在 leaders 时，
+    # 题材会被错误保留为潜伏候选（2026-09-30 深物业A）。
+    for it in (lv.get("limit_up_stocks") or []):   # 全量今日涨停池（硬排除依据）
+        _upd(it.get("code"), it.get("pct"))
+    for it in (lv.get("leaders") or []):          # 题材摘要，补充兼容旧快照
         _upd(it.get("code"), it.get("pct"))
     for it in (lv.get("early") or []):            # 盘中强势（buy 主票）
         _upd((it.get("buy") or {}).get("code"), (it.get("buy") or {}).get("pct"))
@@ -2688,7 +2719,8 @@ def _ambush_mainline_block(live: dict | None) -> list[dict]:
         for st in (h.get("stocks") or []):
             if st.get("buyable") and st.get("name") and st.get("code"):
                 buy_by_sector.setdefault(sec, []).append(
-                    f"{st.get('name')}({str(st.get('code')).split('.')[0]})+{float(st.get('pct') or 0):.0f}%")
+                    f"{st.get('name')}({str(st.get('code')).split('.')[0]})"
+                    f"{_pct_tag(st.get('pct'), 0, lead_space=False)}")
     early_by_main: dict[str, list[dict]] = {}
     for e in (live.get("early") or []):
         sec = str(e.get("sector") or "")
@@ -2709,7 +2741,7 @@ def _ambush_mainline_block(live: dict | None) -> list[dict]:
         if len(desc) > 48:
             desc = desc[:48] + "…"
         line = (f"▶ <text_tag color='red'>{nm}</text_tag> 今日 {zt} 家涨停｜龙头 {L.get('name')}({lcode})"
-                f"{(' · ' + lboards) if lboards else ''}\n　催化：{desc}")
+                f"{(' · ' + lboards) if lboards else ''}{_pct_tag(L.get('pct'), 2)}\n　催化：{desc}")
         adds: list[str] = []
         for sec, buys in buy_by_sector.items():
             if buys and _ambush_syn_match(sec, nm):
@@ -2721,7 +2753,8 @@ def _ambush_mainline_block(live: dict | None) -> list[dict]:
             bits = []
             for e in eb[:2]:
                 bb = e.get("buy") or {}
-                bits.append(f"{e.get('sector')}·{bb.get('name')}({str(bb.get('code') or '').split('.')[0]})+{float(bb.get('pct') or 0):.0f}%")
+                bits.append(f"{e.get('sector')}·{bb.get('name')}({str(bb.get('code') or '').split('.')[0]})"
+                            f"{_pct_tag(bb.get('pct'), 0, lead_space=False)}")
             line += "\n　🌱 爆发前夜（可跟踪·竞价确认）：" + "、".join(bits)
         out.append(_div(line))
     out.append(_div("⛔ 以上都是今天盘中真实走强的（涨停潮/还没封板/爆发前夜），不是低位埋伏；明天能不能接力、会不会扩散，要看竞价买盘，别闭着眼追"))
@@ -2733,6 +2766,17 @@ def _ambush_mainline_block(live: dict | None) -> list[dict]:
 # 个股「断板回流」机械通道：补上「涨停后休整→资金回流再走强」的**个股维度**盲区。
 # 与上面的题材相位回流（主题材通道）并列不互斥；口径/开关全部托管 core/reflow_scan.py。
 _REFLOW_POOL_FRESH_SEC = 600   # 落盘池复用窗口（同一轮 automation 的 dry-run 与推送不重复扫描）
+
+# ===== 阴线回踩十日线（2026-10-08 用户拍板；2026-10-09 升为本卡唯一选材）=====
+# 独立研究策略：候选/台账由 core/ambush_pullback.py 在 14:30 冻结，卡片只读快照渲染。
+# ⛔ 本卡「今日尾盘买入标的」只能出自该池（PICKS_POOL_ENFORCE）——2026-10-09 用户
+#    「我们尾盘潜伏卡现在都改为那套逻辑」。
+_PULLBACK_SNAPSHOT_PREFIX = "ambush_pullback_"
+_PULLBACK_MAX = 8            # 卡面展示上限（全量候选通常 ≤3，不硬凑）
+PICKS_POOL_ENFORCE = True    # False 即回退为「池外也可推票」的旧行为（可逆开关）
+# 机械层「💰 今日板块资金流（实时·左红右绿）」两列块——2026-10-09 用户「不显示今日板块资金流」
+# 置 False；改回 True 即恢复该块（可逆开关，勿删代码）。
+AMBUSH_SHOW_SECTOR_FLOW = False
 
 
 def _ambush_reflow_pool(cache_dir: Path) -> dict | None:
@@ -2795,13 +2839,138 @@ def _ambush_reflow_block(cache_dir: Path) -> list[dict]:
     return out
 
 
+def _ambush_pullback_snapshot(cache_dir: Path, day: str) -> dict | None:
+    """只读 14:30 冻结快照；卡片构建不得扫描、记账、结算或触发交易。"""
+    path = cache_dir / f"{_PULLBACK_SNAPSHOT_PREFIX}{day}.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict) or data.get("trade_date") != day:
+        return None
+    if not isinstance(data.get("candidates"), list):
+        return None
+    return data
+
+
+def _ambush_pullback_codes(cache_dir: Path, day: str) -> set[str]:
+    """当日冻结池内的代码集合（供「推票只能出自本池」校验）。"""
+    snap = _ambush_pullback_snapshot(cache_dir, day)
+    return {str(r.get("code") or "") for r in (snap or {}).get("candidates") or []
+            if str(r.get("code") or "")}
+
+
+def _ambush_pullback_block(cache_dir: Path, day: str) -> list[dict]:
+    """🎯 主选材块：阴线回踩十日线候选（2026-10-09 升为本卡唯一选材）。
+
+    主模块**不静默**：快照缺失＝链路未产出（区别于「今日无候选」），必须显式告知。
+    """
+    if _ambush_pullback_snapshot(cache_dir, day) is None:
+        return [
+            _div("<text_tag color='green'>🎯 阴线回踩十日线·今日尾盘买入候选：今日扫描未产出候选快照（链路异常）</text_tag>"),
+            _hr(),
+        ]
+    snap = _ambush_pullback_snapshot(cache_dir, day)
+    cands = snap.get("candidates") or []
+    # 冻结时刻：优先用扫描真实生成时间（补跑时不能冒充 14:30），缺省回落到计划时点。
+    _frozen = str(snap.get("generated_at") or "")
+    _hhmm = ""
+    if len(_frozen) >= 16 and _frozen[10] in ("T", " "):
+        _hhmm = _frozen[11:16]
+    out = [_div(f"<text_tag color='purple'>🎯 阴线回踩十日线·今日尾盘买入候选"
+                f"（{('今日' + _hhmm) if _hhmm else '今日14:30'}冻结）</text_tag>")]
+    # ⛔ 数据源异常必须显式声明：抓不到日K时「候选 0 只」是假阴性，不是「今日无符合条件」
+    if snap.get("data_ok") is False:
+        out.append(_div(f"<text_tag color='green'>⚠️ 日K数据源异常（{snap.get('fetch_failed')}"
+                        f"/{snap.get('attempted')} 只取不到历史K线），今日候选不可信</text_tag>"))
+    if not cands:
+        out.append(_div("今日无符合条件的候选（须同时满足：前段爆发板块 + 今日收阴 + 十日线连续上行"
+                        " + 收盘贴着十日线 + 缩量）"))
+        out.append(_hr())
+        return out
+    for row in cands[:_PULLBACK_MAX]:
+        code = str(row.get("code") or "")
+        name = str(row.get("name") or "")
+        sector = str(row.get("sector") or "")
+        themes = row.get("themes") or []
+        close = row.get("close")
+        ma10 = row.get("ma10")
+        gap = row.get("ma10_gap_pct")
+        volume_ratio = row.get("volume_ratio")
+        score = row.get("score")
+        hot_date = str(row.get("hot_date") or "")
+        sector_zt = row.get("sector_zt_count")
+        max_boards = row.get("max_boards")
+        line = f"{_stock_hl({'name': name, 'code': code}, 'purple')}"
+        if sector:
+            line += f" ·{sector}"
+        if themes:
+            line += f" ·题材{'/'.join(str(t) for t in themes[:3])}"
+        pct = row.get("pct")
+        if isinstance(pct, (int, float)):
+            tone = "red" if pct >= 0 else "green"
+            line += f" <text_tag color='{tone}'>{pct:+.2f}%</text_tag>"
+        hot_bits = []
+        if hot_date:
+            hot_bits.append(f"曾在{hot_date}活跃")
+        if isinstance(sector_zt, (int, float)) and sector_zt >= 3:
+            hot_bits.append(f"当日同方向{int(sector_zt)}家涨停")
+        if isinstance(max_boards, (int, float)) and max_boards >= 2:
+            hot_bits.append(f"曾{int(max_boards)}板")
+        if hot_bits:
+            line += "\n　历史热度：" + " · ".join(hot_bits)
+        metrics = []
+        if isinstance(close, (int, float)):
+            metrics.append(f"收盘{close:.2f}")
+        if isinstance(ma10, (int, float)):
+            metrics.append(f"十日线{ma10:.2f}")
+        if isinstance(gap, (int, float)):
+            metrics.append(f"距十日线{gap:+.1f}%")
+        if isinstance(volume_ratio, (int, float)):
+            metrics.append(f"量比{volume_ratio:.2f}")
+        if isinstance(score, (int, float)):
+            metrics.append(f"形态分{score:.1f}")
+        if metrics:
+            line += "\n　" + " · ".join(metrics)
+        out.append(_div(line))
+    out.append(_div("买入：今日推送后即按实时价买入，计入战绩；卖出：下一交易日10:00准时卖出，计入收益。"))
+    out.append(_hr())
+    return out
+
+
+def _picks_stocks_line(stocks: Any) -> str:
+    """今日尾盘买入标的的个股行（2026-10-09 用户「标的带上当时的涨幅，不然我不知道能不能买入」）。
+
+    支持两种写法：
+    ① 结构化 [{"name","code","pct"}] → 「名(代码) +X.XX%」，涨幅按 A 股口径着色（涨红跌绿）；
+    ② 纯字符串（旧数据/机械层兼容）→ 原样输出。
+    涨幅必须来自当日实时快照，缺失就不显示，不补零、不编造。
+    """
+    if isinstance(stocks, str):
+        return stocks.strip()
+    if not isinstance(stocks, list):
+        return ""
+    parts: list[str] = []
+    for it in stocks:
+        if isinstance(it, dict):
+            seg = _stock_hl({"name": it.get("name") or "", "code": it.get("code") or ""}, "purple")
+            pct = it.get("pct")
+            if isinstance(pct, (int, float)):
+                c = "red" if pct >= 0 else "green"
+                seg += f" <text_tag color='{c}'>{pct:+.2f}%</text_tag>"
+            parts.append(seg)
+        elif str(it).strip():
+            parts.append(str(it).strip())
+    return "｜".join(parts)
+
+
 def build_ambush_card(data: dict | None = None) -> dict:
     """🎯 尾盘潜伏·次日回流预期（14:30 定时）。详见 shared_rules【潜伏卡骨架】。
 
     双层结构（2026-08-28 用户「除了数据，需要 AI 介入和思考」升级）：
     - 机械数据层：theme_rotation 回流候选 + 今日实时板块资金流（不硬编码规律·完全以实时数据为准）
       ＋🔥 今日新主线·次日接力锚（方案A）+ 🔁 个股断板回流（方案1·core/reflow_scan.py）
-    - AI 研判层（data 注入）：🧠 板块资金流向分析 / 🔥 个股资金·地位·人气 / 🎯 次日重点标的推票
+    - AI 研判层（data 注入）：🧠 板块资金流向分析 / 🔥 个股资金·地位·人气 / 🎯 今日尾盘买入标的推票
       data 契约：{ai_flow: 多行文本, stock_scan: [{name,code,role,pct,fund,hot,note}],
                  picks: [{theme,stocks,reason,risk}], ai_verdict: 置底综合研判}
     """
@@ -2822,23 +2991,28 @@ def build_ambush_card(data: dict | None = None) -> dict:
     core = sorted(cands, key=lambda c: (_reflow_rank(c), -(c.get("confidence") or 0)))
     core = core[:12]
 
-    title = f"🎯 尾盘潜伏·次日回流预期 {mmdd} | 实时数据驱动"
+    title = f"🎯 尾盘潜伏·阴线回踩十日线 {mmdd} | 实时数据驱动"
     blocks: list[dict] = []
 
     # 模块① 定调（分行·UI 优化铁律：不堆一行）
     blocks.append(_div(
-        "<text_tag color='purple'>📌 定调</text_tag> 尾盘依据「前几日爆发 + 今日实时走势」自动筛选次日有望回流的题材\n"
-        "🧬 数据来源：近期涨停和资金流向记录 + 盘中实时板块资金\n"
+        "<text_tag color='purple'>📌 定调</text_tag> 尾盘筛选「前段爆发过、今日收阴回踩十日线（十日线连续上行且缩量）」的个股，作今日尾盘买入候选\n"
+        "🧬 数据来源：近20个交易日涨停归档 + 今日实时日K与成交量\n"
         "⛔ 不主观预判任何板块，完全以实时数据为准"
     ))
     blocks.append(_hr())
 
-    # 模块①.5 今日新主线·次日接力锚（方案A 2026-09-07 用户拍板·爆发日主通道）
-    blocks += _ambush_mainline_block(live)
+    # 模块①.5 主选材：阴线回踩十日线候选（2026-10-09 用户「尾盘潜伏卡都改为那套逻辑」）
+    # ⛔ 本块＝卡的唯一选材与次日推票来源；只读 14:30 冻结快照，渲染期不扫描、不记账。
+    blocks += _ambush_pullback_block(ROOT.parent / "cache", now.strftime("%Y-%m-%d"))
 
-    # 模块② 次日回流候选（核心）
+    # 模块② 背景参考（当日盘面事实·不参与次日推票）
+    bg: list[dict] = []
+    bg += _ambush_mainline_block(live)
+
+    #  背景·题材相位回流候选
     if core:
-        blocks.append(_div("<text_tag color='purple'>🔮 次日有望回流的题材（按近期涨停与资金流向自动筛选）</text_tag>"))
+        bg.append(_div("<text_tag color='purple'>🔮 次日有望回流的题材（按近期涨停与资金流向自动筛选）</text_tag>"))
         # 2026-08-28 P0：今日已涨停排除——池内个股今日涨停 → 题材已启动·非潜伏（剔除）；
         # 池内个股今日 ≥5% → 标注「今日已启动·不潜伏」。实证：和远气体今日涨停仍被推潜伏（用户质疑）。
         zt_excluded: list[str] = []
@@ -2855,35 +3029,40 @@ def build_ambush_card(data: dict | None = None) -> dict:
                 hot_pending.append(c.get("theme"))
             nm = str(c.get("theme") or "")
             cd = c.get("cooled_days")
-            conf = c.get("confidence")
-            ft = c.get("flow_trend") or "—"
             live_tag, live_color = _live_confirm(nm, live)
             if hot_codes:
                 live_tag = f"⚠️ 池内个股今日已启动({', '.join(sorted(hot_codes))} +{max(hits.values()):.0f}%)·不潜伏 | {live_tag}"
                 live_color = "green"
             boom_day = c.get("boom_day") or "—"
-            blocks.append(_div(
+            bg.append(_div(
                 f"<text_tag color='purple'>▶ {nm}</text_tag> 已回调 {cd} 天\n"
                 f"今日：<text_tag color='{live_color}'>{live_tag}</text_tag>\n"
                 f"再次启动信号：{c.get('trigger') or '—'}"
             ))
             if pool:
-                lines = "\n".join(_pool_line(s) for s in pool[:5])
-                blocks.append(_div(f"📦 相关个股（为爆发日 {boom_day} 的持仓快照，未确认今日走势前不追）：\n{lines}"))
-            blocks.append(_hr())
+                lines = "\n".join(_pool_line(s, hits.get(str(s.get("code") or "").split(".")[0]))
+                                  for s in pool[:5])
+                bg.append(_div(f"📦 相关个股（爆发日 {boom_day} 的持仓快照·附今日实时涨跌）：\n{lines}"))
+            bg.append(_hr())
         if zt_excluded:
-            blocks.append(_div(f"<text_tag color='green'>⛔ 今日已排除（这些题材今天已经涨停启动，不适合再潜伏）：\n{'；'.join(zt_excluded)}</text_tag>"))
-            blocks.append(_hr())
+            bg.append(_div(f"<text_tag color='green'>⛔ 今日已排除（这些题材今天已经涨停启动，不适合再潜伏）：\n{'；'.join(zt_excluded)}</text_tag>"))
+            bg.append(_hr())
     else:
-        blocks.append(_div("今日无有望回流的题材（待回流方向与退潮观察均为空），等板块回调满 2 天且资金重新流入再说"))
-        blocks.append(_hr())
+        bg.append(_div("今日无有望回流的题材（待回流方向与退潮观察均为空），等板块回调满 2 天且资金重新流入再说"))
+        bg.append(_hr())
 
-    # 模块②.5 个股断板回流（方案1 2026-09-17 用户拍板·个股维度通道，与题材回流并列不互斥）
-    blocks += _ambush_reflow_block(ROOT.parent / "cache")
+    #  背景·个股断板回流（方案1 2026-09-17 用户拍板·个股维度通道）
+    bg += _ambush_reflow_block(ROOT.parent / "cache")
+
+    if bg:
+        blocks.append(_div("<text_tag color='neutral'>🔎 背景参考（当日盘面事实·不参与今日推票）</text_tag>"))
+        blocks.append(_hr())
+        blocks += bg
 
     # 模块③ 今日板块资金流（实时·左红右绿双列）
+    # 2026-10-09 用户「不显示今日板块资金流」→ 默认整块不渲染（AMBUSH_SHOW_SECTOR_FLOW=False）。
     sr = (live or {}).get("sector_risk") or {}
-    if sr.get("inflow_top") or sr.get("outflow_top"):
+    if AMBUSH_SHOW_SECTOR_FLOW and (sr.get("inflow_top") or sr.get("outflow_top")):
         blocks.append(_div("<text_tag color='neutral'>💰 今日板块资金流（实时·左红右绿）</text_tag>"))
         blocks.append(_flow_columns(sr.get("inflow_top"), sr.get("outflow_top")))
         blocks.append(_hr())
@@ -2926,17 +3105,17 @@ def build_ambush_card(data: dict | None = None) -> dict:
                     line += f"\n　{note}"
                 blocks.append(_div(line))
             blocks.append(_hr())
-        # 模块⑥ 🎯 次日重点标的（AI 推票·置底）
+        # 模块⑥ 🎯 今日尾盘买入标的（AI 推票·置底）
         if picks:
-            blocks.append(_div("<text_tag color='purple'>🎯 次日重点标的（AI 推票·实时数据核验）</text_tag>"))
+            blocks.append(_div("<text_tag color='purple'>🎯 今日尾盘买入标的（AI 推票·实时数据核验）</text_tag>"))
             for p in picks:
                 theme = str(p.get("theme") or "")
-                stocks = str(p.get("stocks") or "")
                 reason = str(p.get("reason") or "")
                 risk = str(p.get("risk") or "")
                 line = f"<text_tag color='red'>▶ {theme}</text_tag>"
-                if stocks:
-                    line += f"\n{stocks}"
+                stock_line = _picks_stocks_line(p.get("stocks"))
+                if stock_line:
+                    line += f"\n{stock_line}"
                 if reason:
                     line += f"\n理由：{reason}"
                 if risk:
@@ -2968,7 +3147,8 @@ def _ambush_banned_terms(txt: str) -> list[str]:
     return [t for t in banned if t.lower() in low]
 
 
-def validate_ambush_card(card: dict) -> tuple[bool, list[str]]:
+def validate_ambush_card(card: dict, picks: list | None = None,
+                         pool_codes: set[str] | None = None) -> tuple[bool, list[str]]:
     issues: list[str] = []
     txt = json.dumps(card, ensure_ascii=False)
     if "定调" not in txt:
@@ -2978,10 +3158,11 @@ def validate_ambush_card(card: dict) -> tuple[bool, list[str]]:
     if "font color=" in txt:
         issues.append("配色：卡片含 <font>（飞书不渲染，须改 <text_tag>）")
     # 🎯 结论置底铁律（2026-08-27 用户纠错）：综合研判/推票必须在资金流之后（卡片末尾）
-    if "🎯 综合研判" in txt or "🎯 次日重点标的" in txt:
+    _pick_head = "🎯 今日尾盘买入标的" if "🎯 今日尾盘买入标的" in txt else "🎯 次日重点标的"
+    if "🎯 综合研判" in txt or _pick_head in txt:
         if "💰 今日板块资金流" in txt:
             pos_flow = txt.find("💰 今日板块资金流")
-            pos_pick = txt.find("🎯 次日重点标的")
+            pos_pick = txt.find(_pick_head)
             pos_verdict = txt.find("🎯 综合研判")
             tail_ok = all(p >= 0 and p > pos_flow for p in (pos_pick, pos_verdict) if p >= 0)
             if not tail_ok:
@@ -2990,6 +3171,34 @@ def validate_ambush_card(card: dict) -> tuple[bool, list[str]]:
     hits = _ambush_banned_terms(txt)
     if hits:
         issues.append(f"文案语义化违规：含内部术语 {hits}，须大白话改写后再推（09-01 铁律）")
+    # 🎯 推票只能出自阴线回踩池（2026-10-09 用户「尾盘潜伏卡都改为那套逻辑」）
+    if PICKS_POOL_ENFORCE and pool_codes is not None and picks:
+        outside: list[str] = []
+        for p in picks:
+            stocks = (p or {}).get("stocks") if isinstance(p, dict) else None
+            if not isinstance(stocks, list):
+                continue
+            for s in stocks:
+                if not isinstance(s, dict):
+                    continue
+                code = str(s.get("code") or "")
+                if code and code not in pool_codes:
+                    outside.append(f"{s.get('name') or ''}({code})")
+        if outside:
+            issues.append(f"推票越界：今日尾盘买入标的不在今日阴线回踩池内 {outside}"
+                          "（2026-10-09 用户「都改为那套逻辑」，池外的不得进推票）")
+    # 📈 每只推票必带当日涨跌幅（2026-10-09 用户「所有个股带上涨跌幅」）
+    missing_pct: list[str] = []
+    for p in picks or []:
+        stocks = (p or {}).get("stocks") if isinstance(p, dict) else None
+        if not isinstance(stocks, list):
+            continue
+        for s in stocks:
+            if isinstance(s, dict) and not isinstance(s.get("pct"), (int, float)):
+                missing_pct.append(f"{s.get('name') or ''}({s.get('code') or ''})")
+    if missing_pct:
+        issues.append(f"涨跌幅缺失：{missing_pct} 未带当日涨跌幅，补齐后再推"
+                      "（2026-10-09 用户「所有个股带上涨跌幅」）")
     return (len(issues) == 0, issues)
 
 
@@ -3010,7 +3219,11 @@ def _cli_ambush(argv: list[str]) -> int:
         ai_data = json.loads(Path(args.data).read_text(encoding="utf-8"))
     card = build_ambush_card(ai_data)
     if args.self_check:
-        ok, issues = validate_ambush_card(card)
+        picks = (ai_data or {}).get("picks") or []
+        pool_codes = None
+        if PICKS_POOL_ENFORCE:
+            pool_codes = _ambush_pullback_codes(ROOT.parent / "cache", _now_bj().strftime("%Y-%m-%d"))
+        ok, issues = validate_ambush_card(card, picks=picks, pool_codes=pool_codes)
         if not ok:
             print("❌ 自查校验未通过，拒绝推送：")
             for i in issues:

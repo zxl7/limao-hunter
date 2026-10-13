@@ -18,6 +18,13 @@ def _write_zt(cache, day, rows):
     (d / f"zt_{day}.json").write_text(json.dumps({"date": day, "zt_list": rows}, ensure_ascii=False), encoding="utf-8")
 
 
+def _write_top5(cache, day, themes):
+    d = cache / "top5_history"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"top5_{day}.json").write_text(json.dumps(
+        {"date": day, "source": "test", "themes": themes}, ensure_ascii=False), encoding="utf-8")
+
+
 def _row(code="000001", name="测试股份", boards=2, sector="测试题材", cje_yi=8):
     return {"code": code, "name": name, "boards": boards, "sector": sector, "cje_yi": cje_yi}
 
@@ -240,3 +247,48 @@ def test_env_missing_is_graceful(tmp_path):
     assert out["env"]["known"] is False and out["env"]["level"] == "unknown"
     assert out["advice"]["max_picks"] is None
     assert out["candidates"] and len(out["candidates"]) == 1
+
+
+# ── ④ 题材化落地（10-13·用户「题材是可以积累和沉淀的」→ 题材口径替代东财行业口径）────
+def test_theme_membership_adds_stock_to_pool(tmp_path):
+    """⛔ 题材口径（选股宝/东财题材名 + 成分股落地）替代原东财行业口径。
+
+    个股首板、冷门行业、连板不足 → 但属近5日热门题材成分股 → 必须入池（落盘 themes）。
+    """
+    _write_zt(tmp_path, "2026-09-25", [_row(boards=1, sector="冷门行业")])
+    _write_top5(tmp_path, "2026-09-25", [
+        {"name": "热门题材A", "zt_count": 5, "leader": "龙头", "leader_code": "600002.SZ",
+         "codes": ["000001.SZ", "600002.SZ"]},
+    ])
+    u = ap._historical_universe(tmp_path, TODAY)
+    assert "000001" in u, "属热门题材成分股 → 入池"
+    assert u["000001"]["themes"] == ["热门题材A"]
+    assert u["000001"]["theme_zt_max"] == 5
+    # 卡面/台账会带题材信息
+    out = ap.scan(tmp_path, bars_fetcher=lambda c, n: _bars(), today=TODAY)
+    cand = next(x for x in out["candidates"] if x["code"] == "000001")
+    assert cand["themes"] == ["热门题材A"]
+
+
+def test_stock_without_theme_sector_or_boards_excluded(tmp_path):
+    """题材/行业/连板三轨都不满足 → 不入池（诚实，不编造热门方向）。"""
+    _write_zt(tmp_path, "2026-09-25", [_row(boards=1, sector="冷门行业")])
+    # 不写 top5_history → 无题材命中；行业不热；连板不足 → 三轨皆空
+    u = ap._historical_universe(tmp_path, TODAY)
+    assert "000001" not in u
+
+
+def test_theme_window_is_last_five_trading_days(tmp_path):
+    """⛔ 题材口径同样受「近5个交易日」窗口约束（与行业/连板口径一致·用户定前期＝近5日）。"""
+    for i, day in enumerate(["2026-09-22", "2026-09-23", "2026-09-24",
+                             "2026-09-25", "2026-09-28", "2026-09-29"]):
+        _write_zt(tmp_path, day, [_row(code=f"0001{i:02d}", boards=1, sector="别的行业")])
+    _write_zt(tmp_path, "2026-09-22", [_row(code="600001", boards=1, sector="冷")])
+    _write_zt(tmp_path, "2026-09-29", [_row(code="600002", boards=1, sector="冷")])
+    _write_top5(tmp_path, "2026-09-22", [
+        {"name": "老题材", "zt_count": 5, "leader": "L", "leader_code": "600001.SZ", "codes": ["600001.SZ"]}])
+    _write_top5(tmp_path, "2026-09-29", [
+        {"name": "新题材", "zt_count": 5, "leader": "L", "leader_code": "600002.SZ", "codes": ["600002.SZ"]}])
+    u = ap._historical_universe(tmp_path, TODAY)
+    assert "600001" not in u, "题材热点滑出5日窗口 → 不入池"
+    assert "600002" in u, "窗口内热门题材 → 入池"
