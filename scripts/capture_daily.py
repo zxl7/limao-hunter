@@ -58,6 +58,12 @@ ENABLE_SECTOR_OFFICIAL_REFRESH = True
 # False = 不跑（行为等同改动前）。
 ENABLE_THEME_LINE_AUDIT = True
 
+# ── 题材长期归档 钩子开关（2026-10-13 用户「题材是可以积累和沉淀的毕竟有上限」·可逆）──
+# 盘后链末步把「选股宝 top5」逐日落成 cache/top5_history/（原始快照 + 题材库索引）。
+# 动机：market_memory 只是当日快照、历史被覆盖（实测只剩 7 天）→「前期的热门题材」
+#       这类跨日口径没法长窗验证。False = 不归档（行为等同改动前）。
+ENABLE_TOP5_HISTORY = True
+
 
 def _today():
     return datetime.now().strftime("%Y-%m-%d")
@@ -751,7 +757,21 @@ def main():
     else:
         ta_msg = "theme_line_audit=skip(开关关闭)"
 
-    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | pruned={removed}")
+    # 11) 题材长期归档（2026-10-13）：选股宝 top5 → cache/top5_history/（逐日快照 + 题材库索引）
+    #     只读 market_memory 的 prev_top5；交易日闸 + 幂等（已归档不覆盖）；失败降级不阻断。
+    if ENABLE_TOP5_HISTORY:
+        try:
+            import subprocess as _sp
+            _th = _sp.run([sys.executable, str(Path(__file__).resolve().parent / "top5_history.py"),
+                           "archive"], capture_output=True, text=True, timeout=60)
+            _thl = [x for x in (_th.stdout or "").splitlines() if "top5_history]" in x]
+            th_msg = (_thl[0].split("]", 1)[-1].strip()[:60] if _thl else "ok")
+        except Exception as e:
+            th_msg = f"top5_history ERR:{e}"
+    else:
+        th_msg = "top5_history=skip(开关关闭)"
+
+    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | {th_msg} | pruned={removed}")
 
 
 if __name__ == "__main__":
