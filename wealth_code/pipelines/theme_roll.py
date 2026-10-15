@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,16 @@ DATA_DIR = ROOT / "data"
 HISTORY_DIR = ROOT.parent / "cache" / "zt_history"
 OUT_PATH = DATA_DIR / "theme_roll_5d.json"
 DEFAULT_DAYS = 5
+
+# 交易日历（唯一真源）。`pipelines/` 不得依赖调用方 PYTHONPATH → 自插项目根。
+# 导入失败时退化为「不过滤」（保旧行为），绝不因日历不可用而中断本模块。
+if str(ROOT.parent) not in sys.path:
+    sys.path.insert(0, str(ROOT.parent))
+try:
+    from common.trading_calendar import is_a_share_trading_day  # noqa: E402
+except Exception:  # pragma: no cover
+    def is_a_share_trading_day(_value: Any) -> bool:  # type: ignore[misc]
+        return True
 
 BJ_TZ = timezone(timedelta(hours=8))
 
@@ -44,6 +55,12 @@ def _load_recent_snapshots(days: int) -> list[dict[str, Any]]:
     if not HISTORY_DIR.exists():
         return []
     files = sorted(HISTORY_DIR.glob("zt_*.json"))
+    # ⛔ 2026-10-09 修正：窗口必须按**交易日**取，不得按文件个数取。
+    # 事故：长假期间盘中写入的 `intraday_only` 空壳（zt_list=[]，如 10-01/02/05）
+    # 同样占据窗口名额 → `days=5` 实际只覆盖 2 个真实交易日（10-08/10-09），
+    # 「5 日广度」「出现天数」被严重稀释（此前只当作口径瑕疵记在 MEMORY里）。
+    if days > 0:
+        files = [f for f in files if is_a_share_trading_day(f.stem[3:])]
     picked = files[-days:] if days > 0 else files
     out: list[dict[str, Any]] = []
     for f in picked:

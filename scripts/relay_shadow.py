@@ -21,11 +21,15 @@ import argparse
 import glob
 import json
 import sys
-from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "wealth_code"))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# 规范时间戳（2026-10-14 审计 P1-⑦）：generated_ts 统一 ISO8601 带 +08:00。
+from common.market_time import iso_bj  # noqa: E402
 
 CAND_DIR = ROOT / "wealth_code" / "cache"
 OUT_DIR = ROOT / "cache" / "shadow"
@@ -95,7 +99,7 @@ def build(date: str | None = None, verbose: bool = True) -> dict | None:
     n_top = min(3, len(eod_codes), len(sh_codes))
     out = {
         "date": d.get("date"),
-        "generated_ts": datetime.now().isoformat(),
+        "generated_ts": iso_bj(),
         "source_file": f.name,
         "env_digest": {k: env.get(k) for k in
                        ("regime", "sentiment_score", "sentiment_label", "promote_rate",

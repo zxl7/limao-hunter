@@ -10,6 +10,7 @@
 运行：/Users/zxl/.workbuddy/binaries/python/envs/default/bin/python -m pytest tests/ -v
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -18,34 +19,60 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from card_lint import lint_card  # noqa: E402
+from card_lint import lint_card, NEST_FAIL_SINCE  # noqa: E402
 from push_card import normalize, fix_newlines  # noqa: E402
 import validate_schema as vs  # noqa: E402
 
 
 # ────────────────────────── Fixtures ──────────────────────────
 
+_CARD_RE = re.compile(r"card_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})")
+
+
+def _gen_dt(name: str) -> str:
+    """从卡片文件名取生成时刻（`card_YYYYMMDD_HHMMSS.json`）→ 可直接比大小的字符串。
+
+    用**文件名内嵌时刻**而非 `stat().st_mtime`：契约 §1「文件 mtime 不能替代内容日期」
+    （拷贝/同步/备份都会改写 mtime，文件名不会）。
+    """
+    m = _CARD_RE.search(name)
+    if not m:
+        return ""
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}T{m.group(4)}:{m.group(5)}"
+
+
 @pytest.fixture(scope="session")
 def real_cards():
-    """真实推送卡（代码生成）—— **最近 4 张**（最新 eod 卡 + 竞价卡）。
+    """真实推送卡（代码生成）—— **最近 4 张「现行规则下」产出的卡**。
 
     ⚠️ 2026-09-18 修正：原实现 glob `wealth_code/cache/card_*.json` **全量 103 张历史卡**，
     混入 08-13 旧格式卡（`[炸板回封×1] 可信度35%`）与 `*_debug_*` / `*preview*` 调试卡
     → 与新政（白话门禁 Tier-1 阻断）冲突，且与 fixture 注释「最新一张」的**原意不符**。
     本测试目的是「防 lint 误伤**当前**生产卡」，故只取最近产物。
+
+    ⚠️ 2026-10-14 追加（font↔text_tag 嵌套由 WARN 升 **FAIL 硬阻断**）：
+    生效时刻 = `card_lint.NEST_FAIL_SINCE`（2026-10-14 17:35，与 `build_cards.py` 4 处清理同批）。
+    当日 09:26 竞价卡（`card_20261014_092620.json`）含 3 处缩量胶囊嵌套 —— 那是**旧代码**的产物，
+    升 FAIL 后必然不过，但它是「清理前」的历史证物，**不是现行 lint 误伤**
+    ⇒ 本 fixture **按生成时刻过滤**，只取 `NEST_FAIL_SINCE` 之后生成的卡。
+    过滤后可能暂无样本（本次即如此：当日 16:13 卡亦早于 17:35）→ 用例 `skip`，
+    待下一张竞价卡/复盘卡产出后自动恢复；自 2026-10-15 起本过滤自然退化为 no-op。
+
+    返回 `{"files_total": 候选文件总数, "cards": [卡 dict, ...]}`（后者可能为空列表）。
     """
     files = []
     for pat in ("card_*.json", "card_2026*.json"):
         files += [f for f in (ROOT / "wealth_code" / "cache").glob(pat)
                   if "debug" not in f.name and "preview" not in f.name]
-    files = sorted({p.resolve() for p in files}, key=lambda p: -p.stat().st_mtime)[:4]
+    files = sorted({p.resolve() for p in files}, key=lambda p: -p.stat().st_mtime)
+    fresh = [f for f in files if _gen_dt(f.name) >= NEST_FAIL_SINCE][:4]
     cards = []
-    for f in files:
+    for f in fresh:
         try:
             cards.append(json.loads(f.read_text(encoding="utf-8")))
         except Exception:
             continue
-    return cards
+    return {"files_total": len(files), "cards": cards}
 
 
 @pytest.fixture(scope="session")
@@ -119,8 +146,12 @@ class TestCardLint:
 
     def test_real_cards_pass(self, real_cards):
         """真实代码生成卡必须全过 lint（防 lint 误伤生产卡）。"""
-        assert real_cards, "未找到真实卡片 fixture"
-        for c in real_cards:
+        assert real_cards["files_total"], "未找到真实卡片 fixture"
+        if not real_cards["cards"]:
+            pytest.skip(
+                f"尚无 {NEST_FAIL_SINCE} 之后生成的生产卡"
+                f"（font↔text_tag 升 FAIL 后首张卡未产出）⇒ 待下一张竞价卡/复盘卡落地自动恢复")
+        for c in real_cards["cards"]:
             ok, errs, warns = lint_card(c)
             assert ok, f"真实卡 lint 应通过: {c.get('title','')[:40]} -> {errs}"
 
@@ -130,6 +161,27 @@ class TestCardLint:
         ok, _, warns = lint_card(card)
         assert ok  # 字面 \\n 只 WARN 不阻断
         assert any("\\\\n" in w["msg"] for w in warns)
+
+
+# ───────────────────── real_cards 取样策略（2026-10-14） ─────────────────────
+
+class TestRealCardsFixturePolicy:
+    """锁 `_gen_dt` 解析与「生效时刻过滤」的边界（防过滤写错→守卫静默失效）。"""
+
+    def test_gen_dt_parses_card_name(self):
+        assert _gen_dt("card_20261014_161357.json") == "2026-10-14T16:13"
+        assert _gen_dt("card_20261001_090000.json") == "2026-10-01T09:00"
+
+    def test_gen_dt_returns_empty_for_non_card_name(self):
+        assert _gen_dt("whatever.json") == ""
+
+    def test_preban_card_is_excluded(self):
+        # 2026-10-14 09:26 竞价卡（清理前旧代码产物·3 处缩量嵌套）必须被排除
+        assert _gen_dt("card_20261014_092620.json") < NEST_FAIL_SINCE
+
+    def test_postban_card_is_included(self):
+        # 生效后的卡必须纳入（即过滤在生效后自动退化为 no-op）
+        assert _gen_dt("card_20261015_092600.json") >= NEST_FAIL_SINCE
 
 
 # ────────────────────────── push_card.normalize ──────────────────────────

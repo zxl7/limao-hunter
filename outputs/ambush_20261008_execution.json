@@ -1,0 +1,56 @@
+{
+  "title": "10月8日尾盘潜伏卡核验结果：事实校验阻断，未推送",
+  "trade_date": "2026-10-08",
+  "status": "blocked_fact_conflict",
+  "sent": false,
+  "target": "默认飞书工作群；未发送，未镜像",
+  "ai_data_path": "/Users/zxl/WorkBuddy/狸猫猎手/cache/ambush_ai_10-08.json",
+  "rendered_card_path": "/Users/zxl/WorkBuddy/狸猫猎手/wealth_code/cache/ambush_card_20261008.json",
+  "rendered_card_sha256": "46baad7c39a8ac9c838641e772257e63c39ee961770ff741179ac2bed4744d06",
+  "card_elements": 37,
+  "checks": {
+    "required_files_exist": true,
+    "required_json_readable": true,
+    "ai_stock_scan_count": 4,
+    "ai_picks_count": 0,
+    "cli_self_check": "通过，退出码0",
+    "cli_mode": "--data cache/ambush_ai_10-08.json --self-check --dry-run",
+    "full_card_plain_fail": [],
+    "full_card_plain_warn": ["研判"],
+    "fact_check": "未通过：地产资金确认与已启动排除冲突"
+  },
+  "blocking_findings": [
+    {
+      "issue": "房地产开发仍作为回流候选，房地产却同时被列入今日已启动排除",
+      "evidence": "真实37元素成品同时包含房地产开发候选、今天资金和热度都还在、房地产2只已涨停排除三段",
+      "source": "wealth_code/pipelines/build_cards.py:2823-2852",
+      "explanation": "当前排除按各候选watch_pool成员判断；历史地产开发成分与当前房地产成分不相同，同线拆池导致冲突"
+    },
+    {
+      "issue": "热点命中被写成资金和热度都在，证据不足",
+      "source": "wealth_code/pipelines/build_cards.py:2540-2569",
+      "explanation": "_live_confirm把资金流入、进行中题材和热点集合混在一起，单有热度亦可触发资金确认文案；本轮榜单不能证明房地产整体净流入"
+    }
+  ],
+  "data_limitations": {
+    "historical_sector_flow_dates": ["2026-09-17", "2026-09-18", "2026-09-22", "2026-09-28", "2026-09-30"],
+    "historical_sector_flow_note": "不是截至今日连续五个交易日，电池相关历史统计只有3日；不作为最新持续流入证据",
+    "reflow_pool": "14:31:59扫描91只，缺报价0只、命中0只；仅说明该时点扫描结果，不断言全市场无机会",
+    "initial_mechanical_warning": "初次机械dry-run有东方财富连接警告但退出码0；本轮AI完整卡dry-run退出码0",
+    "stock_flow_note": "个股资金为14:41:22查询完成时获得的当日统计；查询完成时间不等于数据源更新时间"
+  },
+  "verified_market_at_1440": {
+    "sector_flow_asof": "2026-10-08T14:40:22.571109+08:00",
+    "battery_flow_yi": 31.0,
+    "lithium_battery_concept_flow_yi": 24.8,
+    "solid_state_battery_flow_yi": 14.2,
+    "domestic_chip_flow_yi": -222.2,
+    "cpo_flow_yi": -166.8,
+    "battery_theme_limit_up_count": 8,
+    "mainline_channel_min_limit_up": 10,
+    "note": "板块成分重叠，不将各资金统计相加"
+  },
+  "conclusion": "本轮合格潜伏推荐留空，不强凑2至3个方向；保留AI判断及本地卡，不执行正式发送。推票和观察条件均不构成自动买入信号。",
+  "changes": "仅生成AI数据、完整本地卡及执行报告；未修改源码、策略参数、调度、竞价冻结结论或账本。",
+  "next_step": "需授权修复机械显示层：热点与资金证据分离、同线题材排除一致；修复后重新按届时行情核验，不直接补发此旧卡。"
+}

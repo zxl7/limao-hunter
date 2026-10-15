@@ -55,6 +55,15 @@ except Exception as _fam_imp_err:
     family_of_top5 = None
     print(f"[live_signal] 警告: 无法导入 sector_family ({_fam_imp_err})，家族聚合禁用")
 
+# 交易日历（唯一真源）。2026-10-09：`_load_zt_history` 的 12 日窗必须按交易日计，
+# 否则长假盘中空壳（intraday_only·zt_list=[]）占满名额。防御性导入，失败退化为不过滤。
+try:
+    from common.trading_calendar import is_a_share_trading_day  # noqa: E402
+except Exception as _cal_imp_err:  # pragma: no cover
+    print(f"[live_signal] 警告: 无法导入交易日历 ({_cal_imp_err})，窗口按文件数退化")
+    def is_a_share_trading_day(_value) -> bool:  # type: ignore[misc]
+        return True
+
 # 硬信号词：快讯仅含这些词才进信号卡（过滤弱描述，防刷屏）
 HARD = ["涨停", "涨超", "直线", "封板", "触及涨停", "拉升", "拉板", "冲板", "大涨", "秒板", "飙升"]
 
@@ -75,6 +84,26 @@ N_SHAPE_MIN_GAP = 2              # 距上次涨停最小交易日间隔（≥2=�
 # 🆕 题材首板即时卡（2026-09-01 上线 → 当日 14:32 用户「首板太多了·一个板块推一次·取消」停用）
 # 可逆开关：False=停用推送（板块当日第1只涨停不再单独推卡）；True=恢复。冷启动种子同开关。
 ENABLE_FIRST_ZT_CARD = False
+
+# ==== 涨停阈值（**本文件唯一来源** · 2026-10-14 审计 B6 / §十一-P0③）====
+# 背景：本文件原先同时存在两套字面量 —— `_juggernaut_charge` 用 9.8，
+#       `_pool_new_zt_signals` 用 9.9/19.9，**同文件不同口径且无任何说明**，
+#       改一处漏一处。现收敛为下面 3 个具名常量，语义差异显式化：
+#
+#   · ZT_JUDGE_* = 「涨停**判定**」严格口径 —— 用于新建涨停信号（`new_zt`）。
+#     必须严格：若放宽到 9.8，会把「+9.85% 尚未封板」的票误标涨停
+#     （正是 2026-08-18「中石科技 +19.53% 未封板被列进新涨停」那个 bug 的成因）。
+#   · ZT_SEAL_MAIN = 「封板**确认**」宽松下限 —— 只与 `seal ∈ {一字,秒封,封死}`
+#     **同时**成立才用（见 `_juggernaut_charge`）。seal 字段本身已证明封板，
+#     这里的涨幅只作二次防呆；取 9.8 是容差：涨停价 = round(昨收×1.1, 2)，
+#     低价股四舍五入会把实际涨停涨幅压到 9.8%（如 昨收 1.02 → 涨停价 1.12 → +9.80%）。
+#
+# ⚠️ 跨文件仍有 4 套口径（见审计 B6：intraday_timeline/feedback_matrix/reflow_scan/
+#    short_spirit 等）。本文件先自洽，**全局单一函数留待后续专项**（§十一-P0③ 的第二步）。
+ZT_JUDGE_MAIN = 9.9              # 主板涨停判定（严格）
+ZT_JUDGE_20CM = 19.9             # 创业板/科创板涨停判定（严格）
+ZT_SEAL_MAIN = 9.8               # 主板封板确认下限（宽松·仅配合 seal 字段使用）
+ZT_SEAL_20CM = 19.8              # 20cm 封板确认下限（同义，当前无调用方·留齐口径）
 
 
 def _track_core_high(sig: dict, prev: dict) -> None:
@@ -142,7 +171,7 @@ def detect_fund_switch(latest: dict, prev: dict, sig: dict, hhmm: str) -> dict |
             ld = s.get("leader") or {}
             if zt < FUND_NEW_ZT_MIN or nm not in inflow_names:
                 continue
-            if ld.get("buyable") is False or float(ld.get("pct") or 0) >= 9.9:
+            if ld.get("buyable") is False or float(ld.get("pct") or 0) >= ZT_JUDGE_MAIN:
                 new_up.append({"name": nm, "zt": zt,
                                "leader": ld.get("name") or "", "lpct": ld.get("pct") or 0})
         # ---- 组合触发 ----
@@ -186,12 +215,12 @@ def in_trading() -> bool:
     in_window = (9 * 60 + 15 <= hm <= 11 * 60 + 30) or (13 * 60 <= hm <= 15 * 60)
     if not in_window:
         return False
-    # 节假日门禁：法定节假日（含国庆）不推送，调休补班开市日仍推送（is_a_share_trading_day 为唯一权威）
+    # 节假日门禁：法定节假日与周末（含调休补班日）一律不推送（is_a_share_trading_day 为唯一权威）
     try:
         from common.trading_calendar import is_a_share_trading_day
         return is_a_share_trading_day(n)
     except Exception:
-        return n.weekday() < 5  # 兜底：common 不可用，至少排除周末
+        return n.weekday() < 5  # trading-day-fallback: 唯一真源不可用时的周末兜底
 
 
 def load(p: Path) -> dict:
@@ -340,11 +369,14 @@ INST_MAX_DAILY = 6          # 全市场每日总量闸门
 
 
 def in_early_realtime_window(now: datetime | None = None) -> bool:
-    """早盘前半小时高频实时窗口判定（交易日 + 09:25-09:55）。"""
+    """早盘前半小时高频实时窗口判定（**交易日** + 09:25-09:55）。
+
+    交易日走唯一真源 `is_a_share_trading_day`（本模块顶部导入）——⛔ 不得自判 `weekday()`。
+    """
     if not EARLY_REALTIME_WINDOW:
         return False
     now = now or datetime.now()
-    if now.weekday() >= 5:
+    if not is_a_share_trading_day(now):
         return False
     mins = now.hour * 60 + now.minute
     return EARLY_REALTIME_START <= mins <= EARLY_REALTIME_END
@@ -399,10 +431,14 @@ def _juggernaut_charge(sec: dict) -> tuple[bool, str]:
     """容量中军拉升信号（2026-08-17 用户「中军可能拉到5%就要提示」）。
 
     判定：容量中军（cap_yi≥80 亿）**动了才算**——
-      - 中军涨幅 5%~9.9%（未涨停但大涨·资金进场）且板块前排封板（zt_count≥2）
-      - 或中军已封板（一字/秒封/封死·pct≥9.8）且板块 zt_count≥2
+      - 中军涨幅 5% ~ `ZT_SEAL_MAIN`(9.8)（未涨停但大涨·资金进场）且板块前排封板（zt_count≥2）
+      - 或中军已封板（一字/秒封/封死·pct≥`ZT_SEAL_MAIN`）且板块 zt_count≥2
     光有市值不动（pct<5 且未封板）不算——「容量中军拉到5%+板块前排封板」才是启动确认。
     返回 (是否触发, 触发描述)。用于苗头卡/独立提示，不等共振分。
+
+    ⚠️ 阈值取模块常量（2026-10-14 审计 P0③ 收敛）：此处是**封板确认**口径，
+    与 `_pool_new_zt_signals` 的**涨停判定**口径（`ZT_JUDGE_*`）语义不同、故意不同值，
+    详见文件头常量块的说明。原为裸字面量 9.8，易与 9.9 混淆。
     """
     leader = sec.get("leader") or {}
     cap = float(leader.get("cap_yi") or 0)
@@ -412,9 +448,9 @@ def _juggernaut_charge(sec: dict) -> tuple[bool, str]:
     lname = str(leader.get("name") or "").strip()
     if cap < 80:
         return False, ""
-    if 5.0 <= pct < 9.8 and zt >= 2:
+    if 5.0 <= pct < ZT_SEAL_MAIN and zt >= 2:
         return True, f"容量中军{lname}({cap:.0f}亿)拉到+{pct:.1f}%·板块前排{zt}只封板"
-    if pct >= 9.8 and any(k in seal for k in ("一字", "秒封", "封死")) and zt >= 2:
+    if pct >= ZT_SEAL_MAIN and any(k in seal for k in ("一字", "秒封", "封死")) and zt >= 2:
         return True, f"容量中军{lname}({cap:.0f}亿){seal.strip()}·板块前排{zt}只封板"
     return False, ""
 
@@ -703,7 +739,11 @@ def _load_zt_history(ndays: int = N_SHAPE_HIST_DAYS) -> tuple[dict, list]:
     ② yesterday_zt.json 补齐——zt_history 某日若为盘中快照（intraday_only·zt_list 空，如 08-31 盘后链
        未沉淀），用 yesterday_zt.json 当日 88 票补全，恢复「昨日涨停=连板排除」判定（防误报 N 字）。"""
     import glob
-    files = sorted(glob.glob(str(CACHE / "zt_history" / "zt_*.json")))[-ndays:]
+    _all = sorted(glob.glob(str(CACHE / "zt_history" / "zt_*.json")))
+    # ⛔ 2026-10-09 修正：窗口按**交易日**取（唯一真源 = common.trading_calendar）。
+    # 长假期间盘中写入的空壳（intraday_only·zt_list=[]，如 10-01/02/05）此前占满 12 日窗的
+    # 3 个名额 → 形态/N字/二波检测实际只有 9 个交易日的料，且休市日被混进 `trade_days`。
+    files = [f for f in _all if is_a_share_trading_day(os.path.basename(f)[3:13])][-ndays:]
     yz_path = CACHE / "yesterday_zt.json"
     # 文件签名（mtime 元组）——任一文件变化即失效
     try:
@@ -1777,7 +1817,7 @@ def main():
             continue
         pct = float(l.get("pct") or 0)
         is_20 = bool(l.get("is_20cm"))
-        zt_thr = 19.9 if is_20 else 9.9
+        zt_thr = ZT_JUDGE_20CM if is_20 else ZT_JUDGE_MAIN
         # 涨停判定（2026-08-18 修）：单有板数不足为凭——未封板拉升票也带历史板数，
         # 会被误标"涨停"（如中石科技 09:31 +19.53% 未封板被列进新涨停）。
         # 正确标准 = 涨幅达标 或（有板数 且 当前已封板 buyable=False）。
@@ -1787,7 +1827,7 @@ def main():
         # 上轮是否已涨停：避免「开盘即板」被当成新信号一锅端
         prev_zt = False
         if pl is not None:
-            pzt_thr = 19.9 if bool(pl.get("is_20cm")) else 9.9
+            pzt_thr = ZT_JUDGE_20CM if bool(pl.get("is_20cm")) else ZT_JUDGE_MAIN
             _psealed = pl.get("buyable") is False
             prev_zt = (float(pl.get("pct") or 0) >= pzt_thr) or (parse_boards(pl.get("boards")) > 0 and _psealed)
         if is_zt and not prev_zt and code not in zt_codes:
@@ -2218,7 +2258,7 @@ def main():
         for _l in _pool:
             _pct0 = float(_l.get("pct") or 0)
             _z200 = bool(_l.get("is_20cm"))
-            _zt0 = (_pct0 >= (19.9 if _z200 else 9.9)) or (
+            _zt0 = (_pct0 >= (ZT_JUDGE_20CM if _z200 else ZT_JUDGE_MAIN)) or (
                 parse_boards(_l.get("boards")) > 0 and _l.get("buyable") is False)
             if _zt0:
                 _s0 = str(_l.get("sector") or "").strip()
@@ -2312,7 +2352,7 @@ def main():
                         if _ip.get(_c) == today or not _q.get(_c):
                             continue
                         _p = float((_q.get(_c) or {}).get("pct") or 0)
-                        _lim = 19.9 if str(_c).startswith(("300", "301")) else 9.9
+                        _lim = ZT_JUDGE_20CM if str(_c).startswith(("300", "301")) else ZT_JUDGE_MAIN
                         if INST_MIN_PCT <= _p < _lim:        # 拉升中·未封板
                             _hits.append((_c, (_q.get(_c) or {}).get("name") or _x.get("name") or _c,
                                           _p, str(_x.get("theme") or "")))

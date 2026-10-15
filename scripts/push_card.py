@@ -46,17 +46,22 @@ def resolve_webhook_key() -> str:
     规则：
       FEISHU_PUSH_ENV=prod -> 正式群 (feishu_webhook_prod)
       FEISHU_PUSH_ENV=test -> 测试群 (feishu_webhook_test)
-      未设 / auto        -> 周一至周五(交易日)用 prod，周末(非交易日)用 test
-    说明：自动判断基于星期，不含法定节假日；节假日若要强制测试，设 FEISHU_PUSH_ENV=test。
+      未设 / auto        -> **A股交易日**用 prod，非交易日（周末 + 法定休市日）用 test
+    说明：交易日判定走唯一真源 `common.trading_calendar`（2026-10-09 起）——
+    此前只判星期，法定休市日（如中秋 09-25、国庆 10-05）会被误推正式群。
     """
     env = os.environ.get("FEISHU_PUSH_ENV", "auto").lower()
     if env == "prod":
         return "feishu_webhook_prod"
     if env == "test":
         return "feishu_webhook_test"
-    # auto: 按星期判断交易日（weekday() 0=周一 ... 4=周五，5/6=周末）
-    wd = datetime.now().weekday()
-    return "feishu_webhook_prod" if wd < 5 else "feishu_webhook_test"
+    now = datetime.now()
+    try:
+        from common.trading_calendar import is_a_share_trading_day
+        is_td = is_a_share_trading_day(now)
+    except Exception:  # pragma: no cover - 极端环境兜底
+        is_td = now.weekday() < 5  # trading-day-fallback: 唯一真源不可用时的周末兜底
+    return "feishu_webhook_prod" if is_td else "feishu_webhook_test"
 
 
 # 飞书 header template 合法枚举（非法值 → 兜底 red，防无色 header·2026-08-18 复盘卡 lime 踩坑）
@@ -257,6 +262,9 @@ def purge_stray_scripts():
 # 只改本文件一处即覆盖全系统（short_spirit / pulse_aggregator 均 subprocess 调本脚本）。
 # 2026-09-11 用户「只要短线精灵+盘中快照+复盘卡」→ 由「异动通道整通道全量」改为
 #   精准白名单匹配（卡名 + 卡标题双维度），内部高频卡（要闻快递/板块拉升/心跳）不再外发。
+# ⚠️ 2026-10-14 用户「快照合并进猎手」→ 白名单②「盘中快照」标题已不再产生（原快照时点改出
+#   猎手卡·标题「盘中猎手·增量」）⇒ settings 里 title_patterns:"盘中快照" 永不命中、客户群少一张卡；
+#   是否改为转发特定时点猎手卡待用户拍板（详见 shared_rules【客户群镜像广播】章节）。
 MIRROR_SETTINGS_KEY = "client_mirror"
 MIRROR_TEST_SOURCE = "feishu_webhook_test"   # ⛔ 测试群来源一律不镜像（硬门·防外泄）
 
@@ -300,8 +308,9 @@ def mirror_targets(card_name: str, source_key: str, card: dict | None = None) ->
     命中条件（任一即命中，exclude_patterns 优先级最高）：
       1) channels —— source_key 在规则 channels 中（整通道全量镜像·能力保留，当前未启用）
       2) card_patterns —— 卡文件名(小写)含任一子串（窄口径，如 short_spirit＝短线精灵）
-      3) title_patterns —— 卡标题含任一子串（跨 AI 拼卡最稳：快照与猎手卡共用
-         /tmp/limao_card.json 文件名，唯有标题「盘中快照」可精准区分）
+      3) title_patterns —— 卡标题含任一子串（跨 AI 拼卡最稳：所有 AI 拼盘中卡共用
+         /tmp/limao_card.json 文件名，唯有标题可区分；猎手＝「盘中猎手·增量」。
+         ⚠️ 2026-10-14 快照并入猎手 → settings 里 title_patterns 的「盘中快照」已失效）
       4) prod_card_patterns —— source_key==feishu_webhook_prod 且文件名含任一子串
          （⛔ 限定 prod，防止测试群的 review_* 测试卡被误镜像到客户群）
 

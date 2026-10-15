@@ -56,11 +56,16 @@ ENABLE_SPIRIT_TIMELINESS = True  # ⛔ 涨停当下性硬门（用户「时间�
 
 EM_URL = ("https://push2.eastmoney.com/api/qt/clist/get?pn={pn}&pz=100&po=1&np=1&fltt=2&invt=2"
           "&fid=f3&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
-          "&fields=f2,f3,f6,f12,f14,f18,f20,f21,f26,f62,f100")
+          # f8=换手率 / f10=量比（2026-10-14 后排预判加：判「温和放量」的唯一客观字段）
+          "&fields=f2,f3,f6,f8,f10,f12,f14,f18,f20,f21,f26,f62,f100")
 # 跌幅榜（2026-09-21 用户「盲区补强」）：po=0=按 f3 降序 → 跌得最狠的排前。其余同 EM_URL。
 EM_DOWN_URL = ("https://push2.eastmoney.com/api/qt/clist/get?pn={pn}&pz=100&po=0&np=1&fltt=2&invt=2"
                "&fid=f3&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
                "&fields=f2,f3,f6,f12,f14,f18,f20,f21,f26,f62,f100")
+# 回退用（2026-10-14）：与加 f8/f10 前的 fields 完全一致 —— 见 fetch_pool 的保险分支。
+EM_URL_LEGACY = ("https://push2.eastmoney.com/api/qt/clist/get?pn={pn}&pz=100&po=1&np=1&fltt=2&invt=2"
+                 "&fid=f3&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
+                 "&fields=f2,f3,f6,f12,f14,f18,f20,f21,f26,f62,f100")
 
 # ── 短线精灵·市值门槛豁免（2026-09-07 用户 A+B 方案 · 默认关）──────────────
 # 背景：用户情绪核心战法（08-14）连板龙头多中小盘，原 min_market_cap_yi=100 把
@@ -112,6 +117,34 @@ ENABLE_SPIRIT_SECTOR_GROUP = True
 SECTOR_GROUP_MIN_ITEMS = 2      # 至少 N 只才列为「联动」（单只不成板块联动）
 SECTOR_GROUP_MAX = 8            # 最多列几个板块（防刷屏）
 
+# ── 后排预判（2026-10-14 用户「再给我推一个今天有可能涨停的个股，就是后排的」）────────
+# 用户原话：「短线精灵，现在除了个股和板块联动，再给我推一个今天有可能涨停的个股；
+#   板块联动，除了最强那只，后面还要跟一个板块跟风，然后列举几个个股+涨幅！
+#   尽量要有辨识度+地位+温和放量」。
+# 定位：现有 signals 只报「已经异动」的票 → 本节报「还没封板、但今日有封板可能的后排」，
+#   并从**原始涨幅榜**（POOL_CACHE.up）里找，不依赖 signals（signals 已过滤掉未异动票）。
+# 选票三判据（用户口径·缺一不可）：
+#   ① 温和放量 = 量比 vol_ratio ∈ [BS_VOL_MIN, BS_VOL_MAX]（缩量无动能 / 爆量抛压重，都不要）；
+#   ② 有辨识度 = top5 题材成分 / latest leaders 榜 / 连板≥1 / 行业命中热点（至少一项）；
+#   ③ 有地位   = 涨幅已进该板块前列（板块内涨幅排名 ≤ BS_SECTOR_RANK）。
+# 且必须「仍在路上」：涨幅已启动但**未封板**（主板 [BS_PCT_MIN, 涨停线)，20cm [BS_PCT_MIN_20, 涨停线)）。
+# ⛔ 排除：ST/退市/科创板688（无权限）/黑名单（京能系·金能科技）/次新（复用 BS_MAX_NEW_DAYS）。
+# ⛔ 两处用途共用同一批候选：① 板块联动段每行后追加「跟风」；② 独立「今日可能涨停」段。
+# ⛔ 可逆开关：ENABLE_SPIRIT_BACKSEAT=False → 卡面回到仅「个股 + 板块联动」的改动前形态。
+ENABLE_SPIRIT_BACKSEAT = True
+BS_PCT_MIN = 4.0            # 主板后排涨幅下限（<4% 动能不足，谈不上「有望涨停」）
+BS_PCT_MIN_20 = 7.0         # 20cm 票后排涨幅下限（同一动能等价于主板的 4%）
+BS_PCT_MAX = 9.9            # 主板未封板上限（≥9.9 视为已封/炸板 → 归 signals 涨停段，不重复报）
+BS_PCT_MAX_20 = 19.5        # 20cm 同上
+BS_AMT_RATIO = 0.6          # 后排票成交额天然小于前排龙头 → 成交额门槛按主链打折
+BS_VOL_MIN = 1.3            # 温和放量下限（<1.3 = 缩量，没资金推）
+BS_VOL_MAX = 6.0            # 温和放量上限（>6 = 爆量，抛压重、容易一日游）
+BS_SECTOR_RANK = 3          # 板块内涨幅排名前 N 才算「有地位」
+BS_MAX_ITEMS = 3            # 「今日可能涨停」段最多列几只（防刷屏）
+BS_FOLLOW_MAX = 2           # 板块联动段每板块最多列几只跟风
+BS_MAX_NEW_DAYS = 365       # 次新剔除窗口（与 noise_filter 同口径）
+BS_EXCLUDE_NAME_KEYS = ("京能", "金能")   # 黑名单（宪法：京能系 / 金能科技）
+
 # ── B 档·后排关联（2026-10-12 用户「取选股宝题材分类下的数据·含已封板」）──────────
 # 用选股宝题材 top5[题材].zt_stocks（该题材涨停票·含 code）补全 relay 后排池，
 #   比按 limit_up_stocks.sector 名称匹配更准（选股宝直接标注的该题材票）。
@@ -157,6 +190,11 @@ EARLY_REALTIME_END_MIN = 9 * 60 + 55     # 09:55
 
 # 东财两页请求是否完整。仅用于审计和前端展示，不因单页失败丢弃已取得的信号。
 FETCH_STATUS = {"up": {}, "down": {}}
+
+# 原始候选池缓存（2026-10-14：「今日可能涨停的后排」段需要**未过滤**的涨幅榜，
+#   而 `signals` 只含已异动票 → 后排候选必须回到原始池里找）。
+# ⛔ 只写不读业务状态，与 FETCH_STATUS 同套路；东财抓取失败 → 空池 → 后排段自然降级为空。
+POOL_CACHE = {"up": [], "down": []}
 
 
 def _lock_path() -> Path:
@@ -237,6 +275,18 @@ def fetch_pool(cfg):
         except Exception as e:
             meta["failed_pages"].append(pn)
             meta["errors"].append(str(e)[:160])
+    # 保险（2026-10-14）：加量比/换手字段(f8/f10)后若**两页全失败** → 用原 fields 回退重试一轮，
+    #   防「字段变更致东财报错 → 池空 → 短线精灵整体停摆」。仅失败路径触发，正常时零开销。
+    #   ⛔ 回退池无 vol_ratio(=0) → 后排预判按「数据缺失放行」，不会空段。
+    if not raw:
+        for pn in (1, 2):
+            try:
+                d = http_get(EM_URL_LEGACY.format(pn=pn))
+                raw.extend(((d.get("data") or {}).get("diff") or []))
+                meta["pages_ok"].append(pn)
+                meta["legacy_fallback"] = True
+            except Exception as e:
+                meta["errors"].append(f"legacy:{str(e)[:120]}")
     meta["complete"] = len(meta["pages_ok"]) == meta["pages_requested"]
     FETCH_STATUS["up"] = meta
     pool = []
@@ -254,9 +304,12 @@ def fetch_pool(cfg):
                 "prev_close": float(it.get("f18") or 0),  # 2026-09-04 涨停封板校验（炸板票不误标涨停）
                 "main_flow_yi": round(float(it.get("f62") or 0) / 1e8, 2),
                 "industry": str(it.get("f100") or ""),
+                "vol_ratio": float(it.get("f10") or 0),      # 量比（温和放量判据·2026-10-14）
+                "turnover": float(it.get("f8") or 0),        # 换手率（辅证·同上）
             })
         except Exception:
             continue
+    POOL_CACHE["up"] = pool          # 后排候选池取用（未过滤原始池·2026-10-14）
     return pool
 
 
@@ -1041,13 +1094,143 @@ def _sector_group_summary(signals):
     return out
 
 
-def build_card(signals, sess, now, relay=None):
+def _theme_code_map(d):
+    """code → 题材名（top5 的 leader / followers / zt_stocks 全量 code 反查题材名）。
+
+    与 `build_signals` 内联口径**同源**（题材化表达的唯一权威）；此处抽成函数供后排预判复用，
+    ⛔ 不改 build_signals 的既有行为。zt_stocks 的 code 形如 `603528.SS` → 取点号前 6 位。
+    """
+    m: dict = {}
+    for s5 in (d.get("top5") or [])[:5]:
+        nm = str(s5.get("name") or "")
+        if not nm:
+            continue
+        L = s5.get("leader") or {}
+        if L.get("code"):
+            m[str(L["code"])[:6]] = nm
+        for f in (s5.get("followers") or []):
+            if f.get("code"):
+                m[str(f["code"])[:6]] = nm
+        for z in (s5.get("zt_stocks") or []):
+            c = str(z.get("code") or "").split(".")[0]
+            if c:
+                m[c[:6]] = nm
+    return m
+
+
+def backseat_pick(pool, signals, d, sess, cfg=None):
+    """后排候选池（2026-10-14 用户「今天有可能涨停的后排·辨识度+地位+温和放量」）。
+
+    从**原始涨幅榜**（未过滤池）里挑「已启动但还没封板、今日有封板可能」的后排票。
+    ⛔ 与 signals（已异动票）互斥 —— 已报过的不重复报。
+    三判据（用户口径·交集）：
+      ① 温和放量：量比 ∈ [BS_VOL_MIN, BS_VOL_MAX]（缺数据 vol_ratio=0 时放行，只降权重）；
+      ② 有辨识度：主线题材成分 / 人气榜(leaders) / 连板≥1 / 行业命中热点（至少一项）；
+      ③ 有地位  ：同板块内涨幅排名 ≤ BS_SECTOR_RANK（板块内身位靠前）。
+    返回 {"potential": [...最多 BS_MAX_ITEMS 只...], "candidates": [...全部...]}。
+    ⛔ 任何异常 → 返回空（降级），绝不抛出（盘中链路安全第一）。
+    """
+    try:
+        cfg = cfg or {}
+        sigs = signals or []
+        empty = {"potential": [], "candidates": []}
+        if not pool:
+            return empty
+        t5codes = top5_codes(d)
+        theme_map = _theme_code_map(d)
+        leader_codes = {str(l.get("code") or "")[:6]
+                        for l in (d.get("leaders") or []) if isinstance(l, dict) and l.get("code")}
+        board_map = _boards_map(d)
+        kws = hot_keywords(d)
+        cap_thr = SPIRIT_LOWCAP_YI if ENABLE_SPIRIT_LOWCAP else float(cfg.get("min_market_cap_yi") or 0)
+        amt_thr = (float(cfg.get("amount_morning_yi") or 5) if sess == "morning"
+                   else float(cfg.get("amount_afternoon_yi") or 10)) * BS_AMT_RATIO
+        cutoff = datetime.now() - timedelta(days=BS_MAX_NEW_DAYS)
+        seen = {str(s.get("code") or "")[:6] for s in sigs}
+
+        cands = []
+        for s in pool:
+            code = str(s.get("code") or "")
+            name = str(s.get("name") or "")
+            if not code or not name or code in seen:
+                continue
+            if "ST" in name or "退" in name or "*" in name:
+                continue
+            if code[:3] == "688":                       # 科创板：用户无权限
+                continue
+            if any(k in name for k in BS_EXCLUDE_NAME_KEYS):
+                continue
+            pct = float(s.get("pct") or 0)
+            is20 = code[:3] in ("300", "301")
+            lo, hi = (BS_PCT_MIN_20, BS_PCT_MAX_20) if is20 else (BS_PCT_MIN, BS_PCT_MAX)
+            if pct < lo or pct >= hi:                   # 未启动 或 已封板 → 都不是「后排可冲板」
+                continue
+            vr = float(s.get("vol_ratio") or 0)
+            if vr > 0 and not (BS_VOL_MIN <= vr <= BS_VOL_MAX):   # 缩量/爆量剔除（缺数据放行）
+                continue
+            if float(s.get("market_cap_yi") or 0) < cap_thr:
+                continue
+            if float(s.get("amount_yi") or 0) < amt_thr:
+                continue
+            ld_ = s.get("list_date")
+            if ld_ and len(str(ld_)) == 8:
+                try:
+                    if datetime.strptime(str(ld_), "%Y%m%d") > cutoff:
+                        continue
+                except ValueError:
+                    pass
+            # ② 辨识度：主线题材 / 人气榜 / 连板 / 行业命中热点（至少一项，否则不列）
+            boards = int(board_map.get(code, 0) or 0)
+            ident = []
+            if code in t5codes or code in theme_map:
+                ident.append("主线题材")
+            if code in leader_codes:
+                ident.append("人气榜")
+            if boards >= 1:
+                ident.append(f"{boards}板")
+            if not ident and str(s.get("industry") or "") in kws:
+                ident.append("板块热点")
+            if not ident:
+                continue                                # 无任何辨识度 → 不列（体系：不推杂毛）
+            sector = theme_map.get(code) or str(s.get("industry") or "") or "其他"
+            cands.append({
+                "name": name, "code": code, "sector": sector,
+                "industry": str(s.get("industry") or ""),
+                "pct": pct, "vol_ratio": vr, "boards": boards,
+                "amount_yi": float(s.get("amount_yi") or 0),
+                "flow_yi": float(s.get("main_flow_yi") or 0),
+                "why": "·".join(ident[:2]) or "题材内靠前",
+            })
+        # ③ 地位：同板块按涨幅降序 → 只留身位靠前的（前 BS_SECTOR_RANK）
+        by_sec: dict = {}
+        for c in cands:
+            by_sec.setdefault(c["sector"], []).append(c)
+        ranked = []
+        for _sec, arr in by_sec.items():
+            arr.sort(key=lambda x: -x["pct"])
+            ranked.extend(arr[:BS_SECTOR_RANK])
+        # 排序：越接近涨停线越有动能；量比越居中（温和）越好
+        for c in ranked:
+            is20 = c["code"][:3] in ("300", "301")
+            prox = min(c["pct"] / (BS_PCT_MAX_20 if is20 else BS_PCT_MAX), 1.0)
+            vol_sc = 1.0 if 1.5 <= c["vol_ratio"] <= 3.5 else (0.6 if c["vol_ratio"] > 0 else 0.5)
+            c["score"] = round(prox * 0.6 + vol_sc * 0.4, 4)
+        ranked.sort(key=lambda x: -x["score"])
+        return {"potential": ranked[:BS_MAX_ITEMS], "candidates": ranked}
+    except Exception as e:                              # ⛔ 盘中链路安全第一：新段异常不得影响主卡
+        print(f"[short_spirit] 后排预判降级(已忽略): {e}")
+        return {"potential": [], "candidates": []}
+
+
+def build_card(signals, sess, now, relay=None, backseat=None):
     """飞书卡（2026-08-18 用户定·向窗口卡事件流风格看齐）：
     按异动类型分组（🔥涨停/🚀冲板/⚡快速拉升），一行一只，字段压缩到一行。
     ⛔ 2026-08-25 修复（用户抓包「又忘了红涨绿跌」+「红色颜色不对」）：
        - `<font color>` 飞书不渲染（shared_rules 实测 08-14）→ 一律 `<text_tag>` 胶囊；
        - 涨幅数字按涨跌着色（+红/-绿），个股名与涨幅同色号：涨停/快速拉升=red、接近涨停=purple
          （快速拉升曾用 orange，飞书渲染偏橘红与涨幅正红不一致 → 已改 red，类型靠分组标题区分）。
+    📈 2026-10-14 加 `backseat`（后排预判·见 `backseat_pick`）：板块联动段每行后追加「跟风」，
+       并新增「今日可能涨停（后排）」段。`backseat=None` 或开关关 → 卡面回到改动前形态。
     """
     def md(*lines):
         return {"tag": "lark_md", "content": "\n".join(lines)}
@@ -1083,6 +1266,10 @@ def build_card(signals, sess, now, relay=None):
             lines.append(
                 f"　<text_tag color='{col}'>{s['name']}({s['code']})</text_tag> "
                 f"{_pct_tag(s['pct'])}（{s['sector']}）｜⚡{s['reason']}")
+    # 后排候选（2026-10-14）：板块联动「跟风」与「今日可能涨停」段共用同一批候选（backseat_pick 产出）。
+    _bs = backseat if isinstance(backseat, dict) else {}
+    _bs_cands = _bs.get("candidates") or []
+    _bs_followed: set = set()
     # 🔥 板块联动归纳（2026-10-12 用户「尽量进行板块联动的观察归纳」）：
     #   把本轮异动按板块聚合 → 「风电 3只(涨停1)｜最强 X」。纯呈现层；异常降级不影响主卡。
     if ENABLE_SPIRIT_SECTOR_GROUP:
@@ -1099,8 +1286,45 @@ def build_card(signals, sess, now, relay=None):
                     _seg += (f"｜最强 {_top.get('name')}({_top.get('code')}) "
                              f"{_pct_tag(float(_top.get('pct') or 0))}")
                     lines.append(_seg)
+                    # 跟风（2026-10-14 用户「除了最强那只，后面还要跟一个板块跟风，列举几个个股+涨幅」）：
+                    #   从后排候选里取**同板块**别的票（候选已剔除 signals → 天然不含「最强那只」），
+                    #   辨识度/地位/温和放量已由 backseat_pick 保证。开关同 ENABLE_SPIRIT_BACKSEAT。
+                    if ENABLE_SPIRIT_BACKSEAT and _bs_cands:
+                        _top_code = str(_top.get("code") or "")[:6]
+                        _fol = [c for c in _bs_cands
+                                if str(c.get("code") or "") not in _bs_followed
+                                and str(c.get("code") or "") != _top_code
+                                and _sector_match(_sec, str(c.get("sector") or ""))][:BS_FOLLOW_MAX]
+                        if _fol:
+                            _bs_followed |= {str(x.get("code") or "") for x in _fol}
+                            lines.append("　　↳ 跟风：" + "｜".join(
+                                f"{x['name']}({x['code']}) {_pct_tag(float(x['pct'] or 0))}"
+                                for x in _fol))
         except Exception as e:  # ⛔ 盘中链路安全第一：新段异常不得影响主卡
             print(f"[short_spirit] 板块联动段降级(已忽略): {e}")
+    # 📈 今日可能涨停（后排）（2026-10-14 用户「再给我推一个今天有可能涨停的个股，就是后排的」）：
+    #   与「涨停信号」互补 —— 那边报已封板，这边报「已启动、还没封、今日有封板可能」的后排。
+    #   已被板块联动当「跟风」展示过的不重复列（同卡不自我重复）。
+    if ENABLE_SPIRIT_BACKSEAT:
+        try:
+            # 同卡不重复：已被板块联动当「跟风」、或已被接力段当「后排可参与」的 → 此处不再列。
+            _relay_codes = {str(x.get("code") or "")[:6]
+                            for x in ((relay or {}).get("tradable") or [])}
+            _pot = [c for c in (_bs.get("potential") or [])
+                    if str(c.get("code") or "") not in _bs_followed
+                    and str(c.get("code") or "") not in _relay_codes]
+            if _pot:
+                lines.append("")
+                lines.append("**📈 今日可能涨停（后排）**：")
+                for c in _pot:
+                    _why = str(c.get("why") or "")
+                    if float(c.get("vol_ratio") or 0) > 0:      # 量比有数据才写「温和放量」
+                        _why = (_why + "·" if _why else "") + "温和放量"
+                    lines.append(
+                        f"　{c['name']}({c['code']}) {_pct_tag(float(c['pct'] or 0))}"
+                        f"（{c['sector']}）" + (f"｜{_why}" if _why else ""))
+        except Exception as e:  # ⛔ 盘中链路安全第一：新段异常不得影响主卡
+            print(f"[short_spirit] 后排预判段降级(已忽略): {e}")
     # 🎯 板块接力方向（2026-10-08 用户核心功能·A 盘中即时）：
     #   「捕获到主线板块强势票涨停 → 顺势给该方向该买什么」。
     #   2026-10-08 二改（用户：「如果他是前排，记得把这个后排也标记出来，带上可参与后排的涨幅」）：
@@ -1422,7 +1646,16 @@ def _run(args):
                           "tradable": [x["code"] for x in relay["tradable"]]})
         else:
             relay = None
-    card = build_card(card_signals, sess, now, relay=relay)
+    # 📈 后排预判（2026-10-14 用户「今天有可能涨停的后排」）：从**原始涨幅榜**挑候选。
+    #   数据源 = build_signals 当轮缓存的未过滤池（POOL_CACHE.up）；东财抓取失败 → 空池 →
+    #   板块联动「跟风」与「今日可能涨停」两段自然不渲染（降级安全）。
+    _backseat = None
+    if ENABLE_SPIRIT_BACKSEAT:
+        try:
+            _backseat = backseat_pick(POOL_CACHE.get("up") or [], card_signals, d, sess, cfg)
+        except Exception as e:
+            print(f"[short_spirit] 后排预判降级(已忽略): {e}")
+    card = build_card(card_signals, sess, now, relay=relay, backseat=_backseat)
     cf = ROOT / "cache" / "short_spirit_card.json"
     save_json(cf, card)
     # ⛔ 有界修复（2026-09-17）：入池后、任何发送尝试之前可靠落盘 pending（update_last=False）。

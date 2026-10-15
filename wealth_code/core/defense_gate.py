@@ -76,6 +76,8 @@ DEFENSE_ENV_ENABLED = True
 DEFENSE_SECTOR_DRAIN_ENABLED = True
 # ③ 派发特征
 DEFENSE_DISTRIBUTION_ENABLED = True
+# ③b 派发·组合升级（2026-10-12 收紧）：{封单薄 + 封得晚}（不含大换手）∧ 位置已很高 → 硬闸
+DEFENSE_DIST_THIN_LATE_ENABLED = True
 # ④ 位置（高位二波）
 DEFENSE_POSITION_ENABLED = True
 # ⑤ 老龙复燃（炒过的老票沉寂很久后又拉首板）
@@ -100,8 +102,15 @@ DIST_HS_MIN = 15.0                # 换手率（%）≥ 该值
 DIST_SEAL_RATIO_MAX = 2.0         # 封单 / 流通市值（%）< 该值
 DIST_FBT_LATE_HM = 1000           # 封板时间（HHMM）≥ 10:00 算「封得晚」
 DIST_BLOCK_HITS = 3               # 三条全中 → 硬闸（不占名额）
-DIST_WARN_HITS = 2                # 两条 + 高位 → 只留痕警示
-DIST_HIGH_POSITION_DEV10 = 40.0   # 近 10 日相对指数超额（%）≥ 该值算「已经涨了一大截」
+DIST_WARN_HITS = 2                # 两条 + 10 日位置偏高 → 只留痕警示
+DIST_HIGH_POSITION_DEV10 = 40.0   # ⚠️ 旧口径：只认近 10 日相对指数超额（仅用于 warn 留痕）
+# ③b 组合升级（2026-10-12 收紧·用户「如果是指标问题，收一收」·国芳集团漏网案例）：
+#   「封单薄 + 封得晚」这两条（**不含**大换手）＋ 位置**已经很高** → 与三条全中同等危险，
+#   直接不占名额。⛔ 这里的「位置高」改用 ④ 位置闸的**同一口径**（dev10 ≥45 或 dev30 ≥50）
+#   —— 原实现只认 `dev_10d_pct ≥40`，而国芳集团 10 日只涨 3.9%、30 日已多涨 97.8%
+#   → 旧口径判「不高」→ 连 warn 都没有；次日 10-12 竞价 +2.41% 买入、收盘 −12.09%。
+#   ⛔ 只收紧这一对组合：实测「换手大 + 封单薄」那条 55 个可成交样本里含闽东电力 +7.32%、
+#   传艺科技 +10.92% 等大赢家 → 一并收紧会砍掉真龙头（新增 41 条拦截，已被数据否证）。
 
 # ── ① 环境名额降档 ───────────────────────────────────────────────────────────
 ENV_SENTIMENT_MIN = 2.0           # 昨收情绪分 ≤ 该值算弱
@@ -209,52 +218,96 @@ def distribution_verdict(it: dict[str, Any] | None) -> dict[str, Any]:
     """派发特征判据（**只读**）。
 
     level：
-      · "block" → 三条全中（换手大 ∧ 封单薄 ∧ 封得晚）＝大资金借涨停往外倒货 → 不占名额
-      · "warn"  → 中两条且位置已高 → 卡面留痕警示，不否决
+      · "block" → ① 三条全中（换手大 ∧ 封单薄 ∧ 封得晚）＝大资金借涨停往外倒货 → 不占名额
+                  ② 「封单薄 + 封得晚」两条 ＋ **位置已经很高**（2026-10-12 收紧）
+      · "warn"  → 中两条且 10 日位置偏高（旧口径）→ 卡面留痕警示，不否决
       · "none"  → 其余 / 数据不足
+
+    `kind` ∈ `triple` / `thin_late_high` / `warn` / `""` —— 两种脏法的话术不同，
+    裁决链据此落不同的卡面标签（`pool_call` → `defense_gate` 码）。
+
+    ⛔ 2026-10-12 收紧（用户「如果是指标问题，收一收」）：原实现的「位置高」只认
+      `_pos10`（＝`dev_10d_pct`，门槛 40），而 ④ 位置闸认 `dev10 ≥45 或 dev30 ≥50`
+      —— **同一个「位置高」两套口径**。国芳集团(601086) 10-09 正是从这个缝漏过去的：
+      换手仅 10.6%（第一条不中）、封单只占流通 0.60%（中）、10:16 才封板（中），
+      10 日只涨 3.9% → 旧口径判「不高」→ 连 warn 都没有；但它 30 日相对大盘已多涨 97.8%。
+      次日 10-12 竞价 +2.41% 被买入 → 收盘 **−12.09%**。
+      收紧后「封单薄 + 封得晚 + 位置高」直接 block，且位置口径与 ④ 位置闸统一。
+    ⛔ 校准（469 条候选行 · 只算**真会成交**的样本＝竞价红开且 ≤5%，竞价买→收盘）：
+      新增拦截 7 条，其中可成交的 3 条 ＝ 威尔高 −9.48% / 国芳集团 −12.09% / 会稽山 +2.60%
+      （均值 −6.32%）。**不同步收紧**「换手大 + 封单薄」那条（含闽东电力等大赢家）。
     """
+    it = it if isinstance(it, dict) else {}
     q = seal_quality(it)
     hs, ratio, fbt = q["hs_pct"], q["seal_ratio_pct"], q["fbt_hm"]
     facts: dict[str, Any] = {}
     hits: list[str] = []
 
+    big_turn = hs is not None and hs >= DIST_HS_MIN
+    thin_seal = ratio is not None and ratio < DIST_SEAL_RATIO_MAX
+    late_seal = fbt is not None and fbt >= DIST_FBT_LATE_HM
+
     if hs is not None:
         facts["hs_pct"] = round(hs, 2)
-        if hs >= DIST_HS_MIN:
+        if big_turn:
             hits.append(f"换手 {hs:.1f}%（超过 {DIST_HS_MIN:.0f}% 就是筹码在大换手）")
     if ratio is not None:
         facts["seal_ratio_pct"] = ratio
-        if ratio < DIST_SEAL_RATIO_MAX:
+        if thin_seal:
             hits.append(f"封单只占流通盘的 {ratio:.2f}%（没有资金愿意把封单堆厚）")
     if fbt is not None:
         facts["fbt_hm"] = fbt
-        if fbt >= DIST_FBT_LATE_HM:
+        if late_seal:
             hits.append(f"{_fmt_hm(fbt)} 才封板（封得晚，是被动跟出来的）")
     pos = q["pos10_pct"]
-    high = pos is not None and pos >= DIST_HIGH_POSITION_DEV10
+    high_warn = pos is not None and pos >= DIST_HIGH_POSITION_DEV10
     if pos is not None:
         facts["pos10_pct"] = round(pos, 1)
 
+    # 高位读数与 ④ 位置闸同口径（dev10 ≥45 或 dev30 ≥50）——2026-10-12 统一
+    high_strong, pos_facts = _high_position(it)
+    facts["high_dev10_pct"] = pos_facts.get("dev10_pct")
+    facts["high_dev30_pct"] = pos_facts.get("dev30_pct")
+
     n = len(hits)
+    # ③b「封单薄 + 封得晚」这一对（不含大换手）＋ 位置已经很高
+    thin_late = bool(DEFENSE_DIST_THIN_LATE_ENABLED and thin_seal and late_seal
+                     and not big_turn)
+    kind = ""
     if n >= DIST_BLOCK_HITS:
-        level = "block"
-    elif n >= DIST_WARN_HITS and high:
-        level = "warn"
+        level, kind = "block", "triple"
+    elif thin_late and high_strong:
+        level, kind = "block", "thin_late_high"
+    elif n >= DIST_WARN_HITS and high_warn:
+        level, kind = "warn", "warn"
     else:
         level = "none"
 
-    if level == "block":
+    note = ""
+    if kind == "triple":
         note = ("昨天它 " + "、".join(hits) +
                 "——三样凑一起就是大资金在借涨停往外倒货")
-        if high:
+        if high_warn:
             note += f"，而且 10 天已经涨了 {pos:.0f}%，位置也高了"
-    elif level == "warn":
+    elif kind == "thin_late_high":
+        note = ("昨天它 " + "、".join(hits) +
+                "——封得又晚、封单又薄，钱不愿意往上做")
+        _d10, _d30 = pos_facts.get("dev10_pct"), pos_facts.get("dev30_pct")
+        # 说**真正触发**的那条腿：10 日够高就说 10 日，否则说 30 日
+        # （国芳集团就是 30 日的账：10 日只涨 3.9%、30 日已多涨 97.8%）
+        if _d10 is not None and _d10 >= POSITION_DEV10_MIN:
+            _pos_txt = f"10 天已经涨了 {_d10:.0f}%"
+        elif _d30 is not None:
+            _pos_txt = f"30 天已经涨了 {_d30:.0f}%"
+        else:
+            _pos_txt = "股价已经拉得很高"
+        note += f"，而且它{_pos_txt}，人在高位，接力等于给前面的人抬轿子"
+    elif kind == "warn":
         note = ("昨天它 " + "、".join(hits) +
                 f"，加上 10 天已经涨了 {pos:.0f}%，位置偏高，留神派发")
-    else:
-        note = ""
-    return {"level": level, "hits": hits, "hit_count": n, "facts": facts,
-            "high_position": bool(high), "note": note}
+    return {"level": level, "kind": kind, "hits": hits, "hit_count": n, "facts": facts,
+            "high_position": bool(high_warn), "high_position_strong": bool(high_strong),
+            "note": note}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

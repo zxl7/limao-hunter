@@ -1,0 +1,35 @@
+{
+  "task": "财富密码盘后候选卡",
+  "trade_date": "2026-09-30",
+  "checked_at": "2026-09-30 15:33:26 +0800",
+  "status": "blocked_not_sent",
+  "failed_step": "2. 收盘涨停快照刷新",
+  "error": "HTTP Error 429: Too Many Requests",
+  "source": "必盈涨停池接口（record_zt_snapshot.py）",
+  "evidence": {
+    "yesterday_zt_date": "2026-09-29",
+    "today_archive": "/Users/zxl/WorkBuddy/狸猫猎手/cache/zt_history/zt_2026-09-30.json",
+    "today_archive_intraday_only": true,
+    "today_archive_complete_zt_rows": 0,
+    "today_candidates_exists": false,
+    "today_pool_call_exists": true,
+    "today_pool_call_validity": "仅核对存在；未核验报价时点及业务有效性，不作为本轮结算依据"
+  },
+  "not_executed": [
+    "题材轮动刷新",
+    "盘后候选生成",
+    "个股点评及全局旁白",
+    "下一交易日AI预案及台账记录",
+    "盘后候选卡推送",
+    "今日AI评估账结算及状态查询",
+    "真实成绩可视化刷新"
+  ],
+  "safety": {
+    "stale_data_substituted": false,
+    "manual_pool_call_created": false,
+    "holdings_read_or_written": false,
+    "core_code_or_schedule_changed": false,
+    "push_sent": false
+  },
+  "next_step": "待上游恢复后，从步骤2重新刷新当日完整收盘涨停池，再按原顺序继续；本轮未安排自动重试。"
+}

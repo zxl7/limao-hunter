@@ -701,6 +701,10 @@ _NARR_LABEL_ALIAS = {
     "市场": "今日盘面", "大盘": "今日盘面",
     "操作": "操作思路", "操作思路": "操作思路",
     "昨日逻辑": "昨日逻辑",
+    # 依据 = 昨日实时盘面事实（上涨逻辑·2026-10-14 用户图学习）：段名用「上涨逻辑」
+    # （不带时点词 → 跨日平移安全，不会被 _shift_day_words 改成「前日…」）。
+    "依据": "上涨逻辑", "上涨逻辑": "上涨逻辑",
+    "推演": "操作思路", "预案": "操作思路", "操作建议": "操作思路",
 }
 _NARR_LINE_TARGET = 56          # 单行目标字数（折行阈值 = 56×1.35 ≈ 76 字）
 _NARR_SEG_ORDER = ("今日走势", "题材催化", "历史股性", "⚠️ 风险")
@@ -872,6 +876,11 @@ def _narr_render(narrative, indent: str = "　　", *, prev: bool = False) -> st
             body = _shift_day_words(body)
         if lab == "⚠️ 风险":
             lines.append(f"{indent}<text_tag color='turquoise'>⚠️ 风险</text_tag>：{body}")
+        elif lab == "操作思路":
+            # 操作思路 = 今日条件推演（若…则…）·关键执行信息 → violet 标签醒目
+            # （2026-10-14 用户图学习：左「上涨逻辑」=昨日事实，右「操作建议」=条件分支，
+            #   两者必须分层呈现；violet 不占红绿语义，攻防两种动作都适用）。
+            lines.append(f"{indent}<text_tag color='violet'>🎯 操作思路</text_tag>：{body}")
         elif lab:
             lines.append(f"{indent}**{lab}**：{body}")
         else:
@@ -1349,9 +1358,11 @@ def _ai_view_line(it: dict, ai_view: dict) -> str:
         txt += "\n" + f"　　<font color='grey'>{_oc.get('pool_reason')}</font>"
         if _plan_reason:
             _plan_text = _narr_render(_plan_reason, indent="　　", prev=True)
-            # 标题是读卡时点，不参与跨日平移；只平移盘后写下的正文。
+            # 「依据」段名已被 alias 识别为「**上涨逻辑**」（2026-10-14）→ 不再叠加手动前缀；
+            #  仅当理由是旧格式（无段名正文）时才兜底加「昨日逻辑」。
             if _plan_text:
-                _plan_text = _plan_text.replace("　　", "　　**昨日逻辑**：", 1)
+                if "**上涨逻辑**" not in _plan_text:
+                    _plan_text = _plan_text.replace("　　", "　　**昨日逻辑**：", 1)
                 txt += "\n" + _plan_text
         return txt
 
@@ -1806,10 +1817,47 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
                                          payload.get("date"))
                 blocks.append(_div(f"🗣️ **全局**{_lbl}\n{_gn_body}"))
 
+    # 🎯 接力动态仓位 + 🤖 明日买入预案（2026-10-14 用户「盘后卡必须体现动态仓位和买入」）
+    # 背景：动态仓位 2026-10-13 只接到了 09:25 竞价卡（`_relay_position_block` 在 verify 侧），
+    #   盘后卡既不显示仓位、也不显示 AI 预案 → 用户在盘后看不到「明天怎么打、买多少」。
+    # ⛔ 单一判据源 = `core.relay_position`（不在渲染层自算仓位）；视图缺失 → 诚实省略。
+    _rp_plan = None
+    try:
+        from core.relay_position import build_plan_from_files as _build_relay_plan
+        _plan_cands = {
+            k: [{"code": str(c.get("code") or ""), "name": str(c.get("name") or ""),
+                 "theme_name": str(c.get("theme_name") or c.get("core_theme")
+                                   or c.get("sector") or "")}
+                for c in (payload.get(k) or [])]
+            for k in ("relay", "watch")
+        }
+        # 盘后无今晨竞价 → S_m 由 relay_position 诚实取中性；档位由昨日强势 + 题材沉淀决定。
+        _rp_plan = _build_relay_plan(ROOT.parent, candidates=_plan_cands, quotes=None)
+        _rp_block = _relay_position_block(_rp_plan, day_word="明天",
+                                          title="明日接力仓位建议（动态）")
+        if _rp_block:
+            blocks.append(_hr())
+            blocks.extend(_rp_block)
+    except Exception as _e:                       # 诚实降级·绝不阻断出卡
+        print(f"[eod_card] 动态仓位块跳过：{_e}")
+        _rp_plan = None
+
+    try:
+        # 注入优先（cmd_eod 已 attach）→ 兜底读盘；`payload["ai_plan"]={}` 表示显式无预案。
+        _ai_raw_eod = (payload.get("ai_plan") if "ai_plan" in payload
+                       else _load_ai_view_raw(_next_trade_day_inline(date)))
+        _ap_block = _ai_plan_eod_block(
+            _ai_raw_eod, {str(c.get("code") or ""): c for c in (relay + watch)}, date)
+        if _ap_block:
+            blocks.append(_hr())
+            blocks.extend(_ap_block)
+    except Exception as _e:                       # 诚实降级·绝不阻断出卡
+        print(f"[eod_card] AI 买入预案块跳过：{_e}")
+
     # 🎯 明日执行判定（2026-09-09 主导决策机械层·decision_outlook.py·读真实文件·禁编数字）
     try:
         from core.decision_outlook import decision_from_files as _decision_from_files
-        _dec = _decision_from_files(ROOT.parent)
+        _dec = _decision_from_files(ROOT.parent, relay_plan=_rp_plan)
     except Exception:
         _dec = {}
     if _dec.get("verdict"):
@@ -1842,7 +1890,12 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
 
 def _vol_weak_flag(oc: dict) -> str:
     """验证卡唯一量能增量（用户2026-08-13定）：实际竞价成交额 < 预期量能线 → 缩量（蓝），其余不标。
-    聚焦竞价指标本身，不做爆量/放量/平量/地量多档判断。"""
+    聚焦竞价指标本身，不做爆量/放量/平量/地量多档判断。
+
+    ⛔ **调用约束（宪法 ⓪-10 · 2026-10-14 立）**：本函数返回 `<text_tag>`，
+    调用方**禁止把它插进 `<font>…</font>` 之间**（外层吞内层·整卡降级为无样式）。
+    正确写法＝贴在 `</font>` 之后，或把该行拆成「font 段 + 本函数 + font 段」。
+    `scripts/card_lint.py` 已把 font↔text_tag 嵌套升为 **FAIL 硬阻断**。"""
     amt = oc.get("auction_amount_yi")
     need = oc.get("auction_amount_need_yi")
     if isinstance(amt, (int, float)) and isinstance(need, (int, float)) and amt < need:
@@ -1939,6 +1992,155 @@ def _sector_support_tag(r: dict) -> str:
         n = int(ss.get("red_open") or 0)
         return f"<text_tag color='purple'>🧲同板块 {n}家高开助攻</text_tag>"
     return ""
+
+
+def _relay_position_block(plan: dict | None, *, day_word: str = "今天",
+                          title: str = "今日接力仓位建议（动态）") -> list[dict] | None:
+    """早盘接力·动态仓位建议块（2026-10-13 用户需求）。
+
+    把 relay_position 的方案渲染成**大白话**块（过 card_lint 白话门禁）：行情强弱定调 +
+    同时持有只数 + 单票/总仓上限 + 题材沉淀置信 + 回撤降档提示。失败/禁用 → None（不渲染）。
+
+    ⏱️ 时点（2026-10-14）：盘后候选卡渲染的是**次日**方案 → 传 `day_word="明天"` /
+    `title="明日接力仓位建议（动态）"`；09:25 竞价卡渲染当日 → 用默认「今天 / 今日」。
+    🎯 动态两段式（同日用户「动态仓位必须让人看见」）：只要回撤压过仓，就同时给出
+    「按行情档位能给到」与「实际压到」两行——只给最终一个数字，读者看不出"动态"。
+    """
+    if not isinstance(plan, dict):
+        return None
+    if not plan.get("enabled", True):
+        return None
+    tier = plan.get("tier_label") or ""
+    quota = plan.get("quota")
+    per = plan.get("per_pick_cap")
+    total = plan.get("total_cap")
+    can_buy = plan.get("can_buy", True)
+    ti = (plan.get("_diag") or {}).get("theme_info") or {}
+    day_count = ti.get("day_count")
+    theme_count = ti.get("theme_count")
+
+    lines: list[str] = []
+
+    def _pct(v) -> str:
+        """仓位百分比显示：<10% 保留 1 位小数（避免 4.5% 被 .0f 舍成 4%）。"""
+        n = v * 100
+        return f"{n:.1f}%" if n < 10 else f"{n:.0f}%"
+
+    if not can_buy:
+        # 防御分支：本系统（relay_position）2026-10-13 起**不再产生 can_buy=False**
+        # （回撤改为动态压仓·不禁买）；此处仅为外部注入 plan 的兜底渲染。
+        dd_v = plan.get("drawdown_pct")
+        reason = f"账户回撤 -{dd_v:.2f}%" if isinstance(dd_v, (int, float)) else "行情过弱"
+        lines.append(f"🛡️ {day_word}不参与（{reason} → 仓位建议不生效）")
+    elif isinstance(per, (int, float)) and isinstance(total, (int, float)) and isinstance(quota, int):
+        lines.append(f"行情强弱：{tier}")
+        dd = plan.get("drawdown_pct")
+        mult = plan.get("drawdown_mult")
+        # 回撤实际压过仓才算「动态」：此时先给档位基数、再给压后实际（2026-10-14）。
+        _pressed = (plan.get("drawdown_level") in ("soft", "heavy")
+                    and isinstance(dd, (int, float))
+                    and isinstance(mult, (int, float)) and mult < 0.999)
+        if _pressed:
+            try:
+                from core.relay_position import tier_caps as _tier_caps
+                _bq, _bp, _bt = _tier_caps(str(plan.get("tier") or ""))
+                lines.append(f"按行情档位能给到：最多 {_bq} 只 · 每只不超过 {_pct(_bp)} · "
+                             f"总仓位不超过 {_pct(_bt)}")
+            except Exception:
+                pass
+            lines.append(
+                f"账户回撤 -{dd:.2f}% → 实际压到：{day_word}最多同时持有 {quota} 只 · "
+                f"每只不超过 {_pct(per)} · 总仓位不超过 {_pct(total)}"
+                f"（按回撤压到原来的 {mult:.0%}·动态控制不禁买）")
+        else:
+            lines.append(f"{day_word}最多同时持有 {quota} 只 · 每只不超过 {_pct(per)} · "
+                         f"总仓位不超过 {_pct(total)}")
+    # 题材库沉淀 = 客观事实（判断交给 hints，避免同一件事说两遍）
+    if isinstance(day_count, int) and isinstance(theme_count, int) and day_count:
+        lines.append(f"题材库已沉淀 {day_count} 天（共 {theme_count} 个题材）")
+    # 提示：回撤已在上一行直说 → 跳过重复；「可正常给仓位」在不参与时是误导 → 跳过
+    for h in (plan.get("hints") or []):
+        if "账户回撤" in h:
+            continue
+        if not can_buy and ("禁买" in h or "可正常给仓位" in h):
+            continue
+        lines.append(f"　{h}")
+    if not lines:
+        return None
+    return [_div(f"🎯 **{title}**\n" + "\n".join(lines))]
+
+
+def attach_eod_ai_plan(payload: dict) -> dict:
+    """给盘后候选 payload 注入次日 AI 预案视图（`cache/ai_view_<次日>.json`）。
+
+    由 `run_wealth_code.cmd_eod` 在推卡前调用——**注入式**而非渲染层隐式读盘：
+    渲染函数拿到确定输入，单测可注入 `{"ai_plan": {}}` 隔离真实 cache（防跨日误读）。
+    ⛔ 注入失败 → 空 dict（诚实省略该块，不阻断出卡）。
+    """
+    if not isinstance(payload, dict) or "ai_plan" in payload:
+        return payload
+    try:
+        payload["ai_plan"] = _load_ai_view_raw(
+            _next_trade_day_inline(str(payload.get("date") or "")))
+    except Exception:
+        payload["ai_plan"] = {}
+    return payload
+
+
+def _ai_plan_eod_block(raw: dict, cand_by_code: dict,
+                       session_date: str | None = None) -> list[dict]:
+    """🤖 AI 明日买入预案（2026-10-14 用户「文案要体现动态仓位和买入这块内容」）。
+
+    盘后候选卡的**预案段**：读 `cache/ai_view_<次日>.json`（由 `ai_ledger record` 写，
+    在 eod 推卡前一步落盘），只渲染「定调 + 方向 + 逐票预案档」。
+    ⛔ 不含「买哪只」——那由**次日 09:25** 池内裁决产出（`_ai_plan_block`，竞价卡渲染）；
+      时序大前提＝盘后只缩范围、不拍板（2026-09-21 用户定）。
+    ⛔ 理由只在此处渲染一次（盘后卡别处不渲染 AI 理由），走 `_narr_render` 分段排版。
+    视图缺失（未跑 record / 非交易日）→ []（诚实省略，不编造）。
+    """
+    views = raw.get("views") or {}
+    if not views:
+        return []
+    _dd = str(raw.get("decision_date") or session_date or "")
+    mmdd = _dd[5:] if len(_dd) >= 10 else _dd
+    stance_label = (str(raw.get("stance_label") or "")
+                    or _AI_STANCE_FALLBACK.get(str(raw.get("stance") or ""), ""))
+    direction = str(raw.get("direction") or "").strip()
+    note = str(raw.get("note") or "").strip()
+
+    blocks: list[dict] = [_div(
+        f"**🤖 AI 明日买入预案**<font color='grey'>（{mmdd} 盘后定 · 重点看 / 一般 / 回避；"
+        "买哪只次日 9:25 竞价开出来后定）</font>")]
+    head = []
+    if stance_label:
+        head.append(f"定调：{stance_label}")
+    if direction:
+        head.append(f"方向：{direction}")
+    if head:
+        blocks.append(_div("｜".join(head)))
+    if note:
+        blocks.append(_div(f"<font color='grey'>{note}</font>"))
+
+    def _nm(code: str, v: dict) -> str:
+        it = cand_by_code.get(str(code)) or {}
+        return str(it.get("name") or v.get("name") or code)
+
+    focus = [(str(c), v) for c, v in views.items() if _is_focus(v)]
+    if focus:
+        blocks.append(_div(f"　<text_tag color='red'>重点看（{len(focus)} 只·竞价不超 5% 才买）</text_tag>："))
+        for code, v in focus:
+            it = cand_by_code.get(code) or {}
+            blocks.append(_div(f"　　{_hl(_nm(code, v) + '(' + code + ')', 'red')}{_boards_txt(it)}"))
+            _rs = str((v or {}).get("reason") or "").strip()
+            if _rs:
+                blocks.append(_div(_narr_render(_rs)))
+    else:
+        blocks.append(_div("<font color='grey'>　明日没有给「重点看」的票（都按一般或回避处理）</font>"))
+    others = [_nm(str(c), v) for c, v in views.items() if not _is_focus(v)]
+    if others:
+        shown = "、".join([o for o in others if o][:8]) + ("等" if len(others) > 8 else "")
+        blocks.append(_div(f"　　其余 {len(others)} 只只做观察：{shown}"))
+    return blocks
 
 
 def build_verify_card(verify_result: dict[str, Any]) -> dict:
@@ -2068,17 +2270,19 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
             ))
             if exp_ref:
                 blocks.append(_div(
-                    f"　　<font color='grey'>{exp_ref}｜额{amt_txt}/{need_txt}亿{_vol_weak_flag(oc)}｜{bucket}｜"
-                    f"{_theme_dual_tag(r)}｜"
-                    ""
+                    # ⛔ 缩量胶囊必须贴在 </font> 之外（宪法 ⓪-10：禁 font 套 text_tag）
+                    f"　　<font color='grey'>{exp_ref}｜额{amt_txt}/{need_txt}亿</font>"
+                    + _vol_weak_flag(oc)
+                    + f"<font color='grey'>｜{bucket}｜{_theme_dual_tag(r)}｜"
                     + (f" {dv_tag}" if dv_tag else "")
                     + "</font>"
                 ))
             else:
                 blocks.append(_div(
-                    f"　　<font color='grey'>竞价{gap_txt} 额{amt_txt}/{need_txt}亿{_vol_weak_flag(oc)}｜{bucket}｜"
-                    f"{_theme_dual_tag(r)}｜"
-                    ""
+                    # ⛔ 缩量胶囊必须贴在 </font> 之外（宪法 ⓪-10：禁 font 套 text_tag）
+                    f"　　<font color='grey'>竞价{gap_txt} 额{amt_txt}/{need_txt}亿</font>"
+                    + _vol_weak_flag(oc)
+                    + f"<font color='grey'>｜{bucket}｜{_theme_dual_tag(r)}｜"
                     + (f" {dv_tag}" if dv_tag else "")
                     + "</font>"
                 ))
@@ -2135,8 +2339,10 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
                 + _sector_support_tag(r)
             ))
             blocks.append(_div(
-                f"　　<font color='grey'>竞价{gap_txt} 额{amt_txt}/{need_txt}亿{_vol_weak_flag(oc)}｜{bucket}｜"
-                f"{_theme_dual_tag(r)}</font>"
+                # ⛔ 缩量胶囊必须贴在 </font> 之外（宪法 ⓪-10：禁 font 套 text_tag）
+                f"　　<font color='grey'>竞价{gap_txt} 额{amt_txt}/{need_txt}亿</font>"
+                + _vol_weak_flag(oc)
+                + f"<font color='grey'>｜{bucket}｜{_theme_dual_tag(r)}</font>"
             ))
             _gene = _hist_gene_line(r)               # 📈 历史股性
             if _gene:
@@ -2172,9 +2378,10 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
             ))
             if exp_ref:
                 blocks.append(_div(
-                    f"　　<font color='grey'>{exp_ref}｜额{amt_txt}/{need_txt}亿{_vol_weak_flag(oc)}｜{bucket}｜"
-                    f"{_theme_dual_tag(r)}｜"
-                    ""
+                    # ⛔ 缩量胶囊必须贴在 </font> 之外（宪法 ⓪-10：禁 font 套 text_tag）
+                    f"　　<font color='grey'>{exp_ref}｜额{amt_txt}/{need_txt}亿</font>"
+                    + _vol_weak_flag(oc)
+                    + f"<font color='grey'>｜{bucket}｜{_theme_dual_tag(r)}｜"
                     + (f" {dv_tag}" if dv_tag else "")
                     + "</font>"
                 ))
@@ -2274,6 +2481,42 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
             blocks.append(_div(f"🗣️ **全局**{_lbl}\n{_gn_body}"))
 
     # 未达标个股点评：⛔ 2026-08-14 用户要求底部不显示「点评」块，已删除（其余未达标行已含简列）
+
+    # 🎯 今日接力仓位建议（2026-10-13 用户需求·动态仓位·relay_position 唯一判据源）
+    # 用竞价验证卡的真实候选 + 09:25 竞价涨幅合成「今晨竞价」分量；昨日强势 / 题材沉淀 /
+    # 净值回撤由 relay_position 读本系统真实文件。失败 → 诚实省略（不阻断出卡）。
+    try:
+        from core.relay_position import build_plan_from_files as _build_relay_plan
+
+        def _to_float(v):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        _recs = (verify_result.get("payload") or {}).get("records") or []
+        _cands = {"relay": [
+            {"code": str(r.get("code") or "").strip(),
+             "name": str(r.get("name") or ""),
+             "theme_name": str(r.get("theme") or r.get("theme_name") or "").strip()}
+            for r in _recs if str(r.get("code") or "").strip()]}
+        _quotes: dict[str, dict] = {}
+        for r in _recs:
+            _code = str(r.get("code") or "").strip()
+            if len(_code) != 6:
+                continue
+            _oc = (r.get("performance") or {}).get("open_check") or {}
+            _gp = _to_float(_oc.get("gap_pct"))
+            if _gp is None:
+                continue
+            _quotes[_code] = {"prev_close": 100.0, "auction_price": round(100.0 * (1.0 + _gp / 100.0), 4)}
+        _rp_plan = _build_relay_plan(ROOT.parent, candidates=_cands, quotes=_quotes)
+        _rp_block = _relay_position_block(_rp_plan)
+        if _rp_block:
+            blocks.append(_hr())
+            blocks.extend(_rp_block)
+    except Exception as _e:                       # 诚实降级·绝不阻断出卡
+        print(f"[verify_card] 动态仓位块跳过：{_e}")
 
     blocks += _footer(hhmm)
     return {"title": title, "color": "orange", "elements": blocks}
@@ -2777,6 +3020,47 @@ PICKS_POOL_ENFORCE = True    # False 即回退为「池外也可推票」的旧�
 # 机械层「💰 今日板块资金流（实时·左红右绿）」两列块——2026-10-09 用户「不显示今日板块资金流」
 # 置 False；改回 True 即恢复该块（可逆开关，勿删代码）。
 AMBUSH_SHOW_SECTOR_FLOW = False
+# 🎯「今日尾盘买入标的」块位置——2026-10-14 用户「我说的这一项直接放到整个卡片的头部！」
+# 置 True ⇒ 渲染在整个卡片最前面（定调之前）；置 False ⇒ 回落到原「AI 研判层·置底」位置。
+# （可逆开关，勿删代码。开启后 `validate_ambush_card` 不再要求推票位于资金流之后。）
+AMBUSH_PICKS_AT_TOP = True
+# 🎯 推票块收尾「⚠️ 风险」一句——2026-10-14 用户「加上一句风险跟在第二部分」。
+# 内容全部取自当日 14:30 冻结快照的 `env`（真实盘面家数/涨停/炸板率）与 `advice`（系统给的
+# 仓位建议），⛔ 绝不编数字：快照缺失/字段不全时整句不渲染（缺数据 ≠ 风险为零）。
+# 置 False 即整句不渲染（可逆开关，勿删代码）。
+AMBUSH_PICKS_RISK = True
+# 市场强弱 → 白话措辞（快照 env.level 可能值：weak / neutral / strong；未知值不套词）
+_MARKET_TONE_WORD = {"weak": "偏弱", "neutral": "一般", "strong": "偏强"}
+
+
+def _ambush_picks_risk_text(cache_dir: Path, day: str) -> str:
+    """推票收尾的风险句（数据驱动；无数据 → 空串，调用方整句省略）。"""
+    snap = _ambush_pullback_snapshot(cache_dir, day)
+    if not snap:
+        return ""
+    env = snap.get("env") or {}
+    advice = snap.get("advice") or {}
+    facts = env.get("facts") or {}
+    bits: list[str] = []
+    up, down = facts.get("up"), facts.get("down")
+    if isinstance(up, (int, float)) and isinstance(down, (int, float)):
+        bits.append(f"{int(down)}家跌对{int(up)}家涨")
+    zt = facts.get("total_zt")
+    if isinstance(zt, (int, float)):
+        bits.append(f"涨停{int(zt)}家")
+    br = facts.get("broken_rate")
+    if isinstance(br, (int, float)):
+        bits.append(f"炸板率{br:.0f}%")
+    tone = _MARKET_TONE_WORD.get(str(env.get("level") or ""), "")
+    head = f"今天市场{tone}" if tone else "今天盘面"
+    if not bits and not tone:
+        return ""
+    part1 = f"{head}（{' · '.join(bits)}）" if bits else head
+    n, per = advice.get("max_picks"), advice.get("position_pct_each")
+    part2 = ""
+    if isinstance(n, (int, float)) and n > 0 and isinstance(per, (int, float)) and per > 0:
+        part2 = f"——买入票最多{int(n)}只、每只仓位不超过{per:.0f}%"
+    return f"⚠️ 风险：{part1}{part2}。"
 
 
 def _ambush_reflow_pool(cache_dir: Path) -> dict | None:
@@ -2994,6 +3278,50 @@ def build_ambush_card(data: dict | None = None) -> dict:
     title = f"🎯 尾盘潜伏·阴线回踩十日线 {mmdd} | 实时数据驱动"
     blocks: list[dict] = []
 
+    # ── AI 层入参（提前解析：推票块可能被置顶，必须先于 blocks 组装就绪）──
+    ai = data or {}
+    ai_flow = (ai.get("ai_flow") or "").strip()
+    stock_scan = ai.get("stock_scan") or []
+    picks = ai.get("picks") or []
+    ai_verdict = (ai.get("ai_verdict") or "").strip()
+
+    def _picks_block() -> list[dict]:
+        """🎯 今日尾盘买入标的（AI 推票）——2026-10-14 用户「直接放到整个卡片的头部」。
+
+        单一出口：置顶（AMBUSH_PICKS_AT_TOP=True）与回落置底（False）共用本函数，
+        ⛔ 不得复制第二份渲染逻辑（两份必然漂移）。
+        """
+        if not picks:
+            return []
+        out: list[dict] = [_div(
+            "<text_tag color='purple'>🎯 今日尾盘买入标的（AI 推票·实时数据核验）</text_tag>"
+        )]
+        for p in picks:
+            theme = str(p.get("theme") or "")
+            reason = str(p.get("reason") or "")
+            risk = str(p.get("risk") or "")
+            line = f"<text_tag color='red'>▶ {theme}</text_tag>"
+            stock_line = _picks_stocks_line(p.get("stocks"))
+            if stock_line:
+                line += f"\n{stock_line}"
+            if reason:
+                line += f"\n理由：{reason}"
+            if risk:
+                line += f"\n<text_tag color='green'>风险：{risk}</text_tag>"
+            out.append(_div(line))
+        # 收尾「⚠️ 风险」一句（2026-10-14 用户「加上一句风险跟在第二部分」）：
+        # 跟在两条推票的「风险」段之后，内容取自当日冻结快照，无数据则整句省略。
+        if AMBUSH_PICKS_RISK:
+            risk_line = _ambush_picks_risk_text(ROOT.parent / "cache", now.strftime("%Y-%m-%d"))
+            if risk_line:
+                out.append(_div(f"<text_tag color='green'>{risk_line}</text_tag>"))
+        out.append(_hr())
+        return out
+
+    # 模块⓪ 🎯 今日尾盘买入标的（置顶·2026-10-14 用户「直接放到整个卡片的头部」）
+    if AMBUSH_PICKS_AT_TOP:
+        blocks += _picks_block()
+
     # 模块① 定调（分行·UI 优化铁律：不堆一行）
     blocks.append(_div(
         "<text_tag color='purple'>📌 定调</text_tag> 尾盘筛选「前段爆发过、今日收阴回踩十日线（十日线连续上行且缩量）」的个股，作今日尾盘买入候选\n"
@@ -3068,11 +3396,6 @@ def build_ambush_card(data: dict | None = None) -> dict:
         blocks.append(_hr())
 
     # ── AI 研判层（2026-08-28 用户「除了数据，需要 AI 介入和思考」）──
-    ai = data or {}
-    ai_flow = (ai.get("ai_flow") or "").strip()
-    stock_scan = ai.get("stock_scan") or []
-    picks = ai.get("picks") or []
-    ai_verdict = (ai.get("ai_verdict") or "").strip()
     if ai_flow or stock_scan or picks or ai_verdict:
         # 模块④ 最近的板块资金流向（AI 研判）
         if ai_flow:
@@ -3105,23 +3428,10 @@ def build_ambush_card(data: dict | None = None) -> dict:
                     line += f"\n　{note}"
                 blocks.append(_div(line))
             blocks.append(_hr())
-        # 模块⑥ 🎯 今日尾盘买入标的（AI 推票·置底）
-        if picks:
-            blocks.append(_div("<text_tag color='purple'>🎯 今日尾盘买入标的（AI 推票·实时数据核验）</text_tag>"))
-            for p in picks:
-                theme = str(p.get("theme") or "")
-                reason = str(p.get("reason") or "")
-                risk = str(p.get("risk") or "")
-                line = f"<text_tag color='red'>▶ {theme}</text_tag>"
-                stock_line = _picks_stocks_line(p.get("stocks"))
-                if stock_line:
-                    line += f"\n{stock_line}"
-                if reason:
-                    line += f"\n理由：{reason}"
-                if risk:
-                    line += f"\n<text_tag color='green'>风险：{risk}</text_tag>"
-                blocks.append(_div(line))
-            blocks.append(_hr())
+        # 模块⑥ 🎯 今日尾盘买入标的（AI 推票）——默认已置顶（模块⓪），
+        # 仅当 AMBUSH_PICKS_AT_TOP=False 时回落到此处（原「置底」位置）。
+        if picks and not AMBUSH_PICKS_AT_TOP:
+            blocks += _picks_block()
         # 🎯 综合研判（AI·置底）
         if ai_verdict:
             blocks.append(_div(f"<text_tag color='purple'>🎯 综合研判（AI）</text_tag>\n{ai_verdict}"))
@@ -3158,15 +3468,18 @@ def validate_ambush_card(card: dict, picks: list | None = None,
     if "font color=" in txt:
         issues.append("配色：卡片含 <font>（飞书不渲染，须改 <text_tag>）")
     # 🎯 结论置底铁律（2026-08-27 用户纠错）：综合研判/推票必须在资金流之后（卡片末尾）
+    # ⚠️ 2026-10-14 用户「买入标的直接放到整个卡片的头部」→ 置顶模式下推票不再受「置底」约束，
+    #    综合研判仍恒置底（两者不同模块，考的是「结论要看得见」，别把新规则套到老模块上）。
     _pick_head = "🎯 今日尾盘买入标的" if "🎯 今日尾盘买入标的" in txt else "🎯 次日重点标的"
     if "🎯 综合研判" in txt or _pick_head in txt:
         if "💰 今日板块资金流" in txt:
             pos_flow = txt.find("💰 今日板块资金流")
-            pos_pick = txt.find(_pick_head)
+            pos_pick = -1 if AMBUSH_PICKS_AT_TOP else txt.find(_pick_head)
             pos_verdict = txt.find("🎯 综合研判")
             tail_ok = all(p >= 0 and p > pos_flow for p in (pos_pick, pos_verdict) if p >= 0)
             if not tail_ok:
-                issues.append("结论置底违规：🎯推票/综合研判 必须在 💰资金流 之后")
+                issues.append("结论置底违规：🎯综合研判 必须在 💰资金流 之后"
+                              "（推票置顶模式下不再参与该约束）")
     # 文案语义化铁律（2026-09-04 补：AI 注入层首推漏网「机械引擎」→ 推送前强制拦截）
     hits = _ambush_banned_terms(txt)
     if hits:

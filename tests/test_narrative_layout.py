@@ -154,9 +154,14 @@ def _blocks(card):
 
 
 def test_eod_card_narrative_is_multiline_block():
-    """eod 卡：名称独占一行，点评按语义分段 —— 不再「名称：风险+正文」一坨。"""
+    """eod 卡：名称独占一行，点评按语义分段 —— 不再「名称：风险+正文」一坨。
+
+    `ai_plan={}`：显式声明本卡无 AI 预案（2026-10-14 起盘后卡会渲染「🤖 AI 明日买入预案」，
+    其理由同样可能含「今日走势」这类段名）→ 隔离真实 cache，只锁点评块本身。
+    """
     card = bc.build_eod_card({"date": "2026-09-11", "regime": "neutral",
-                              "relay": [dict(_IT)], "watch": [], "diagnostics": {}})
+                              "relay": [dict(_IT)], "watch": [], "diagnostics": {},
+                              "ai_plan": {}})
     narr = [b for b in _blocks(card) if "今日走势" in b]
     assert len(narr) == 1, narr
     lines = _lines(narr[0])
@@ -265,3 +270,35 @@ def test_eod_card_labels_explicitly_stale_narrative():
                                "global_narrative": _GN})
     gn2 = [b for b in _blocks(card2) if b.startswith("🗣️")]
     assert gn2 and gn2[0].startswith("🗣️ **全局**\n"), gn2        # 默认不标注
+
+
+# ── 依据→上涨逻辑 / 操作→操作思路（2026-10-14 用户图学习·三段式迭代）────────────────
+def test_reason_segments_alias_growth_logic():
+    """AI 决策理由第1段「依据：」→ 渲染为「上涨逻辑」段名（用户图左列语义·不带时点词防平移）。"""
+    out = bc._narr_render("依据：9点49分封板、炸开3次，成交11.16亿。\n⚠️风险：位置很高。", prev=True)
+    assert "**上涨逻辑**：" in out, out
+    assert "⚠️ 风险" in out and "turquoise" in out
+    # 「上涨逻辑」无时点词 → 跨日平移不得改写段名（禁变成「前日上涨逻辑」）
+    assert "前日" not in out, out
+
+
+def test_reason_segments_operation_branch():
+    """第2段「操作：」→ violet 标签「🎯 操作思路」（条件推演·关键执行信息）。"""
+    reason = ("依据：9点30分秒板，封单2.1亿。\n"
+              "操作：若一字封死买不进，不追，看同题材龙二的承接；若竞价高开5%内有量，按仓位建议小仓。\n"
+              "⚠️风险：换手不足，分歧会很大。")
+    out = bc._narr_render(reason, prev=True)
+    assert "🎯 操作思路" in out and "violet" in out, out
+    # 正文条件分支保留原样（只排版不改写）
+    assert "若一字封死买不进" in out, out
+
+
+def test_ai_plan_block_no_double_prefix():
+    """池内实判路径：理由已是「依据：」格式 → 段名渲染为「上涨逻辑」，禁再叠加「昨日逻辑」双重前缀。"""
+    it = {"code": "600851", "name": "海欣股份",
+          "performance": {"open_check": {"pool_reason": "竞价+2.1%·量能达标"}}}
+    ai_view = {"600851": {"view": None, "bias": "focus",
+                          "reason": "依据：公开征集转让10%股份，近一年涨停8次。\n⚠️风险：炸开3次。"}}
+    line = bc._ai_view_line(it, ai_view)
+    assert "上涨逻辑" in line, line
+    assert line.count("昨日逻辑") == 0, line      # 双重段名 = 渲染 bug

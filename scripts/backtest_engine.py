@@ -51,9 +51,18 @@ def _bj_now():
 
 
 def is_trading_day(d: date) -> bool:
-    """交易日守卫：weekday 1-5 为候选；再用 feedback_matrix error 标记兜底。"""
-    if d.weekday() >= 5:
-        return False
+    """交易日守卫：**唯一真源 = common.trading_calendar**，feedback 标记作第二道防线。
+
+    ⛔ 2026-10-09 唯一化：原实现自判 `weekday()` + feedback error 兜底 → 工作日休市
+       （2026-09-25 中秋·周五）漏网。日历判定前置后，兜底只用于防「接口回吐上一交易日池」。
+    """
+    try:
+        from common.trading_calendar import is_a_share_trading_day
+        if not is_a_share_trading_day(d):
+            return False
+    except Exception:  # pragma: no cover - 极端环境兜底
+        if d.weekday() >= 5:  # trading-day-fallback: 唯一真源不可用时的周末兜底
+            return False
     fb = CACHE / "feedback_matrix.json"
     if fb.exists():
         try:

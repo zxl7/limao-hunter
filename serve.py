@@ -166,6 +166,7 @@ def health_payload(data_root, file_routes):
                     "route": route,
                     "file": target,
                     "desc": defn.get("desc"),
+                    "retired": bool(defn.get("retired")),
                     "exists": True,
                     "mtime": datetime.fromtimestamp(
                         st.st_mtime, timezone.utc
@@ -180,6 +181,7 @@ def health_payload(data_root, file_routes):
                     "route": route,
                     "file": target,
                     "desc": defn.get("desc"),
+                    "retired": bool(defn.get("retired")),
                     "exists": False,
                     "mtime": None,
                     "age_sec": None,
@@ -200,7 +202,15 @@ PUBLIC_ROUTES = {
     # 一、行情主链路
     "/api/market/latest": {"file": "cache/pulse_snapshots/latest.json", "cadence": "intraday", "desc": "主快照"},
     "/api/market/prev": {"file": "cache/pulse_snapshots/prev.json", "cadence": "intraday", "desc": "上一版快照"},
-    "/api/market/auction": {"file": "cache/pulse_snapshots/auction_live.json", "cadence": "intraday", "desc": "竞价实时报价"},
+    # ⚠️ 2026-10-14 审计（A3）：全仓**无任何写入方**产出 `auction_live.json`
+    #    （最后内容 2026-09-25 15:30 · 46 B · 是旧看板时代的遗留件）。真实竞价数据在
+    #    `wealth_code/cache/auction_quotes-<date>.json`（09:25 落盘），已由
+    #    `/api/decision/auction-history` 暴露。
+    #    故：cadence intraday→manual（**停止 30s 轮询一个死文件**）+ retired 标记，
+    #    前端按「已停更」降级渲染，不把 19 天前的报价当今日。
+    "/api/market/auction": {"file": "cache/pulse_snapshots/auction_live.json", "cadence": "manual",
+                            "retired": True,
+                            "desc": "竞价实时报价（⚠️ 已停更·无写入方·真实竞价见 /api/decision/auction-history）"},
     "/api/market/signals": {"file": "cache/short_spirit_signals.json", "cadence": "intraday", "desc": "短线精灵信号"},
     "/api/market/relay-effect": {"file": "cache/relay_effect.json", "cadence": "intraday", "desc": "连板量能与承接观察"},
     "/api/market/feedback": {"file": "cache/feedback_matrix.json", "cadence": "intraday", "desc": "涨停反馈矩阵"},
@@ -208,7 +218,12 @@ PUBLIC_ROUTES = {
     # 二、题材 / 资金
     "/api/theme/rotation": {"file": "cache/theme_rotation.json", "cadence": "intraday", "desc": "题材轮动"},
     "/api/theme/series": {"file": "cache/theme_series.json", "cadence": "daily", "desc": "题材多日序列"},
-    "/api/theme/sequence": {"file": "cache/theme_sequence.json", "cadence": "daily", "desc": "题材序列(疑似停更)"},
+    # ⚠️ 2026-10-14 审计（A7）：最后写入 2026-09-03（0 B），已被 `/api/theme/series`
+    #    （theme_series.json · 当日仍在更新）取代。刻意不删（保留 /record 新鲜度证据），
+    #    但 cadence daily→manual + retired 标记，明确它是留档而非「日频在产」。
+    "/api/theme/sequence": {"file": "cache/theme_sequence.json", "cadence": "manual",
+                            "retired": True,
+                            "desc": "题材序列（⚠️ 已停更·已被 theme/series 取代·仅留档）"},
     "/api/flow/history": {"dir": "cache/sector_flow_history", "pattern": r"^sector_flow_\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "cadence": "daily", "desc": "板块资金历史"},
     # 三、板块核心票
     "/api/board/core": {"dir": "cache/board_core", "pattern": r"^board_core_.+\.json$", "mode": "all", "cadence": "daily", "desc": "板块核心票"},
@@ -239,7 +254,9 @@ PUBLIC_ROUTES = {
     "/api/hithink/valuation": {"dir": "cache", "pattern": r"^hithink_valuation_\d{4}-?\d{2}-?\d{2}\.json$", "mode": "latest", "cadence": "daily", "desc": "同花顺估值"},
     # 十二、机构投研
     "/api/institution/pool": {"dir": "cache", "pattern": r"^institution_pool_\d{4}-?\d{2}-?\d{2}\.json$", "mode": "all", "limit": 10, "cadence": "daily", "desc": "机构池"},
-    "/api/institution/morning": {"file": "cache/gangtise_morning_full_v5.json", "cadence": "daily", "desc": "机构研报早盘"},
+    # ⚠️ 2026-10-14 审计（A2）：原指向 `gangtise_morning_full_v5.json` —— 那是**版式定版样本**
+    #    （停在 2026-09-03），每日真实产物是 `gangtise_morning_research.json`（当日 07:54）。
+    "/api/institution/morning": {"file": "cache/gangtise_morning_research.json", "cadence": "daily", "desc": "机构研报早盘"},
     "/api/institution/evening": {"file": "cache/gangtise_evening_research.json", "cadence": "daily", "desc": "机构晚报"},
     "/api/institution/weekend": {"file": "cache/gangtise_weekend_0913.json", "cadence": "manual", "desc": "机构周末"},
     # 十三、题材与消息史

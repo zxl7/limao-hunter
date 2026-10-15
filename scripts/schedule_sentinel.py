@@ -27,12 +27,12 @@ def in_trading(dt: datetime) -> bool:
     in_window = ("09:25" <= t <= "11:30") or ("13:00" <= t <= "14:50")
     if not in_window:
         return False
-    # 节假日门禁：法定节假日（含国庆）+ 周末不监管也不告警（补班开市日仍监管）
+    # 节假日门禁：法定节假日与周末（含调休补班日）不监管也不告警
     try:
         from common.trading_calendar import is_a_share_trading_day
         return is_a_share_trading_day(dt)
     except Exception:
-        return dt.weekday() < 5  # 兜底：至少排除周末
+        return dt.weekday() < 5  # trading-day-fallback: 唯一真源不可用时的周末兜底
 
 
 def parse_ts(raw) -> datetime | None:
@@ -57,6 +57,7 @@ def main() -> int:
 
     db = sqlite3.connect(DB)
     db.row_factory = sqlite3.Row
+    # 2026-10-14 快照并入猎手（任务改名 盘中猎手-*）→ 正常只命中猎手；保留 OR 仅为过渡期兜底
     tasks = db.execute(
         """SELECT id, name FROM automations
            WHERE deleted_at IS NULL AND status='ACTIVE'

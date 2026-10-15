@@ -189,3 +189,109 @@ def test_alert_goes_to_test_webhook() -> None:
     src = (BASE / "scripts" / "guard_eod_chain.py").read_text(encoding="utf-8")
     assert "feishu_webhook_test" in src
     assert "feishu_webhook_prod" not in src
+
+
+# ────────────────── 4. 双条件：内容 generated_ts（2026-10-14 审计 P2-⑨ 修 B3） ──────
+# 审计冲突项 B3：契约 §1 写「文件 mtime 不能替代内容日期」，而 `_cover_state` **只用 mtime**。
+# 升级为**声明制双条件**：mtime 达标之外，声明为 `collect` 的产出还要求内容
+# `generated_ts` 同样达标；声明为 `source` 的（emotion = 15:00 源时刻）**必须豁免**，
+# 否则每个交易日都会误报。
+
+def _write_with_ts(p: Path, *, mtime: datetime, generated_ts: str) -> None:
+    """写一个带 `generated_ts` 的产物，并把 mtime 钉到指定时刻。"""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"generated_ts": generated_ts}), encoding="utf-8")
+    ts = mtime.timestamp()
+    os.utime(p, (ts, ts))
+
+
+def test_cover_state_flags_mtime_content_contradiction(tmp_path: Path) -> None:
+    """⛔ B3 反例：mtime 在盘后（17:25）但内容 generated_ts 是盘中（15:00）→ 必须判未覆盖。
+
+    这正是审计实测的形态（`zt_2026-10-13.json` 内容 17:18:51 / mtime 10-15 20:25，
+    只信 mtime 会判绿）。「以内容为准」= 契约 §1 的要求。
+    """
+    p = tmp_path / "x.json"
+    _write_with_ts(p, mtime=EOD, generated_ts="2026-09-22T15:00:12+08:00")
+    ok, why = g._cover_state(p, TODAY, "collect")
+    assert ok is False
+    assert "内容 generated_ts=15:00" in why
+
+
+def test_cover_state_flags_content_from_other_day(tmp_path: Path) -> None:
+    """内容 `generated_ts` 是**别的日期**而 mtime 是今日 → 也必须报（静默半途而废形态）。"""
+    p = tmp_path / "x.json"
+    _write_with_ts(p, mtime=EOD, generated_ts="2026-09-21 17:18:51")
+    ok, why = g._cover_state(p, TODAY, "collect")
+    assert ok is False
+    assert "内容日期非当日" in why
+
+
+def test_cover_state_collect_passes_when_both_sides_eod(tmp_path: Path) -> None:
+    """mtime 与内容时间**都**在盘后 → 通过（不得误伤正常产出）。"""
+    p = tmp_path / "x.json"
+    _write_with_ts(p, mtime=EOD, generated_ts="2026-09-22T17:25:03+08:00")
+    ok, why = g._cover_state(p, TODAY, "collect")
+    assert ok is True and why == "17:25"
+
+
+def test_cover_state_source_semantic_exempts_content_check(tmp_path: Path) -> None:
+    """⛔ emotion 形态：内容 `generated_ts` 恒为 15:00 源时刻，声明 `source` 必须豁免。
+
+    若不豁免，`short_term/daily/emotion_*.json` 会**每个交易日误报**一次
+    「未覆盖」——这是引入第二条判据时最容易踩的坑。
+    """
+    p = tmp_path / "emotion.json"
+    _write_with_ts(p, mtime=EOD, generated_ts="2026-09-22T15:00:12+08:00")
+    ok, why = g._cover_state(p, TODAY, "source")
+    assert ok is True and why == "17:25"
+    # 反向确认：同一份内容若被误标 collect，就会 FAIL（证明豁免是**必要的**而非多余）
+    bad, why_bad = g._cover_state(p, TODAY, "collect")
+    assert bad is False and "内容 generated_ts=15:00" in why_bad
+
+
+def test_cover_state_falls_back_to_mtime_when_content_ts_unreadable(tmp_path: Path) -> None:
+    """内容无 `generated_ts` / 格式不识别 → **只按 mtime**（诚实降级，不误伤存量格式）。"""
+    p = tmp_path / "x.json"
+    _touch(p, EOD)                                     # 内容 = "{}"
+    ok, why = g._cover_state(p, TODAY, "collect")
+    assert ok is True and why == "17:25"
+    p2 = tmp_path / "y.json"
+    _write_with_ts(p2, mtime=EOD, generated_ts="not-a-time")
+    ok2, _ = g._cover_state(p2, TODAY, "collect")
+    assert ok2 is True, "不可解析的内容时间不得触发误报"
+    assert g._content_ts(p2) is None
+
+
+def test_semantics_table_declares_every_check() -> None:
+    """⛔ 每个受检产出都必须在 `TS_SEMANTICS` 里声明语义（漏登记=默认为较严的 collect）。
+
+    本测试锁住「emotion 必须显式标 source」——它是最容易在重构中被漏掉、且一漏就每天误报的一条。
+    """
+    for _name, tmpl, _imp in g.CHECKS:
+        assert tmpl in g.TS_SEMANTICS, f"CHECKS 产出未登记语义：{tmpl}"
+    for _name, rel, _key, _imp in g.DATED_JSON:
+        assert rel in g.TS_SEMANTICS, f"DATED_JSON 产出未登记语义：{rel}"
+    for _name, rel, _h, _imp in g.FRESH_FILES:
+        assert rel in g.TS_SEMANTICS, f"FRESH_FILES 产出未登记语义：{rel}"
+    assert g.TS_SEMANTICS["short_term/daily/emotion_{}.json"] == "source", (
+        "情绪日快照的 generated_ts 是 15:00 行情源时刻，必须声明 source 豁免内容判据"
+    )
+    for tmpl, sem in g.TS_SEMANTICS.items():
+        assert sem in ("collect", "source"), f"{tmpl} 语义取值非法：{sem}"
+
+
+def test_missing_of_uses_declared_semantics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """端到端：mtime 全在盘后、但 eruption 内容时间是盘中 → 只报「题材爆发快照」一项，
+    emotion 同形态（源时刻）**不得**被报。"""
+    monkeypatch.setattr(g, "CACHE", tmp_path)
+    _seed(tmp_path, at=EOD, with_latest=True)          # 基线：全绿
+    # 只把 eruption 的内容时间踩成盘中（模拟「mtime 被后续动作刷新、内容还是盘中口径」）
+    _write_with_ts(tmp_path / "eruption_history" / f"eruption_{TODAY}.json",
+                   mtime=EOD, generated_ts="2026-09-22T10:41:07+08:00")
+    # emotion 同形态（源时刻 15:00）——声明 source，不该被报
+    _write_with_ts(tmp_path / "short_term" / "daily" / f"emotion_{TODAY}.json",
+                   mtime=EOD, generated_ts="2026-09-22T15:00:12+08:00")
+    miss = g._missing_of(TODAY, live=True)
+    assert [m[0] for m in miss] == ["题材爆发快照"], f"实得 {miss}"
+    assert "内容 generated_ts=10:41" in miss[0][1]

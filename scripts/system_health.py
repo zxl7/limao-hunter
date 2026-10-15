@@ -36,6 +36,22 @@ ROOT = Path("/Users/zxl/WorkBuddy/狸猫猎手")
 CACHE = ROOT / "cache"
 DB = Path.home() / ".workbuddy" / "workbuddy.db"
 UPGRADE = ROOT / "config" / "upgrade_plan.md"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+
+def _is_trading_day(dt: datetime) -> bool:
+    """A股交易日 —— **唯一真源 = common.trading_calendar**。
+
+    ⛔ 本文件不得自行判 `weekday()`（2026-10-09 清扫）：原 `last_trading_day` /
+    `prev_trading_day` / `is_trading_hours` 各自只跳周末，把工作日休市（中秋 09-25）
+    与调休补班周末当交易日 → 体检把「休市日无数据」误报成数据断链。
+    """
+    try:
+        from common.trading_calendar import is_a_share_trading_day
+        return is_a_share_trading_day(dt)
+    except Exception:  # pragma: no cover - 极端环境兜底
+        return dt.weekday() < 5  # trading-day-fallback: 唯一真源不可导入时的周末兜底
 
 # 核心数据文件 → (类别, 期望基准说明)
 CORE_FILES = {
@@ -50,23 +66,38 @@ CORE_FILES = {
 
 
 def last_trading_day(now: datetime):
+    """**≤ now 的最近一个A股交易日**（周末与法定休市日一律向前回退）。"""
+    try:
+        from common.trading_calendar import last_a_share_trading_day
+        d = last_a_share_trading_day(now)
+        if d is not None:
+            return d
+    except Exception:
+        pass
     wd = now.weekday()
-    if wd >= 5:  # 周六(5)/周日(6) → 上一周五
+    if wd >= 5:  # trading-day-fallback: 唯一真源不可用时的周末兜底（wd 仅本分支用）
         return (now - timedelta(days=wd - 4)).date()
     return now.date()
 
 
 def prev_trading_day(d: datetime.date):
-    """d 的前一个交易日（跳过周末）。"""
+    """`d` 的前一个A股交易日（跳过周末与法定休市日）。"""
+    try:
+        from common.trading_calendar import prev_a_share_trading_day
+        s = prev_a_share_trading_day(d.isoformat())
+        if s:
+            return datetime.strptime(s, "%Y-%m-%d").date()
+    except Exception:
+        pass
     d = d - timedelta(days=1)
-    while d.weekday() >= 5:
+    while d.weekday() >= 5:  # trading-day-fallback: 唯一真源不可用时的周末兜底
         d -= timedelta(days=1)
     return d
 
 
 def is_trading_hours(now: datetime) -> bool:
-    """交易时段内（周一~五 09:25–15:00）。"""
-    return now.weekday() < 5 and (now.hour > 9 or (now.hour == 9 and now.minute >= 25)) and (
+    """交易时段内（交易日 09:25–15:00）。交易日判定走唯一真源。"""
+    return _is_trading_day(now) and (now.hour > 9 or (now.hour == 9 and now.minute >= 25)) and (
         now.hour < 15 or (now.hour == 15 and now.minute == 0)
     )
 
@@ -274,7 +305,7 @@ def check_run_health(now: datetime):
             age_days = (now - datetime.fromtimestamp(ref / 1000)).total_seconds() / 86400
             trig = _rrule_trigger(r["rrule"])
             not_yet = False
-            if trig and now.weekday() < 5:
+            if trig and _is_trading_day(now):
                 # 交易日且未到今日触发点 → 今天还没轮到，不判超期
                 if (now.hour, now.minute) < trig:
                     not_yet = True

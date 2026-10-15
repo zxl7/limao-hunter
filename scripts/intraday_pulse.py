@@ -62,6 +62,19 @@ CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "pulse_snapshots"
 CACHE_TTL = 120  # 缓存新鲜度阈值(秒)：<守护进程120s间隔，确保AI任务读到近2分钟快照
 SENTINEL = CACHE_DIR / "last_symbols.json"  # 上次已知的异动股票集合
 UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15"
+# ⚠️ 2026-10-13：选股宝「快讯」接口(baoer-api) 自 09-17 起对简化 UA 一律
+#    `Connection reset by peer`（express.log 实证 227/227 全失败）→ 快讯长期静默为空。
+#    仅**快讯**改走完整浏览器头（含 Referer/Origin），⛔ 不动通用 UA（flash-api 现正常，
+#    避免误伤 plates/stocks/index 等既有接口）。
+NEWS_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Referer": "https://xuangubao.cn/",
+    "Origin": "https://xuangubao.cn",
+    "Connection": "keep-alive",
+}
 
 PLATE_FOCUS = ["国产芯片", "军工", "智能电网", "机器人", "医药", "锂电池",
                "金刚石", "玻璃基板", "半导体", "AI", "算力", "光模块"]
@@ -91,15 +104,15 @@ def in_trading(asof=None):
     in_window = (540 <= t <= 690) or (780 <= t <= 900)
     if not in_window:
         return False
-    # 节假日门禁：法定节假日（含国庆）不推送，调休补班开市日仍推送（is_a_share_trading_day 为唯一权威）
+    # 节假日门禁：法定节假日与周末（含调休补班日）一律不推送（is_a_share_trading_day 为唯一权威）
     try:
         from common.trading_calendar import is_a_share_trading_day
         return is_a_share_trading_day(n)
     except Exception:
-        return n.weekday() < 5  # 兜底：common 不可用，至少排除周末
+        return n.weekday() < 5  # trading-day-fallback: 唯一真源不可用时的周末兜底
 
-def http_get(url, t=10):
-    r = urllib.request.Request(url, headers={"User-Agent": UA})
+def http_get(url, t=10, hdrs=None):
+    r = urllib.request.Request(url, headers=hdrs or {"User-Agent": UA})
     with urllib.request.urlopen(r, timeout=t) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -181,7 +194,7 @@ class Fetcher:
             "stocks":    lambda: http_get(f"{XGB_BASE}/surge_stock/stocks?normal=true&uplimit=true&_ts={ts()}"),
             # 涨停前夜·未封板但强势拉升的可买票（提前埋伏信号源）
             "pre":       lambda: http_get(f"{XGB_BASE}/surge_stock/stocks?normal=true&uplimit=false&_ts={ts()}"),
-            "newsflash": lambda: http_get(f"{XGB_NEWS}/message/newsflash?subj_ids=9,10,723,35,469,821&platform=pcweb&_ts={ts()}"),
+            "newsflash": lambda: http_get(f"{XGB_NEWS}/message/newsflash?subj_ids=9,10,723,35,469,821&platform=pcweb&_ts={ts()}", hdrs=NEWS_HEADERS),
             "tomorrow":  lambda: http_post(f"{EM_BASE}/getFryTomorrowList", {
                 "args":{"pageSize":3,"lastTradeDate":""},
                 "client":"wap","clientType":"cfw","clientVersion":"9001",
@@ -1255,8 +1268,32 @@ def load_dragon_locks(day: str | None = None) -> dict:
     except Exception:
         return {}
 
-def save_dragon_locks(locks: dict, day: str | None = None) -> bool:
-    """写当日龙头锁（原子写）。⛔ 失败只告警，不影响快照与推送"""
+def _is_trading_day(d: str) -> bool:
+    """A股交易日 —— **唯一真源 = common.trading_calendar**（2026-10-09 唯一化）。
+
+    长假幽灵源：`dragon_locks_<休市日>.json` 实测在 2026-10-01/02/05 各落了一份
+    （14 条锁，内容来自接口回吐的上一交易日池）。写入端按交易日拦截。
+    """
+    try:
+        from common.trading_calendar import is_a_share_trading_day
+        return is_a_share_trading_day(d)
+    except Exception:  # pragma: no cover - 极端环境兜底
+        try:
+            return datetime.strptime(str(d)[:10], "%Y-%m-%d").weekday() < 5  # trading-day-fallback
+        except Exception:
+            return True
+
+
+def save_dragon_locks(locks: dict, day: str | None = None,
+                      *, allow_non_trading: bool = False) -> bool:
+    """写当日龙头锁（原子写）。**非交易日拒写**（防长假幽灵产物）。
+
+    ⛔ 失败只告警，不影响快照与推送。
+    """
+    d = day or datetime.now(BJ_TZ).strftime("%Y-%m-%d")
+    if not allow_non_trading and not _is_trading_day(d):
+        print(f"  ⛔ {d} 非A股交易日 → 跳过龙头锁写盘（防幽灵日产物）")
+        return False
     try:
         p = _dragon_lock_path(day)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -2069,6 +2106,30 @@ def build_post_card(sectors, plates, diagnoses, total_zt, risks, tomorrow):
 
 # ── Main ──────────────────────────────────────────────
 
+def _ingest_stock_registry(stocks, pre_stocks, rising):
+    """把本轮盘中命中/接触到的个股沉淀进统一个股特征底库。
+
+    ⚠️ 口径：入库门槛 = **进入系统可见范围**，与今日表现无关（不是只存涨停股）。
+    ⚠️ 非致命：底库异常绝不中断快照与推送；受 `STOCK_REGISTRY_INTRADAY` 开关控制。
+    """
+    try:
+        from common import stock_registry as registry
+
+        if not registry.intraday_enabled():
+            return
+        stamp = now().isoformat(timespec="seconds")
+        result = registry.ingest_intraday(
+            trade_date=now().strftime("%Y-%m-%d"), asof_ts=stamp,
+            stocks=stocks, pre_stocks=pre_stocks, rising=rising)
+        if result.get("ok"):
+            print(f"  个股底库: 新增{result.get('inserted', 0)} "
+                  f"更新{result.get('updated', 0)} 无变化{result.get('unchanged', 0)}")
+        elif result.get("reason"):
+            print(f"  个股底库跳过: {result['reason']}")
+    except Exception as e:  # noqa: BLE001 —— 底库失败不影响主链
+        print(f"  ⚠️ 个股底库更新失败(不影响主流程): {e}")
+
+
 def run_mode(mode, dry_run=False, json_only=False):
     print(f"\n{'='*60}")
     print(f"  题材脉冲系统 v2 | {mode} | {'DRY-RUN' if dry_run else 'LIVE'}")
@@ -2182,6 +2243,10 @@ def run_mode(mode, dry_run=False, json_only=False):
         print("  ⚠️ latest.json 原子写失败，降级为直接写")
         latest_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2))
     print(f"  摘要JSON: {latest_path} (prev: {'yes' if prev_path.exists() else 'no'})")
+
+    # 个股特征底库：命中即增量更新（未命中的票原样保留）
+    # ⚠️ 非致命 —— 底库异常不得中断快照与推送；受 STOCK_REGISTRY_INTRADAY 开关控制
+    _ingest_stock_registry(stocks, pre_stocks, rising)
 
     if dry_run or json_only:
         print("\n  --- JSON ONLY (no push) ---")

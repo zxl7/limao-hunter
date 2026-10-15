@@ -70,7 +70,7 @@ def _trade_days(n: int) -> list[str]:
     out = []
     d = datetime.now().date()
     while len(out) < n:
-        if d.weekday() < 5:
+        if d.weekday() < 5:  # trading-day-fallback: 唯一真源不可用时的周末兜底
             out.append(d.strftime("%Y%m%d"))
         d -= __import__("datetime").timedelta(days=1)
     return sorted(out)

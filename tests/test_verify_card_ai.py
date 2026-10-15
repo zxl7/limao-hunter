@@ -226,7 +226,9 @@ def test_eod_decision_block_no_jargon(monkeypatch):
     ⛔ 教训：**测试排除项 == 实际渲染项** 是同类漏网根因；扫描必须覆盖整卡渲染结果。
     """
     import core.decision_outlook as _do_mod
-    monkeypatch.setattr(_do_mod, "decision_from_files", lambda root: {
+    # 替身须接受真实签名的关键字（2026-10-14 起 `decision_from_files` 多一个
+    # `relay_plan=` 入参 → 只收 root 的替身会 TypeError，被 eod 卡的 except 吞成空决策段）。
+    monkeypatch.setattr(_do_mod, "decision_from_files", lambda root, **kw: {
         "verdict": "wait", "tone": "👀 观望·等信号再动",
         "conclusion": "今天做多气氛 8.0 分（满分10），环境偏防守——观望为主",
         "basis": {"sentiment": 8.0, "promote_rate": 27.5, "nuke_count": 3,

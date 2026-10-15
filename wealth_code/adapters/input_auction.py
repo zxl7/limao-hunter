@@ -171,13 +171,17 @@ def fetch_realtime_auction(
     codes = [str(c).strip() for c in (codes or []) if str(c).strip()]
     if not codes:
         return out
-    now_str = datetime.now(BJ_TZ).strftime("%H:%M:%S")
+    trade_date = datetime.now(BJ_TZ).strftime("%Y-%m-%d")
     for _ in range(1, retries + 1):
         pending = [c for c in codes if c not in out]
         if not pending:
             break
         quotes = biying_client.fetch_realtime_quotes(pending)
         for code, it in quotes.items():
+            quote_time = str(it.get("t") or "")
+            # 竞价价只认执行日的冻结时点；接口曾在 09:25 返回前日 15:00 旧行情。
+            if quote_time[:10] != trade_date or not ("09:25" <= quote_time[11:16] <= "09:30"):
+                continue
             open_px = float(it.get("o") or 0.0)   # 今开 = 竞价价
             prev = float(it.get("yc") or 0.0)     # 昨收
             cje = float(it.get("cje") or 0.0)     # 成交额(元)
@@ -186,7 +190,7 @@ def fetch_realtime_auction(
                     "prev_close": round(prev, 2),
                     "auction_price": round(open_px, 2),
                     "auction_amount_yi": round(cje / 1e8, 2),
-                    "time": str(it.get("t") or now_str),
+                    "time": quote_time,
                 }
         if len(out) >= len(codes):
             break

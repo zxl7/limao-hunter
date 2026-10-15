@@ -47,6 +47,14 @@ while :; do
 done
 log "时间已到（>=09:26:05），开始抓报价+结算+推送"
 
+# ⚠️ 2026-10-13 加固：DONE_MARK 原**只在脚本开头检查一次**，而开头（09:25:00）到本处
+#    （09:26:05）有约 65s 空窗——若期间平台自动化/其它链路已推卡并落下标记，
+#    本脚本醒来仍会照推 → 双推。故在真正执行前**再查一次**（幂等双保险）。
+if [ -f "$DONE_MARK" ]; then
+    log "本日已被其它链路推送（$DONE_MARK 于等待期间出现），本脚本让位退出（防双推）"
+    exit 0
+fi
+
 # AI 旁白：平台自动化 9:20 生成；缺失则无旁白推卡（数据模块完整，不阻塞）
 # ⚠️ 2026-09-10 修复（用户调试发现）：旁白文件是**固定路径**（/tmp/wealth_narr_verify.json），
 #    若平台任务当天写入晚于本脚本 09:26:05 推卡（09-10 实测 09:27 才落盘），旧文件仍在，
@@ -63,7 +71,10 @@ else
     log "旁白文件缺失（平台自动化未生成），无旁白推卡"
 fi
 
-export PYTHONPATH=$ROOT/wealth_code
+# ⚠️ 2026-10-13 修复：原为 `$ROOT/wealth_code` → `pipeline_eod` 等 `from common.*`
+#    解析失败（ModuleNotFoundError: No module named 'common'，10-01 日志实证 RC=1）。
+#    `common` 在项目根 `$ROOT/common`，`core`/`pipelines` 在 `$ROOT/wealth_code` ⇒ 两个都要给。
+export PYTHONPATH=$ROOT:$ROOT/wealth_code
 $PY wealth_code/scripts/run_wealth_code.py verify $PUSH_ARGS >> "$LOG" 2>&1
 RC=$?
 log "verify RC=$RC"

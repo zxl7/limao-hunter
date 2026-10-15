@@ -177,16 +177,13 @@ elements.append({"tag": "hr"})
 
 elements.append({"tag": "div", "text": {"tag": "lark_md", "content": ai}})
 
-elements.append({"tag": "note", "content": f"📡 选股宝+东财 | {asof} | AI盘中诊断"})
-elements.append({"tag": "note", "content": "⚠️ 本报告基于公开信息分析，投资需谨慎"})
-
+# ⛔ 2026-10-14 修复：脚本不得自拼 note 元素（{"tag":"note","content":...} 非法·缺 elements 数组，
+#    飞书会整卡降级/渲染异常）→ 一律输出简版结构，note 交给 push_card.normalize() 生成合法 note。
 card = {
-    "msg_type": "interactive",
-    "card": {
-        "config": {"wide_screen_mode": True},
-        "header": {"template": "red", "title": {"tag": "plain_text", "content": header_title}},
-        "elements": elements
-    }
+    "title": header_title,
+    "color": "red",
+    "elements": elements,
+    "note": f"📡 选股宝+东财+猎手 | {asof} | AI盘中诊断\n⚠️ 本报告基于公开信息分析，投资需谨慎",
 }
 with open("/tmp/limao_card.json", "w", encoding="utf-8") as f:
     json.dump(card, f, ensure_ascii=False, indent=2)

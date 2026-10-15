@@ -20,6 +20,10 @@
 2. **任何异常都不得影响守护链** —— 整体 try 包裹，失败仅打印。
 3. **追加写，绝不覆盖** —— 历史不可丢（覆盖写正是原设计的问题）。
 4. **不编造** —— 只记录 `latest.json` 里**真实存在**的字段；拿不到的不写。
+5. **首轮基线不广播（2026-10-15 缺口③根治）** —— 当天首次运行只把开盘快照**播种为基线**
+   （存入 state 的 seen_*/sector_up/total），**不把开盘已存在的板块/个股/炸板/跌停当成盘中
+   新增事件**写时间轴。仅产出一条 `baseline` 诚实标记（前端按交易时段过滤，不进轴/曲线）。
+   否则 00:01 一次性灌入全市场快照，把时间轴首段打成假 spike（10-14 实测 78/318 = 24%）。
 
 ## 数据来源与诚实边界
 | 方向 | 来源字段 | 覆盖 |
@@ -112,8 +116,21 @@ def collect(latest: dict, state: dict) -> tuple[list, dict]:
     不丢不重的不变量：同一事件只在**首次出现的那一轮**产出一次；
     同样的快照连跑两次，第二次产出**空**。
     """
+    # ⛔ 缺口③根治：当天"首轮"（state 既无 baseline_seeded 标记、也无任何已播种跟踪键）
+    #    ＝ 凌晨初始化 / 守护首跑。旧实现把"开盘已存在的全市场快照"当成"盘中新增事件"
+    #    广播 → 00:01 一次性灌入（10-14 实测 78/318 = 24%），把时间轴首段打成假 spike。
+    #    现改为：首轮只**播种基线**，不产出任何"新增"事件（仅留一条 baseline 诚实标记）。
+    _already_seeded = bool(
+        state.get("baseline_seeded")
+        or state.get("total") is not None
+        or state.get("seen_zt")
+        or state.get("sector_up")
+        or state.get("seen_broken")
+        or state.get("seen_ld")
+        or state.get("seen_decl")
+    )
     st = {
-        # total 与集合必须来自同一次完整采集，才可作为下一轮差分基准。
+        "baseline_seeded": _already_seeded,
         "total": state.get("total"),
         "limit_up_stocks": list(state.get("limit_up_stocks") or []),
         "sector_up": dict(state.get("sector_up") or {}),
@@ -123,6 +140,52 @@ def collect(latest: dict, state: dict) -> tuple[list, dict]:
         "seen_decl": set(state.get("seen_decl") or []),
     }
     evs: list = []
+
+    if not _already_seeded:
+        # ── 基线播种（⛔ 不广播开盘快照）──
+        total = latest.get("total_zt")
+        current = _limit_up_map(latest.get("limit_up_stocks"), total)
+        if current is not None:
+            st["total"] = int(total)
+            st["limit_up_stocks"] = [current[c] for c in sorted(current)]
+            st["seen_zt"] = set(current)          # 开盘已涨停的票不算"盘中新涨停"
+        # 板块领涨精选里已达涨停线的票也计入（开盘已涨停，不重复上报）
+        for l in (latest.get("leaders") or []):
+            _c = str(l.get("code") or "").strip()
+            if _c and _is_zt(l.get("pct"), bool(l.get("is_20cm"))):
+                st["seen_zt"].add(_c)
+        for s in (latest.get("top5") or []):
+            nm = str(s.get("name") or "").strip()
+            if nm:
+                try:
+                    st["sector_up"][nm] = int(s.get("zt_count") or 0)
+                except Exception:
+                    st["sector_up"][nm] = 0
+        for n in ((latest.get("broken") or {}).get("names") or []):
+            n = str(n).strip()
+            if n: st["seen_broken"].add(n)
+        for n in ((latest.get("limit_down") or {}).get("names") or []):
+            n = str(n).strip()
+            if n: st["seen_ld"].add(n)
+        for d in ((latest.get("sector_risk") or {}).get("declining") or []):
+            nm = str(d.get("name") or "").strip()
+            if nm: st["seen_decl"].add(nm)
+        st["baseline_seeded"] = True
+        evs.append({
+            "kind": "baseline",
+            "total": st["total"],
+            "sectors": {k: v for k, v in st["sector_up"].items() if v},
+        })
+        return evs, {
+            "baseline_seeded": True,
+            "total": st["total"],
+            "limit_up_stocks": st["limit_up_stocks"],
+            "sector_up": st["sector_up"],
+            "seen_zt": sorted(st["seen_zt"]),
+            "seen_ld": sorted(st["seen_ld"]),
+            "seen_broken": sorted(st["seen_broken"]),
+            "seen_decl": sorted(st["seen_decl"]),
+        }
 
     # ── 涨停总数变化（必须有完整个股差分，采集不完整就不写节点）──
     total = latest.get("total_zt")
@@ -194,6 +257,7 @@ def collect(latest: dict, state: dict) -> tuple[list, dict]:
             st["seen_decl"].add(name)
 
     new_state = {
+        "baseline_seeded": True,
         "total": st["total"],
         "limit_up_stocks": st["limit_up_stocks"],
         "sector_up": st["sector_up"],

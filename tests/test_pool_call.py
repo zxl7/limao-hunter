@@ -412,6 +412,34 @@ def test_run_verify_real_run_freezes_once(monkeypatch, tmp_path):
     assert json.loads(p1.read_text(encoding="utf-8")) == first
 
 
+# ── 🎯 早盘接力·动态仓位（2026-10-13 用户需求）端到端接线锁 ────────────────────
+def test_run_verify_applies_relay_plan(monkeypatch, tmp_path):
+    """注入动态仓位方案 → 名额被**向下裁断**；未注入 → 旧行为（不裁断）。
+
+    ⛔ 边界：relay_plan 必须由调用方注入（真实 09:25 走 relay=True 现场合成），
+    run_verify 默认不读盘、不裁断——保证合成/测试结论确定、可离线复现。
+    """
+    _isolate(monkeypatch, tmp_path)
+    cands, quotes = _rc()
+
+    # ① 未注入 → 不裁断（旧行为），meta 里 relay_position 为 None
+    r0 = pv.run_verify(candidates=cands, quotes=quotes, out_nav=False, persist=False)
+    assert r0["summary"]["pool_views"]["000001"]["view"] == "participate"
+    assert r0["summary"]["pool_call"]["relay_position"] is None
+
+    # ② 注入「回撤破硬线 → 禁买」方案 → 名额归 0，票转观察，且留痕可审计
+    blocked = {"enabled": True, "can_buy": False, "quota": 0, "tier": "weak",
+               "strength": 0.3, "per_pick_cap": 0.3, "total_cap": 0.3,
+               "drawdown_pct": 12.0, "drawdown_level": "hard", "theme_confidence": 0.5}
+    r1 = pv.run_verify(candidates=cands, quotes=quotes, out_nav=False, persist=False,
+                       relay_plan=blocked)
+    assert r1["summary"]["pool_views"]["000001"]["view"] != "participate"
+    _meta = r1["summary"]["pool_call"]
+    assert _meta["effective_quota"] == 0                 # 裁断后实际可买 0 只
+    assert _meta["relay_position"]["can_buy"] is False
+    assert _meta["relay_position"]["drawdown_level"] == "hard"
+
+
 # ── ⑩ 跟风闸「归并一致性守卫」（2026-10-12 传媒事故回归锁）──────────────────
 def test_core_gate_blocks_normal_follower():
     """跟风闸正常生效：核心 3 板已断板、候选 1 板、线族归并一致 → 拦（不占名额）。"""

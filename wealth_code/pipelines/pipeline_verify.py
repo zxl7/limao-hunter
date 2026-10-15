@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,15 @@ from core.nav_ledger import sync_account_nav_ledger
 from core.strategy_metrics import build_account_strategy_metrics, sync_account_strategy_metrics
 from adapters.input_auction import load_auction_quotes
 from core.market_open import build_market_open
-from common.trading_calendar import next_a_share_trading_day
+
+# ⛔ `common/` 在**项目根**、不在 wealth_code/ 下；以脚本/CLI 方式运行时 cwd 不入 sys.path，
+#    调用方只把 wealth_code 导进 PYTHONPATH 就会在此行抛 ModuleNotFoundError。
+#    2026-10-01 实证：launchd 竞价卡整轮 import 期即崩（verify RC=1，当日无卡）。
+#    与 core/ai_caliber.py、adapters/input_auction.py 同法：本模块自插项目根。
+_BASE = Path(__file__).resolve().parents[2]
+if str(_BASE) not in sys.path:
+    sys.path.insert(0, str(_BASE))
+from common.trading_calendar import next_a_share_trading_day  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = ROOT / "cache"
@@ -394,6 +403,8 @@ def run_verify(
     out_nav: bool = True,
     persist: bool = True,
     sector_support_map: dict[str, dict[str, Any]] | None = None,
+    relay: bool = False,
+    relay_plan: dict | None = None,
 ) -> dict[str, Any]:
     """
     运行次日验证。candidates/quotes 可直接传入（便于测试），也可从文件加载。
@@ -404,6 +415,12 @@ def run_verify(
     sector_support_map（2026-08-24）：{code: 板块承接力 dict}——由 cmd_verify --fetch
     抓同板块成员竞价后经 core/sector_support.compute_support 算出；喂给 signal_eval
     做「孤军高开 + 板块0红开 → 买降级观察」裁决。
+
+    relay（2026-10-13 用户需求·早盘接力动态仓位）：True = 用**真实 09:25 读数**
+    （read-open 市场读数 + 候选池竞价 + 题材沉淀 + 净值回撤）合成动态仓位方案，
+    并在池内裁决时**向下裁断名额**（行情转弱→收紧；回撤破硬线→禁买）。
+    ⛔ 默认 False：合成/测试不套用（保持结论确定性、可离线复现）；真实 09:25 运行
+    （cmd_verify --fetch）显式置 True。relay_plan 可外部直接注入（优先级最高）。
     """
     if candidates is None:
         cp = candidates_path or _latest_candidates()
@@ -460,15 +477,29 @@ def run_verify(
                 # 否则红开比例会被选股结果高估。全市场报价不足则闸门自然不放宽。
                 full_zt_rows = _load_full_zt_rows(date10)
                 market_open_read = build_market_open(full_zt_rows, quotes)
+                # 🎯 早盘接力·动态仓位（2026-10-13 用户需求·relay_position 唯一判据源）
+                # 用**真实 09:25 读数**合成方案（昨日强势 + 今晨竞价 + 题材沉淀 + 净值回撤），
+                # 注入 call_pool 做名额的最终向下裁断。⛔ 失败/未开启 → 不裁断（诚实降级）。
+                _relay_plan = relay_plan
+                if _relay_plan is None and relay:
+                    try:
+                        from core import relay_position as _rp
+                        _relay_plan = _rp.build_plan_from_files(
+                            market_open=market_open_read, candidates=candidates, quotes=quotes)
+                    except Exception as _e:              # 诚实降级·不得打断裁决
+                        print(f"[VERIFY] 早盘接力动态仓位方案跳过：{_e}")
+                        _relay_plan = None
                 pool_res = pool_call.call_pool(
                     candidates, quotes, plan=_load_plan(trade_date10),
                     stance=ai_caliber.ai_stance(trade_date10),
-                    market_open=market_open_read)
+                    market_open=market_open_read,
+                    relay_plan=_relay_plan)
                 if persist:
                     save_pool_call(trade_date10, pool_res)
                 _pm = pool_res.get("meta") or {}
                 print(f"[VERIFY] 🎯 9:25 池内裁决：池内 {_pm.get('pool_size')} 只 · "
-                      f"定调 {_pm.get('stance') or '—'} · 当日可买 {_pm.get('quota')} 只 → "
+                      f"定调 {_pm.get('stance') or '—'} · 当日可买 "
+                      f"{_pm.get('effective_quota', _pm.get('quota'))} 只 → "
                       f"买入 {len(_pm.get('participate') or [])} 只 {_pm.get('participate') or ''}"
                       + ("" if persist else "（dry-run·不落盘）"))
             ai_decisions = _inject_pool_views(ai_decisions, pool_res, candidates)

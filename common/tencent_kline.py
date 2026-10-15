@@ -14,7 +14,18 @@ from common.http_client import http_get
 
 # 2026-09-09 修：原 web.ifzq.gtimg.cn 现返回 HTTP 501（腾讯已禁该 host）；
 # 实测 ifzq.gtimg.cn 对个股/指数日K 均 200（锚：002702/sh000002 各 9 行）
-KLINE_URL = "https://ifzq.gtimg.cn/appstock/app/fqkline/get?param={sec},day,,,{n},qfq"
+# 2026-10-09 再修：腾讯**又把 host 换回去了**——实测 15:56 起 ifzq.gtimg.cn 全线 501、
+#   而 web.ifzq 恢复 200。单一 host 会让全量日K静默变空（当日阴线回踩扫描 141 只全部
+#   被判「日K不足」→ 候选 0 只＝假阴性）。改为**按序兜底**，任一 host 拿到非空即用。
+KLINE_URLS = (
+    "https://ifzq.gtimg.cn/appstock/app/fqkline/get?param={sec},day,,,{n},qfq",
+    "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sec},day,,,{n},qfq",
+    "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get?param={sec},day,,,{n},qfq",
+)
+KLINE_URL = KLINE_URLS[0]  # 兼容既有引用；实际请求走 KLINE_URLS 全序列
+
+# 进程内记住可用 host 并提到队首：否则每只票都要先吃一次 501（141 只 ≈ 多花 4 分钟）。
+_GOOD_URLS: list[str] = list(KLINE_URLS)
 
 
 def tk_market(code: str) -> str:
@@ -42,20 +53,28 @@ def _raw_klines(code: str, n: int = 8, timeout: int = 10) -> list[list]:
     行格式（腾讯 fqkline 标准）：[日期, 开, 收, 高, 低, 量]；后 5 项为字符串，可能为 ""。
     2026-09-18 抽出：`fetch_kline`（只要收盘）与 `fetch_kline_ohlc`（要开盘）共用同一 host/URL，
     避免为「多周期收益口径」新开第二个数据源（同源原则）。
+    2026-10-09：host 会被腾讯单方面停用（当日实测 ifzq 501 / web.ifzq 200），
+    故按 `KLINE_URLS` 顺序兜底，拿到非空即返回；全部失败才返回空列表。
     """
     sec = f"{tk_market(code)}{code}"
-    url = KLINE_URL.format(sec=sec, n=n)
-    try:
-        r = http_get(url, t=timeout, headers={"User-Agent": "Mozilla/5.0"}, retries=1)
-        if not isinstance(r, dict):
-            return []
-        d = (r.get("data") or {}).get(sec) or {}
-        if not isinstance(d, dict):
-            return []
-        kl = d.get("qfqday") or d.get("day") or []
-        return kl if isinstance(kl, list) else []
-    except Exception:
-        return []
+    for tmpl in list(_GOOD_URLS):
+        url = tmpl.format(sec=sec, n=n)
+        try:
+            r = http_get(url, t=timeout, headers={"User-Agent": "Mozilla/5.0"}, retries=1)
+            if not isinstance(r, dict):
+                continue
+            d = (r.get("data") or {}).get(sec) or {}
+            if not isinstance(d, dict):
+                continue
+            kl = d.get("qfqday") or d.get("day") or []
+            if isinstance(kl, list) and kl:
+                if _GOOD_URLS[0] != tmpl:      # 命中即把该 host 提到队首（后续票不再试错）
+                    _GOOD_URLS.remove(tmpl)
+                    _GOOD_URLS.insert(0, tmpl)
+                return kl
+        except Exception:
+            continue
+    return []
 
 
 def fetch_kline(code: str, n: int = 8, timeout: int = 10) -> list[tuple[str, float]]:
@@ -68,8 +87,8 @@ def fetch_kline(code: str, n: int = 8, timeout: int = 10) -> list[tuple[str, flo
 
 
 def fetch_kline_ohlc(code: str, n: int = 8, timeout: int = 10) -> list[dict]:
-    """拉最近 n 根腾讯日K（前复权）**含开盘价**，返回
-    [{date, open, close, high, low}, ...] 正序（2026-09-18 新增）。
+    """拉最近 n 根腾讯日K（前复权）**含开盘价与成交量**，返回
+    [{date, open, close, high, low, volume}, ...] 正序。
 
     用途：决策质量审计（`scripts/decision_audit.py`）的 L4 多周期收益口径需要 t+1 开盘价
     （「次日开盘就走」的可执行价）。与 `fetch_kline` **同源**（同一个 `_raw_klines`）。
@@ -90,7 +109,8 @@ def fetch_kline_ohlc(code: str, n: int = 8, timeout: int = 10) -> list[dict]:
             except Exception:
                 return None
 
-        out.append({"date": date, "open": _f(1), "close": close, "high": _f(3), "low": _f(4)})
+        # 腾讯 qfqday 第 6 列为成交量；缺失时保留 None，调用方不得臆造缩量。
+        out.append({"date": date, "open": _f(1), "close": close, "high": _f(3), "low": _f(4), "volume": _f(5)})
     return out
 
 

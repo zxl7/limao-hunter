@@ -7,7 +7,6 @@
 """
 import importlib.util
 import json
-import sys
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -30,23 +29,27 @@ def _snap(total=30, top5=None, leaders=None, broken=None, ld=None, decl=None, li
     return snap
 
 
-def test_first_round_records_up_and_down():
-    """首轮无可核对前序集合：只记录其他事实，不生成涨停总数节点。"""
+def test_first_round_is_baseline_seed():
+    """⛔ 缺口③根治：当天首轮只播种基线，不把开盘快照当盘中事件广播（防 00:01 假 spike）。"""
     snap = _snap(
-        total=33,
+        total=1,
         top5=[{"name": "机器人", "zt_count": 6, "leader": "科森科技"}],
         leaders=[{"code": "603626", "name": "科森科技", "sector": "机器人", "pct": 10.03, "is_20cm": False}],
         broken=["中材科技"], ld=["海南发展"],
         decl=[{"name": "白银", "pct": -6.49, "main_inflow": -6.38e8}],
+        limit_up_stocks=[{"code": "603626", "name": "科森科技", "sector": "机器人", "pct": 10.03}],
     )
     evs, st = it.collect(snap, {})
-    kinds = sorted(e["kind"] for e in evs)
-    assert kinds == ["broken_new", "limit_down_new", "sector_down", "sector_up", "stock_up"]
-    up = next(e for e in evs if e["kind"] == "stock_up")
-    assert up["code"] == "603626" and up["sector"] == "机器人"
-    down = next(e for e in evs if e["kind"] == "sector_down")
-    assert down["name"] == "白银" and down["pct"] == -6.49
-    assert st["total"] is None
+    # 首轮只能有一条 baseline，绝不能有 sector_up/stock_up/broken_new/limit_down_new/sector_down
+    assert len(evs) == 1 and evs[0]["kind"] == "baseline", "首轮必须只产出 baseline"
+    assert st["baseline_seeded"] is True
+    # 基线已把开盘已存在的票/板块种入 seen，后续不会误报"新增"
+    assert "603626" in st["seen_zt"]
+    assert "机器人" in st["sector_up"]
+    assert st["total"] == 1
+    # 第二论：相同快照不再产出任何事件（种子已覆盖）
+    evs2, _ = it.collect(snap, st)
+    assert evs2 == [], "基线后相同状态不得重复产出事件"
 
 
 def test_same_snapshot_twice_yields_nothing():
@@ -109,12 +112,16 @@ def test_zt_total_skips_missing_or_inconsistent_sets():
 
 
 def test_20cm_threshold_respected():
-    """20cm 标的不按 9.9% 误判为涨停（+10% 的 300 票不算涨停）。"""
+    """20cm 标的不按 9.9% 误判为涨停（+10% 的 300 票不算涨停）。
+
+    ⚠️ 首轮已改为基线播种，个股涨停判定须在"已播种"的状态上跑差分轮。
+    """
+    _, st = it.collect(_snap(limit_up_stocks=[{"code": "X", "name": "基线"}]), {})
     snap = _snap(leaders=[
         {"code": "300741", "pct": 10.0, "is_20cm": True},   # 未达 19.9 → 不算
         {"code": "300939", "pct": 19.95, "is_20cm": True},  # 达标 → 算
     ])
-    evs, _ = it.collect(snap, {})
+    evs, _ = it.collect(snap, st)
     codes = [e["code"] for e in evs if e["kind"] == "stock_up"]
     assert codes == ["300939"]
 
@@ -136,19 +143,12 @@ def test_append_empty_writes_nothing(tmp_path, monkeypatch):
 
 
 def test_st_filtered_out():
-    """⛔ 铁律④ 不看 ST：炸板/跌停名单里的 ST/*ST 一律不记录。"""
-    snap = _snap(broken=["*ST四通", "正常炸板"], ld=["ST海龙", "正常跌停"])
-    evs, _ = it.collect(snap, {})
+    """⛔ 铁律④ 不看 ST：炸板/跌停名单里的 ST/*ST 在差分轮仍被过滤，只报新增非ST。"""
+    _, st = it.collect(_snap(broken=["*ST四通", "正常炸板"], ld=["ST海龙", "正常跌停"]), {})
+    snap = _snap(broken=["*ST四通", "正常炸板", "新炸板"], ld=["ST海龙", "正常跌停", "新跌停"])
+    evs, _ = it.collect(snap, st)
     names = sorted(e["name"] for e in evs if e["kind"] in ("broken_new", "limit_down_new"))
-    assert names == ["正常炸板", "正常跌停"], "ST/*ST 必须剔除"
-
-
-def test_st_filtered_out():
-    """⛔ 铁律④ 不看 ST：炸板/跌停名单里的 ST/*ST 一律不记录。"""
-    snap = _snap(broken=["*ST四通", "正常炸板"], ld=["ST海龙", "正常跌停"])
-    evs, _ = it.collect(snap, {})
-    names = sorted(e["name"] for e in evs if e["kind"] in ("broken_new", "limit_down_new"))
-    assert names == ["正常炸板", "正常跌停"], "ST/*ST 必须剔除"
+    assert names == ["新炸板", "新跌停"], "ST/*ST 必须剔除，且只有新增的非ST才上报"
 
 
 def test_main_never_raises_on_bad_input(tmp_path, monkeypatch, capsys):

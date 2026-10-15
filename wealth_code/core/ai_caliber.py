@@ -214,8 +214,12 @@ def entry_limit(decision: dict | None) -> float:
     return USER_ENTRY_MAX_GAP_PCT
 
 
-def clamp_position(p: Any) -> float | None:
-    """单票仓位裁剪到 ≤ MAX_POSITION_PER_STOCK（2026-09-14 用户「买入仓位不超过 50%」）。
+def clamp_position(p: Any, cap: float | None = None) -> float | None:
+    """单票仓位裁剪（2026-09-14 用户「买入仓位不超过 50%」）。
+
+    默认上限 = MAX_POSITION_PER_STOCK(0.5)；若传入动态单票上限 `cap`（来自
+    core.relay_position 早盘接力动态仓位方案的 per_pick_cap），则取二者更小者
+    （动态方案只在行情转弱时收紧·绝不放大）。
 
     非法/非正/缺失 → None（诚实留空，不编造仓位）。
     """
@@ -225,7 +229,10 @@ def clamp_position(p: Any) -> float | None:
         return None
     if v <= 0:
         return None
-    return round(min(v, MAX_POSITION_PER_STOCK), 4)
+    _cap = MAX_POSITION_PER_STOCK
+    if isinstance(cap, (int, float)) and cap > 0:
+        _cap = min(_cap, float(cap))
+    return round(min(v, _cap), 4)
 
 
 def decide(decision: dict | None, gap_pct: float | None,

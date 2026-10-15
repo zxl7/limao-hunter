@@ -18,6 +18,9 @@
   [FAIL] content 字段必须是字符串·禁数组（2026-08-25 猎手卡 200621 事故）
   [FAIL] title 必填且含「类型」+「增量/全量」标注（shared_rules【卡片标题标注规范】）
   [FAIL] 机器黑话 / 内部字段 / 英文档位不得上卡（白话门禁 Tier-1·2026-09-18）
+  [FAIL] note 必须 {tag:note, elements:[…]}·禁裸 content（2026-10-14 整卡降级事故）
+  [FAIL] 禁任一嵌套：text_tag↔text_tag / font↔text_tag（外层吞内层·宪法 ⓪-10·
+         2026-10-14 由 WARN 升级·同日 build_cards 4 处已清理）
   [WARN] 行业圈内术语建议白话化（白话门禁 Tier-2·不阻断·防 LLM 拼卡卡死丢卡）
   [WARN] 字面 \\n（反斜杠+n）会被自动修复
   [WARN] 标题含 emoji 圆点（'●'等）违反禁圆点规范
@@ -55,6 +58,19 @@ COLUMN_SET_RE = re.compile(r'"tag"\s*:\s*"column_set"')
 # 类型标注：标题需含 ·增量 或 ·全量 或「·增量」「·全量」（按卡片标题标注规范）
 TITLE_TYPE_RE = re.compile(r"·(增量|全量)")
 DOT_EMOJI_RE = re.compile(r"[●◆■▲]")
+
+# ⛔ 标签嵌套等级（2026-10-14 由 "WARN" 升为 "FAIL"）：
+#    前置条件已满足——生产 `build_cards.py` 的 `_vol_weak_flag` 4 处 font 嵌套已清理，
+#    且升级前全仓源码扫描确认零残留（`tests/test_card_tag_nesting_source_scan.py` 锁死）。
+#    临时放行请改本常量（勿删检查）；回退观察期 = "WARN"。
+NEST_LEVEL = "FAIL"
+# ⛔ 嵌套硬阻断**生效时刻**（单一源）：2026-10-14 17:35 由 WARN 升 FAIL，
+#    与 `build_cards.py` 的 4 处 font↔text_tag 清理同一批次落地。
+#    在此之前生成的生产卡反映的是**旧代码**，不构成对现行 lint 的有效证伪
+#    ⇒ `tests/test_golden.py::real_cards` 只取样本时刻**之后**生成的生产卡
+#    （按卡片文件名内嵌的生成时刻判定·契约 §1「mtime 不能替代内容日期」）。
+#    ⛔ 测试侧勿另写日期，一律 import 本常量。
+NEST_FAIL_SINCE = "2026-10-14T17:35"
 
 # 允许缺失标题标注的卡类型（脚本类代码生成的已由代码保证；AI 拼卡必须带）
 TITLE_WHITELIST = {"盘中脉搏", "盘中快照", "盘中猎手"}  # 前缀匹配视为必须带标注
@@ -214,6 +230,74 @@ def lint_card(card: dict, fix: bool = False) -> tuple[bool, list[dict], list[dic
             for i, v in enumerate(node):
                 check_elements(v, f"{path}[{i}]")
     check_elements(card)
+
+    # 5.5) note 元素结构检查（2026-10-14 事故·新增 FAIL 项）
+    #      事故：预览脚本手搓完整消息体时把 note 写成 {"tag":"note","content":"..."}，
+    #      缺 `elements` 数组（飞书合法格式 = {"tag":"note","elements":[{"tag":"lark_md",
+    #      "content":"..."}]}），实测该卡被整卡降级/渲染异常（用户反馈「卡片里面没有样式」）。
+    #      旧 lint 的 check_elements 只判 div，note 完全不查 → 非法结构一路放行到群里。
+    def check_note(node, path="card"):
+        if isinstance(node, dict):
+            if node.get("tag") == "note":
+                if "content" in node:
+                    errors.append({"level": "FAIL",
+                                   "msg": f"{path} note 裸 content 非法（content 必须包进 elements[]）："
+                                          "合法 = {'tag':'note','elements':[{'tag':'lark_md','content':...}]}"
+                                          "（2026-10-14 无样式事故）"})
+                els = node.get("elements")
+                if not isinstance(els, list) or not els:
+                    errors.append({"level": "FAIL",
+                                   "msg": f"{path} note 缺 elements 数组 → 飞书整卡降级/不渲染。"
+                                          "⛔ 脚本不得自拼 note；请用简版结构 {{title,color,elements,note}} "
+                                          "由 push_card.normalize() 生成"})
+                else:
+                    for i, sub in enumerate(els):
+                        if not (isinstance(sub, dict) and isinstance(sub.get("content"), str)
+                                and sub["content"].strip()):
+                            errors.append({"level": "FAIL",
+                                           "msg": f"{path} note.elements[{i}] 须为 {{tag, content:非空字符串}}"})
+            for k, v in node.items():
+                check_note(v, f"{path}.{k}")
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                check_note(v, f"{path}[{i}]")
+    check_note(card)
+
+    # 5.6) text_tag / font 嵌套检查（2026-10-14·新增；同日由 WARN 升级 FAIL）
+    #      宪法【突发题材榜 UI 标准模板】5 明确「⛔ 禁 <font> 嵌套 <text_tag>」。
+    #      **两类嵌套一律 FAIL**：
+    #        · text_tag 套 text_tag → 外层胶囊吞掉内层、该行退化为纯文本，
+    #          观感即用户反馈的「卡片里面没有样式」（2026-10-14 猎手 v5 机构对账行实证）。
+    #        · font 套 text_tag（或反向）→ 同属禁嵌套；生产 verify 卡（build_cards.py
+    #          `_vol_weak_flag`）原有 4 处，已于 2026-10-14 清理完毕（缩量胶囊移到 </font> 之后），
+    #          故本项**不再需要观察期**，直接硬阻断。
+    #      ⚠️ 升级前的全仓验证（可复现）：扫 `*.py` 中「<font>…</font> 内含 <text_tag> 或
+    #          返回标签的函数调用」→ 除 build_cards 4 处外零命中；故升 FAIL 不会造成丢卡。
+    #      ⛔ 若将来需临时放行，改模块级 `NEST_LEVEL` 常量而非删除本检查。
+    ANY_TAG_RE = re.compile(r"</?(text_tag|font)\b[^>]*>", re.I)
+    for s in strings:
+        stack: list[str] = []
+        for m in ANY_TAG_RE.finditer(s):
+            tok = m.group(0)
+            name = m.group(1).lower()
+            if tok.startswith("</"):
+                if name in stack:
+                    stack = stack[:len(stack) - 1 - stack[::-1].index(name)]
+                continue
+            if tok.endswith("/>"):
+                continue                      # 自闭合不占栈
+            if stack:
+                ctx = s[max(0, m.start() - 24):m.end() + 30]
+                pair = (stack[-1], name)
+                if pair == ("text_tag", "text_tag"):
+                    errors.append({"level": "FAIL",
+                                   "msg": f"text_tag 嵌套 text_tag（外层吞内层·该行退化为纯文本·"
+                                          f"2026-10-14 无样式事故）: ...{ctx}..."})
+                else:
+                    errors.append({"level": NEST_LEVEL,
+                                   "msg": f"{pair[0]} 套 {pair[1]}（宪法 ⓪-10 禁嵌套·"
+                                          f"2026-10-14 起硬阻断）: ...{ctx}..."})
+            stack.append(name)
 
     ok = not any(e["level"] == "FAIL" for e in errors)
     return ok, errors, warns

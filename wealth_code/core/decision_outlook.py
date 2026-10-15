@@ -18,7 +18,10 @@ from pathlib import Path
 from typing import Any
 
 # ── 门控阈值（可逆常量·改动勿动结构）────────────────────────────────────
-DRAWDOWN_HARD = 10.0      # 净值回撤 ≥10% → 硬禁买 3 交易日（账本纪律叠加）
+# ⚠️ 2026-10-13 用户口径变更（B「改为动态仓位控制」）：
+#    原「回撤 ≥10% → 硬禁买 3 交易日」**取消禁买**——改为按回撤深度**动态压缩单票上限**。
+#    与 core.relay_position.drawdown_multiplier 同曲线（单一源；不可导入时用等价内联兜底）。
+DRAWDOWN_HARD = 10.0      # 回撤警戒线（≥ → 进入深度压仓·⛔ 不再禁买）
 REPAIR_MIN = 4.5          # 情绪分 ≥4.5 = 修复档（可选择性参与）
 RISKON_MIN = 7.0          # 情绪分 ≥7 = 亢奋档（正常接力评估）
 NUKE_CONVERGE = 5         # 核按钮 ≤5 = 亏钱效应收敛（待命触发之一）
@@ -27,16 +30,35 @@ GAP_PARTICIPATE = 5.0     # 竞价高开 ≤5% 才可参与（2026-09-14 用户�
 GAP_ABANDON = 5.0         # 竞价高开 >5% 一律放弃
 STOP_LOSS_PCT = 3.0       # 止损 -3% 或破当日均价线（五日线=生命线）
 POSITION_MAX = 0.5        # 单票仓位上限 50%（2026-09-14 用户「买入仓位不超过 50%」·原 30%）
-HARD_BLOCK_DAYS = 3       # 破线硬禁买天数
+DRAWDOWN_FLOOR_AT = 25.0  # 回撤触底点（≥ → 压到最低乘数）
+DRAWDOWN_MIN_MULT = 0.15  # 最低乘数（⛔ 不归零）
 
 VERDICT_LABEL = {
-    "hard_block": "⛔ 不买·已跌破止损线",
+    "deleverage": "🟠 可小仓·回撤过线压着做",
     "wait_ice": "🧊 不买·市场很冷，空仓等着",
     "wait": "👀 观望·等信号再动",
     "selective": "✅ 可做·市场在转好，挑着做",
     "buy": "🔴 可买·按候选名单执行",
     "unknown": "🟡 数据不足·不决策",
 }
+
+
+def _drawdown_mult(dd: float) -> float:
+    """回撤 → 仓位乘数（与 core.relay_position.drawdown_multiplier 同曲线·单一源）。
+
+    导入失败（如单测以 spec_from_file_location 独立加载本文件）→ 用等价内联兜底，
+    保证判定值与生产一致（⛔ 两处曲线必须同步改）。
+    """
+    try:
+        from core.relay_position import drawdown_multiplier as _m
+        return _m(dd)[0]
+    except Exception:
+        if dd < 5.0:
+            return 1.0
+        if dd < DRAWDOWN_HARD:
+            return round(1.0 + (dd - 5.0) / (DRAWDOWN_HARD - 5.0) * (0.5 - 1.0), 4)
+        t = min(1.0, (dd - DRAWDOWN_HARD) / max(DRAWDOWN_FLOOR_AT - DRAWDOWN_HARD, 1e-6))
+        return round(0.5 + t * (DRAWDOWN_MIN_MULT - 0.5), 4)
 
 
 def build_decision(
@@ -49,28 +71,46 @@ def build_decision(
     promote_downtrend: bool = False,
     defense_level: int = 0,
     nav_drawdown_pct: float | None = None,
+    relay_per_pick_cap: float | None = None,
 ) -> dict[str, Any]:
     """机械决策（纯函数）。输入全部为真实指标值，返回四段式结构。
 
     门控顺序（高优先级先判）：
-      1) nav 回撤 ≥10%           → hard_block（3 交易日禁买）
+      1) nav 回撤 ≥10%           → deleverage（可小仓·按回撤深度压单票上限·⛔ 不禁买）
       2) regime=ice 或 sentiment≤2 → wait_ice（冰点空仓待命）
       3) risk_off 或 defense≥1 或 (sentiment≤4 且 promote 走弱) → wait（观望·触发式）
       4) sentiment≥7             → buy（亢奋·接力池正常）
       5) sentiment≥4.5           → selective（修复·精选可做）
       6) 其余（3-4.4 分歧）       → wait（防守）
     """
-    # ── ① 破线硬禁买（最高优先级·账本纪律）──
+    # ── ① 回撤过线（最高优先级·账本纪律）──────────────────────────────────
+    # ⚠️ 2026-10-13 用户口径 B：「改为动态仓位控制」——**取消硬禁买 3 天**，
+    #    改为按回撤深度把单票上限压小（越深越小，最低 ×0.15），风险靠仓位控制。
     if nav_drawdown_pct is not None and nav_drawdown_pct >= DRAWDOWN_HARD:
+        _mult = _drawdown_mult(nav_drawdown_pct)
+        # 🎯 单票上限单一源（2026-10-14）：接力动态仓位方案（core.relay_position）在跑时，
+        #    以它的 per_pick_cap 为准（= 行情强弱档位 × 回撤乘数）；否则回落到
+        #    POSITION_MAX × 回撤乘数。⛔ 两处各算一个数会让同一张卡出现「14% / 8%」两个上限
+        #    （用户「消息和数据的准确性是底层要求」）——卡面动态仓位块与本段必须同值。
+        if isinstance(relay_per_pick_cap, (int, float)) and 0 < float(relay_per_pick_cap) <= POSITION_MAX:
+            _cap = round(float(relay_per_pick_cap), 4)
+        else:
+            _cap = round(POSITION_MAX * _mult, 4)
+        _cap_txt = f"{_cap * 100:.1f}%" if _cap * 100 < 10 else f"{_cap * 100:.0f}%"
         return {
-            "verdict": "hard_block",
-            "tone": VERDICT_LABEL["hard_block"],
-            "conclusion": (f"账户从最高点回撤了 {nav_drawdown_pct:.1f}%，已经跌破 -{DRAWDOWN_HARD:.0f}% 的止损线，"
-                           f"接下来 {HARD_BLOCK_DAYS} 个交易日禁买——先止血，再谈进攻"),
+            "verdict": "deleverage",
+            "tone": VERDICT_LABEL["deleverage"],
+            "conclusion": (f"账户从最高点回撤了 {nav_drawdown_pct:.1f}%，已经过了 -{DRAWDOWN_HARD:.0f}% 的警戒线——"
+                           f"不禁止买，但要压着做：单票最多 {_cap_txt}，最多买 1 只，"
+                           f"先把回撤收窄再说进攻"),
             "basis": {"nav_drawdown_pct": round(nav_drawdown_pct, 2)},
-            "triggers": [f"账户回撤收窄到 {DRAWDOWN_HARD - 2:.0f}% 以内，且做多气氛回到 {REPAIR_MIN} 分以上"],
-            "rules": {"position": 0, "note": "禁买期间·只做减仓和防守"},
-            "risks": ["禁买期间如果市场转好会踏空：按纪律 3 天后再重新评估，不抢跑"],
+            "triggers": [f"账户回撤收窄到 {DRAWDOWN_HARD - 2:.0f}% 以内，且做多气氛回到 {REPAIR_MIN} 分以上，"
+                         "再恢复正常仓位"],
+            "rules": {"position": f"≤{_cap_txt} 单票（接力池当日上限见竞价卡）",
+                      "count": "最多 1 只·只做最有把握的",
+                      "stop": f"跌 {STOP_LOSS_PCT:.0f}% 或跌破当天均价就走",
+                      "note": "回撤没收窄之前不加仓、不摊成本"},
+            "risks": ["仓位小的时候市场转好会赚得少：先保命，等回撤收窄再放大，不抢跑"],
         }
 
     if sentiment is None:
@@ -170,8 +210,14 @@ def _json_loads_line(line: str) -> dict | None:
         return None
 
 
-def decision_from_files(root: Path, *, date: str | None = None) -> dict[str, Any]:
-    """从真实文件载入指标 → build_decision。文件缺失 → 对应字段 None（诚实降级）。"""
+def decision_from_files(root: Path, *, date: str | None = None,
+                        relay_plan: dict[str, Any] | None = None) -> dict[str, Any]:
+    """从真实文件载入指标 → build_decision。文件缺失 → 对应字段 None（诚实降级）。
+
+    🎯 `relay_plan`（2026-10-14）：调用方已算好的接力动态仓位方案（`core.relay_position`）。
+    传入 → 本函数的「单票上限」与卡面动态仓位块同源同值；不传 → 自行读文件补算
+    （读不到 → 回落 POSITION_MAX × 回撤乘数，不阻断）。
+    """
     fb_p = root / "cache" / "feedback_matrix.json"
     fb: dict = {}
     try:
@@ -191,6 +237,17 @@ def decision_from_files(root: Path, *, date: str | None = None) -> dict[str, Any
                 dd = round((cur / peak - 1) * -100, 2)
     except Exception:
         pass
+    # 🎯 接力动态仓位的单票上限（唯一判据源＝core.relay_position·2026-10-14）
+    _rp_cap = None
+    try:
+        _plan = relay_plan
+        if not isinstance(_plan, dict):
+            from core.relay_position import build_plan_from_files as _build_plan
+            _plan = _build_plan(root)
+        if isinstance(_plan, dict) and _plan.get("enabled", True):
+            _rp_cap = _plan.get("per_pick_cap")
+    except Exception:
+        _rp_cap = None
     return build_decision(
         regime=fb.get("regime"),
         sentiment=fb.get("sentiment_score"),
@@ -200,4 +257,5 @@ def decision_from_files(root: Path, *, date: str | None = None) -> dict[str, Any
         promote_downtrend=bool(trend.get("promote_downtrend")),
         defense_level=int(trend.get("defense_level") or 0),
         nav_drawdown_pct=dd,
+        relay_per_pick_cap=_rp_cap,
     )

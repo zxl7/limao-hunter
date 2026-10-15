@@ -12,6 +12,10 @@
      该用例显式锁死这一事实 —— 防后人把它当成「这几条本来就能拦住那天」的错觉。
   ⑧ ⛔ 「断板回封是加分项」锁：断 1~2 天的快速 N 字**不得**被位置闸拦（只有断好多天 +
      已经涨了一大截才是接盘）。
+  ⑨ 🆕 2026-10-12 收紧（用户「如果是指标问题，收一收」·国芳集团漏网）：
+     「封单薄 + 封得晚」两条 ＋ **位置已经很高**（与 ④ 位置闸同口径：dev10 ≥45 或 dev30 ≥50）
+     → 硬闸（旧的「位置高」只认 dev_10d，国芳 10 日仅 3.9%、30 日已 +97.8% → 判「不高」漏网）；
+     ⛔ 但「换手大 + 封单薄」那条**不得**同步收紧（含闽东电力等大赢家，实测新增 41 条拦截）。
 
 全隔离：tmp_path / 显式传参，不读真实 cache、不落盘、不触网。
 """
@@ -19,9 +23,11 @@ import json
 import sys
 from pathlib import Path
 
-WC = Path(__file__).resolve().parents[1] / "wealth_code"
-if str(WC) not in sys.path:
-    sys.path.insert(0, str(WC))
+ROOT = Path(__file__).resolve().parents[1]
+WC = ROOT / "wealth_code"
+for _p in (str(WC), str(ROOT), str(ROOT / "scripts")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from core import defense_gate as dg  # noqa: E402
 from core import pool_call  # noqa: E402
@@ -86,22 +92,24 @@ FLOW_0930 = {
 }
 
 # ── 2026-09-21~09-30 的真实交易日（`cache/zt_history/` 里有涨停票的日）──────────────
-# 2026-09-26/27 是周末；10-01 起是国庆长假（10-01/02/05 的 zt 文件是空占位）。
+# 2026-09-26/27 是周末；**2026-09-25 是中秋节（周五）休市**（2026-10-09 补录 closed_dates）；
+# 10-01 起是国庆长假（10-01/02/05 的 zt 文件是空占位）。
 ZT_DAYS = ["2026-09-21", "2026-09-22", "2026-09-23", "2026-09-24",
-           "2026-09-25", "2026-09-28", "2026-09-29", "2026-09-30"]
+           "2026-09-28", "2026-09-29", "2026-09-30"]
 # 逐票涨停序列（`cache/zt_history/zt_<日>.json` 实录·截到 09-30）
 ZT_SERIES = {
-    # 南华生物：09-21(3板) → 09-22(4板) → **断板 5 个交易日** → 09-30 重新涨停（第二波）
+    # 南华生物：09-21(3板) → 09-22(4板) → **断板 4 个交易日** → 09-30 重新涨停（第二波）
     "000504": [("2026-09-21", 3), ("2026-09-22", 4), ("2026-09-30", 1)],
-    # 襄阳轴承：09-24~09-30 **连续**涨停（非二波）
-    "000678": [("2026-09-24", 1), ("2026-09-25", 1), ("2026-09-28", 2),
+    # 襄阳轴承：09-24 → 09-28 → 09-30 **连续**涨停（非二波）
+    "000678": [("2026-09-24", 1), ("2026-09-28", 2),
                ("2026-09-29", 3), ("2026-09-30", 4)],
     # 龙蟠科技：只在 09-30 出现（序列不足 2 条 → 位置闸不裁决）
     "603906": [("2026-09-30", 1)],
 }
-# 快速 N 字（09-25 断板 → 09-30 回封，中间只空 2 个交易日）+ 上一波 3 板 → ⛔ 不得拦
-QUICK_NZI_SERIES = {"000678": [("2026-09-25", 3), ("2026-09-30", 1)]}
-QUICK_NZI_DAYS = ["2026-09-25", "2026-09-28", "2026-09-29", "2026-09-30"]
+# 快速 N 字（09-24 断板 → 09-30 回封，中间只空 2 个交易日）+ 上一波 3 板 → ⛔ 不得拦
+QUICK_NZI_SERIES = {"000678": [("2026-09-24", 3), ("2026-09-30", 1)]}
+QUICK_NZI_DAYS = ["2026-09-21", "2026-09-22", "2026-09-23", "2026-09-24",
+                  "2026-09-28", "2026-09-29", "2026-09-30"]
 
 
 # ── ① 派发特征 ───────────────────────────────────────────────────────────────
@@ -129,11 +137,18 @@ def test_distribution_does_not_block_the_real_winners():
 
 
 def test_distribution_warn_needs_two_hits_plus_high_position():
-    """两条 + 位置已高 → 只留痕警示；位置不高则连警示都不给。"""
+    """两条 + 位置已高 → 只留痕警示；位置不高则连警示都不给。
+
+    ⛔ 这里同时是 **2026-10-12 收紧的边界锁**：该票命中的是「换手大 + 封单薄」
+    （fbt 09:31 早封，**不含「封得晚」**）→ 不得被 ③b 组合升级成 block。
+    「换手大 + 封单薄」那条 55 个可成交样本里含闽东电力 +7.32% / 传艺科技 +10.92%
+    等大赢家，一并收紧会砍掉真龙头（实测新增 41 条拦截，已被数据否证）。
+    """
     high = {"hs": 17.0, "seal_amt": 0.5, "lt_mktcap": 80.0, "fbt": "093100",
             "dev_10d_pct": 48.0}
     low = dict(high, dev_10d_pct=5.0)
-    assert dg.distribution_verdict(high)["level"] == "warn"
+    v_high = dg.distribution_verdict(high)
+    assert v_high["level"] == "warn" and v_high["kind"] == "warn"
     assert dg.distribution_verdict(low)["level"] == "none"
 
 
@@ -143,6 +158,126 @@ def test_distribution_missing_fields_never_block():
     assert dg.distribution_verdict(None)["level"] == "none"
     # 只有换手一项 → 一条命中，不够
     assert dg.distribution_verdict({"hs": 30.0})["level"] == "none"
+
+
+# ── ③b 派发·组合升级（2026-10-12 收紧「封单薄 + 封得晚 + 位置高」）──────────────
+# 真实字段：`candidates-2026-10-09.json` 国芳集团（次日 10-12 竞价 +2.41% → 收盘 −12.09%）
+GUOFANG = {"code": "601086", "name": "国芳集团", "hs": 10.563,
+           "seal_amt": 0.59912388, "lt_mktcap": 99.5004, "fbt": "101607",
+           "dev_10d_pct": 3.9, "dev_30d_pct": 97.8}
+# 龙蟠科技 09-30 真实字段：同样是「封单薄 + 封得晚」，但位置不高 → 当日涨停 +9.98%
+LONGPAN_THIN_LATE = {"code": "603906", "name": "龙蟠科技", "hs": 6.57,
+                     "seal_amt": 0.4177, "lt_mktcap": 107.19, "fbt": "101123",
+                     "dev_10d_pct": 6.3, "dev_30d_pct": -1.2}
+
+
+def test_thin_late_high_position_blocks_guofang():
+    """国芳集团（10-09 真实字段）：封单 0.60% + 10:16 才封板 + 30 日多涨 97.8% → 硬闸。
+
+    ⛔ 旧口径漏网根因：位置只认 `dev_10d_pct`（3.9 → 判「不高」）→ 连 warn 都没有。
+    """
+    v = dg.distribution_verdict(GUOFANG)
+    assert v["level"] == "block", v
+    assert v["kind"] == "thin_late_high"
+    assert v["hit_count"] == 2                       # 换手 10.6% 不中，只有两条
+    assert dg.seal_quality(GUOFANG)["seal_ratio_pct"] == 0.6
+    assert "抬轿子" in v["note"] and "30 天" in v["note"]
+
+
+def test_thin_late_position_leg_says_which_leg_triggered():
+    """文案必须说**真正触发**的那条腿：30 日的账不能说成 10 日（国芳 10 日只涨 3.9%）。"""
+    v30 = dg.distribution_verdict(GUOFANG)
+    assert "30 天已经涨了 98%" in v30["note"] and "10 天" not in v30["note"]
+    v10 = dg.distribution_verdict(dict(LONGPAN_THIN_LATE, dev_10d_pct=48.0))
+    assert "10 天已经涨了 48%" in v10["note"]
+
+
+def test_thin_late_needs_high_position():
+    """同是「封单薄 + 封得晚」：位置不高不拦（龙蟠），只把位置抬到高位才拦。"""
+    assert dg.distribution_verdict(LONGPAN_THIN_LATE)["level"] == "none"
+    v = dg.distribution_verdict(dict(LONGPAN_THIN_LATE, dev_10d_pct=48.0))
+    assert v["level"] == "block" and v["kind"] == "thin_late_high"
+
+
+def test_thin_late_boundaries_and_honest_degradation():
+    """边界：封单数据缺失 → 不拦；含「换手大」→ 不属 ③b（走 warn / triple）。"""
+    # 只有「封得晚 + 位置高」，封单/换手都没数据 → 不裁决
+    assert dg.distribution_verdict({"fbt": "101500", "dev_30d_pct": 120.0})["level"] == "none"
+    # 「换手大 + 封单薄」+ 高位（封得早）→ 仍只 warn，⛔ 不升级为 block
+    assert dg.distribution_verdict(
+        {"hs": 20.0, "seal_amt": 0.5, "lt_mktcap": 100.0, "fbt": "093100",
+         "dev_10d_pct": 48.0})["level"] == "warn"
+    # 三条全中 → kind=triple（优先级高于 ③b）
+    assert dg.distribution_verdict(
+        {"hs": 20.0, "seal_amt": 0.5, "lt_mktcap": 100.0, "fbt": "101500",
+         "dev_30d_pct": 120.0})["kind"] == "triple"
+
+
+def test_thin_late_subswitch_is_reversible(monkeypatch):
+    """关掉 ③b 子开关 → 逐字回退（国芳回到旧行为的 `none`，不是 block）。"""
+    assert dg.distribution_verdict(GUOFANG)["level"] == "block"
+    monkeypatch.setattr(dg, "DEFENSE_DIST_THIN_LATE_ENABLED", False)
+    v = dg.distribution_verdict(GUOFANG)
+    assert v["level"] == "none" and v["kind"] == ""
+
+
+def test_thin_late_note_passes_plain_copy_gate():
+    """note 必须过词表唯一源 `card_copy_rules.scan()`（禁机器黑话上卡）。"""
+    import card_copy_rules as ccr
+    fails, warns = ccr.scan(dg.distribution_verdict(GUOFANG)["note"])
+    assert fails == [] and warns == [], (fails, warns)
+
+
+def test_thin_late_card_plain_label_registered():
+    """「竞价达标但没买」名单必须收录 ③b 的一眼原因，且标签本身过白话词表。"""
+    from pipelines import build_cards as bc
+    import card_copy_rules as ccr
+    lbl = bc._DEFENSE_GATE_PLAIN.get("distribution_thin_late")
+    assert lbl, sorted(bc._DEFENSE_GATE_PLAIN)
+    assert ccr.scan(lbl) == ([], []), ccr.scan(lbl)
+
+
+# 国芳集团 10-09 候选（真实字段形态；位置腿只有 30 日那条够高）
+def _guofang_candidates():
+    return {"date": "2026-10-09", "environment": {},
+            "relay": [dict(GUOFANG, boards=1, theme_name="大消费", core_theme="大消费",
+                           sector="一般零售",
+                           expectation={"expected_range": [0.0, 1.7],
+                                        "auction_amount_min_yi": 0.3})],
+            "watch": []}
+
+
+# 10-12 真实竞价：昨收 14.94 → 今开 15.30（+2.41%），量能达标
+QUOTES_GUOFANG = {"601086": {"prev_close": 14.94, "auction_price": 15.30,
+                             "auction_amount_yi": 1.2}}
+
+
+def test_pool_call_blocks_thin_late_high_and_reports_it():
+    """竞价达标（+2.41%）仍不买 —— 记 `distribution_thin_late`（与三条全中分开），不占名额。"""
+    res = pool_call.call_pool(_guofang_candidates(), QUOTES_GUOFANG, plan={},
+                              stance="attack", line_cores={}, sector_flow={},
+                              zt_series={}, zt_days=[])
+    v = res["views"]["601086"]
+    assert v["view"] == "watch"
+    assert v["defense_gate"] == "distribution_thin_late"
+    assert v["defense_detail"]["kind"] == "thin_late_high"
+    assert "+2.41%" in v["reason"] and "抬轿子" in v["reason"]
+    d = res["meta"]["defense"]
+    assert d["distribution_thin_late_blocked"] == ["601086"]
+    assert d["distribution_blocked"] == []           # ⛔ 与三条全中分账·不混记
+    assert res["meta"]["participate"] == []
+    views = pool_call.apply_to_views(res, {})        # 卡面/审计读同一份结论
+    assert views["601086"]["defense_gate"] == "distribution_thin_late"
+
+
+def test_pool_call_thin_late_switch_is_reversible(monkeypatch):
+    """关掉 ③b → 国芳恢复为可买候选（其余闸不动），证明拦它的是这一条。"""
+    monkeypatch.setattr(dg, "DEFENSE_DIST_THIN_LATE_ENABLED", False)
+    res = pool_call.call_pool(_guofang_candidates(), QUOTES_GUOFANG, plan={},
+                              stance="attack", line_cores={}, sector_flow={},
+                              zt_series={}, zt_days=[])
+    assert res["views"]["601086"]["view"] == "participate"
+    assert res["views"]["601086"].get("defense_gate") is None
 
 
 # ── ② 方向资金失血 ───────────────────────────────────────────────────────────
@@ -214,16 +349,16 @@ def test_sector_drain_ignores_too_broad_theme():
 
 # ── ③ 位置（高位二波）────────────────────────────────────────────────────────
 def test_position_blocks_nanhua_second_wave():
-    """南华生物：09-22 那波 4 板 → 断板 5 个交易日 → 09-30 重启（首板）。位置高 → 拦。
+    """南华生物：09-22 那波 4 板 → 断板 4 个交易日（09-25 中秋休市）→ 09-30 重启（首板）。位置高 → 拦。
 
     ⛔ 这正是系统的原始盲区：断板后连板计数被重置成「首板」，看不出「已经有了一波」。
     """
     v = dg.position_verdict(NANHUA, ZT_SERIES, ZT_DAYS)
     assert v["level"] == "block", v
     assert v["high_position"] is True and v["prior_board_ok"] is True
-    assert v["wave"]["is_rebound"] is True and v["wave"]["gap_days"] == 5
+    assert v["wave"]["is_rebound"] is True and v["wave"]["gap_days"] == 4
     assert v["wave"]["prior_max_board"] == 4
-    assert "第二波" in v["note"] and "断板 5 个交易日" in v["note"]
+    assert "第二波" in v["note"] and "断板 4 个交易日" in v["note"]
 
 
 def test_position_spares_consecutive_boards_and_winners():
@@ -274,15 +409,15 @@ def test_load_zt_series_truncates_and_skips_placeholder(tmp_path):
     def _w(day, rows):
         (tmp_path / f"zt_{day}.json").write_text(
             json.dumps({"zt_list": rows}, ensure_ascii=False), encoding="utf-8")
-    _w("2026-09-25", [{"code": "000678", "name": "襄阳轴承", "boards": 1}])
+    _w("2026-09-24", [{"code": "000678", "name": "襄阳轴承", "boards": 1}])
     _w("2026-10-01", [])                                     # 节假日占位（空）
     _w("2026-10-08", [{"code": "000678", "name": "襄阳轴承", "boards": 9}])   # 未来日
     s, days = dg.load_zt_series(upto="2026-09-30", root=tmp_path)
-    assert days == ["2026-09-25"]                            # 占位与未来日都被剔除
-    assert s == {"000678": [("2026-09-25", 1)]}
+    assert days == ["2026-09-24"]                            # 占位与未来日都被剔除
+    assert s == {"000678": [("2026-09-24", 1)]}
     # 不传 upto → 未来日纳入（调用方负责给依据日）
     s2, days2 = dg.load_zt_series(root=tmp_path)
-    assert days2 == ["2026-09-25", "2026-10-08"] and s2["000678"][-1] == ("2026-10-08", 9)
+    assert days2 == ["2026-09-24", "2026-10-08"] and s2["000678"][-1] == ("2026-10-08", 9)
     # 目录不存在 → 诚实降级
     assert dg.load_zt_series(root=tmp_path / "nope") == ({}, [])
 
@@ -338,7 +473,7 @@ def test_pool_call_defense_gate_blocks_both_losers_and_promotes_next():
 
     顺序＝宏观到微观：板块有没有钱（⑧）→ 这票在什么位置（⑨）→ 昨天封得脏不脏（⑩）。
       · 襄阳轴承 → 方向失血（机器人族 −42.25 亿）  ← 土壤先判
-      · 南华生物 → 高位二波（断板 5 个交易日后重启 ∧ 上一波 4 板）← 位置才是它的真原因
+      · 南华生物 → 高位二波（断板 4 个交易日后重启 ∧ 上一波 4 板）← 位置才是它的真原因
     ⛔ 位置闸排在派发闸**前面**：两条都中的票（南华）卡面必须说「第二波高位反抽」这个真原因，
       而不是只说「换手大/封单薄」这个症状。
     """
@@ -358,7 +493,7 @@ def test_pool_call_defense_gate_blocks_both_losers_and_promotes_next():
     assert "失血" in r_xy and "42.2 亿" in r_xy and "先看" in r_xy and "→" in r_xy
     assert res["views"]["000678"]["defense_gate"] == "sector_drain"
     r_nh = res["views"]["000504"]["reason"]
-    assert "第二波反抽" in r_nh and "断板 5 个交易日" in r_nh and "4 板" in r_nh
+    assert "第二波反抽" in r_nh and "断板 4 个交易日" in r_nh and "4 板" in r_nh
     assert res["views"]["000504"]["defense_gate"] == "high_position"
     # 封板质量读数在短路链之前算好 → 被别的闸拦下的票也留痕（审计可查）
     assert res["views"]["000678"]["seal_quality"]["seal_ratio_pct"] == 1.13

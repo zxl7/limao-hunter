@@ -26,13 +26,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "wealth_code"))
 
+# 规范时间戳（2026-10-14 审计 P1-⑦）：generated_ts 统一 ISO8601 带 +08:00。
+from common.market_time import iso_bj  # noqa: E402
 from core import sector_support as ss   # noqa: E402
 
 CAND_DIR = ROOT / "wealth_code" / "cache"
@@ -140,7 +141,7 @@ def main(argv=None) -> int:
     high_risk = find_high_risk(rows)
     snap = snapshot(rows)
     OUT.write_text(json.dumps(
-        {"checked_date": d, "generated_ts": datetime.now().isoformat(timespec="seconds"),
+        {"checked_date": d, "generated_ts": iso_bj(),
          "n_candidates": len(rows), "n_high_risk": len(high_risk),
          "high_risk": high_risk,
          "snapshot": {k: v for k, v in sorted(snap.items())}},

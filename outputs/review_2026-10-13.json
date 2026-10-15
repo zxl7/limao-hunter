@@ -1,0 +1,237 @@
+{
+ "title": "📝 盘后复盘 10-13 | 探底回升·PCB业绩线爆发",
+ "color": "blue",
+ "elements": [
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>① 📉 情绪演变与五日轨迹</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**早盘一度跌超3%、午后被算力硬件的业绩预告拉回红盘；10板高度标被停牌核查抽走，最高板压到3板。**\n昨日 1.0/10·市场转冷 → 今日 3.6/10·分歧；涨停由46只回升到67只，炸板率由36.1%降到21.2%，核按钮由10只减到6只。\n📈 五日评分：4.5→<text_tag color='green'>1</text_tag>→<text_tag color='red'>8.2</text_tag>→<text_tag color='green'>1</text_tag>→<text_tag color='red'>3.6</text_tag>，今日低于3日均值4.27。这一次不是8分以上的单日脉冲，而是1分之后的温和回升，方向也从传媒换成了能算出利润的算力硬件。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>② 📊 真实情绪总览</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "指数：上证 3800.86 <text_tag color='red'>+0.10%</text_tag>｜深证 12353.70 <text_tag color='green'>-0.25%</text_tag>｜创业板 2958.34 <text_tag color='green'>-0.18%</text_tag>\n上涨/下跌 <text_tag color='red'>2836</text_tag>:<text_tag color='green'>2278</text_tag>（近2900只收红·双创盘中一度跌超3%）｜沪深两市成交额 1.68万亿（较昨日放量约1400亿）\n做多气氛 **3.6分**｜涨停 67只｜炸板率 21.2%｜晋级率 <text_tag color='green'>21.7%</text_tag>\n昨日涨停今日均幅 <text_tag color='red'>+1.10%</text_tag>｜核按钮 6只｜大面 10只｜最高板 <text_tag color='green'>10→3板</text_tag>"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>③ 🧠 AI综合判断</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**今天指数先杀后拉、做多气氛从1分回到3.6分，真正把指数拽回来的是PCB和光通信——这两条线涨的是能落到报表上的订单和涨价，不是故事。**\n<text_tag color='neutral'>止跌证据</text_tag>\n· 昨日涨停今日均幅 +1.10% 仍为正，47.8%的票收红，买涨停的次日回报没有转负。\n· 炸板率从36.1%降到21.2%，核按钮从10只收到6只，涨停从46只回升到67只。\n· PCB与覆铜板8只涨停，同时印制电路板+20.9亿、PCB+19.1亿、元件+13.7亿，业绩预告与涨停同向。\n<text_tag color='neutral'>待验约束</text_tag>\n· 晋级率从26.1%回落到21.7%，掉到近10日门槛22.9%之下，接力意愿还没回来。\n· 最高板只剩3板，且分散在影视、出版、化妆品电商、水产饲料四处，没有一条线把高度拉开。\n· 量能虽然放量约1400亿，但只有1.68万亿；指数也只有上证收红。\n<text_tag color='red'>⚠️ 风险</text_tag>\nA. 10板的空间龙新华传媒今起停牌核查，停牌前封单10.17亿；它复牌怎么走，直接决定传媒出版这条线还在不在。\nB. PCB是今天涨停最多、封单最实的方向，但板块5日资金仍是-149.7亿，属于深跌之后的第一次反转，上面还有套牢盘。\nC. 电池净流出75.0亿、锂电池净流出74.0亿，紫竹高科跌停；上周最强的方向，今天反过来变成最弱的。\nD. 保险、银行今天一起下挫，中国太保跌超4%，权重走弱会压住指数继续修复的空间。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>⑤ 🔥 主线复盘</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='red'>⭐确定性最强：PCB与覆铜板·爆发第1天</text_tag>\n<text_tag color='red'>· 8只涨停：超声电子(000823)封单3.88亿居全场第一，中京电子(002579)、协和电子(605258)、澳弘电子(605058)、依顿电子(603328)、骏亚科技(603386)、铜峰电子(600237)，金百泽(301041)20cm。</text_tag>\n· 催化是能算出来的东西：超声电子预告第三季度净利环比+181%~206%、景旺电子第三季度+205%~265%、广合科技前三季度+100%~107%，叠加建滔年内第七张覆铜板涨价函。\n⚠️ 涨停清一色是首板，明日看能不能走出2板。\n\n<text_tag color='blue'>CPO与光通信·资金排第一</text_tag>\n· <text_tag color='purple'>华脉科技(603042)</text_tag> 涨停，<text_tag color='purple'>中际旭创(300308)</text_tag> 探底翻红、成交221亿居全市场第一；两家光通信公司公告三季报大幅预增。资金光通信模块+35.3亿、CPO概念+17.5亿。\n⚠️ 资金排第一，涨停却只有1只，是资金先动、个股还没跟上的状态。\n\n<text_tag color='blue'>传媒与出版·延续</text_tag>\n· <text_tag color='purple'>慈文传媒(002343)</text_tag>、<text_tag color='purple'>新经典(603096)</text_tag>、<text_tag color='purple'>龙版传媒(605577)</text_tag> 3板，<text_tag color='purple'>广电网络(600831)</text_tag> 2板。\n⚠️ 欢瑞世纪、博纳影业等前期连板今天回落，旧龙头停牌之后这条线内部开始分化。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>⑥.5 👑 核心演化史</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**昨日核心今日命运**\n· 新华传媒 昨10板（出版传媒）→ **今起停牌核查**（10个交易日连续涨停、累计涨159.51%、重组预期），高度标是被动退场，不是断板。\n· 九阳股份 昨6板 → 断板 <text_tag color='red'>+6.19%</text_tag>（换手18.34%）；时代万恒 昨6板 → 断板 <text_tag color='green'>-0.62%</text_tag>（换手33.94%）。\n· 华北制药 昨3板 → 核按钮 <text_tag color='green'>-9.95%</text_tag>。\n\n**今日市场核心**\n· 最高板只有3板、五只并列：慈文传媒、新经典、龙版传媒、丽人丽妆、百洋股份；没有唯一的高度票，属于高度空档。\n\n**明日核心推演**\n· 看3板能不能走出4板——慈文传媒封单2.52亿、新经典2.17亿，都是09:25封的；同时看PCB里的超声电子（封单全场第一）能不能从首板往上走。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>⑥ 📊 轮动复盘</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "✅ PCB与覆铜板、CPO光通信：业绩预告驱动的真回流，PCB方向8只涨停，资金印制电路板+20.9亿、光通信+35.3亿。\n✅ 商业百货与零售：东百集团2板（成交20.58亿居涨停股第一），中兴商业、南宁百货首板，零售政策消息带动。\n✅ 传媒与出版：慈文传媒等3板接上，共6只涨停，旧龙头停牌后方向没散。\n❌ 电池与固态电池：净流出75.0亿、47.6亿，紫竹高科跌停，前期主力方向变最弱。\n❌ 风电设备：继续调整，大金重工跌停。\n❌ 有机硅、粮食概念：上一轮列的待回流方向今天都没动，晨光新材-2.24%、金健米业+4.68%都没封板。\n⚠️ 冰雪经济：冰山冷热、大连圣亚、晶雪节能20cm、雪人集团、长白山首板，由黑龙江冰雪季推介会带动，是目前的新方向但偏支线。\n\n<text_tag color='orange'>切换日判断：成立。</text_tag>旧高度标新华传媒不是断板、是被停牌抽走，同一天PCB与覆铜板靠业绩预告走出8只涨停——旧核心退场、新方向接上。四点质量：大盘探底回升而且放量（好）、催化是能算出来的利润不是故事（好）、旧核心是停牌这种被动退出（风险被动释放·好）；唯一短板是高度从10板压到3板。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>⑦ 💰 板块资金</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>光通信模块 +35.3亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>电池技术 -75.0亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>印制电路板 +20.9亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>锂电池概念 -74.0亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>集成电路制造 +20.5亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>电力设备 -55.5亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>国防军工 +19.3亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>固态电池 -47.6亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>PCB +19.1亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>储能概念 -44.5亿</text_tag>"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>⑨ 📎 明日展望与延续观察</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· 看新方向能不能走出高度：PCB里的8只首板（超声电子、中京电子、协和电子、澳弘电子）明天能不能出2板。\n· 看板块大票能不能连板：光通信资金排第一但只有1只涨停，中际旭创、沪电股份这类权重能不能跟上。\n· 看老龙头反包还是续杀：新华传媒的停牌核查结果；今天断板的九阳股份（+6.19%）、时代万恒（-0.62%）怎么走。\n· 看新龙头有没有资金接：晋级率能不能回到25%以上（今日21.7%）、核按钮能不能守住个位数（今日6只）、炸板率能不能留在30%以下（今日21.2%）。\n\n<text_tag color='green'>⚠️ 指数只有上证收红、量能还没回到2万亿；PCB是深跌后的第一次反转，5日资金仍-149.7亿，明日追首板要防一日游。</text_tag>\n\n**延续观察**\n· PCB与覆铜板、CPO光通信：今天资金、涨停、业绩三样同向，是明日第一顺位要盯的方向。\n· 传媒与出版：3板在手（慈文传媒、新经典、龙版传媒），但旧龙头停牌，方向上缺一个压阵的。\n· 冰雪经济：今天新冒出来的支线，看能不能从首板走出2板。\n\n**📈 股性参考·历史基因 Top10**\n这批是历史上爱涨停、连板能晋级、首板次日有溢价的老面孔——明日看谁继续扛。\n· <text_tag color='purple'>龙版传媒</text_tag>（近250日涨停12次·最长6板·晋级63.6%·首板次日高开均2.77%）\n· <text_tag color='purple'>华脉科技</text_tag>（近250日涨停15次·最长6板·晋级14.3%·首板次日高开均0.74%）\n· <text_tag color='purple'>澳弘电子</text_tag>（近250日涨停12次·最长5板·晋级45.5%·首板次日高开均-1.23%）\n· <text_tag color='purple'>丽人丽妆</text_tag>（近250日涨停9次·最长11板·晋级37.5%·首板次日高开均2.51%）\n· <text_tag color='purple'>中京电子</text_tag>（近250日涨停16次·最长4板·晋级33.3%·首板次日高开均2.74%）\n· <text_tag color='purple'>超声电子</text_tag>（近250日涨停14次·最长3板·晋级30.8%·首板次日高开均1.88%）\n· <text_tag color='purple'>澳洋健康</text_tag>（近250日涨停12次·最长4板·晋级18.2%·首板次日高开均1.03%）\n· <text_tag color='purple'>百洋股份</text_tag>（近250日涨停8次·最长3板·晋级28.6%·首板次日高开均1.25%）\n· <text_tag color='purple'>慈文传媒</text_tag>（近250日涨停4次·最长3板·晋级66.7%·首板次日高开均1.78%）\n· <text_tag color='purple'>华阳国际</text_tag>（近250日涨停6次·最长2板·晋级20.0%·首板次日高开均0.61%）"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>🧘 心法</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "早盘跌超3%，午后被业绩预告拉回来；今天涨的不是故事，是能写进报表的订单和涨价——热点从传媒换到算力硬件，看的是谁真能算出钱。"
+   }
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "📡 选股宝+东财+腾讯自选股 | 17:38 | AI盘中诊断"
+    },
+    {
+     "tag": "plain_text",
+     "content": "⚠️ 本报告基于公开信息分析，投资需谨慎"
+    }
+   ]
+  }
+ ]
+}

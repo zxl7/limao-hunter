@@ -50,12 +50,12 @@ def in_trading(dt: datetime | None = None) -> bool:
     in_window = (555 <= mins <= 690) or (780 <= mins <= 900)  # 09:15-11:30 / 13:00-15:00
     if not in_window:
         return False
-    # 节假日门禁：法定节假日（含国庆）不推送，调休补班开市日仍推送（is_a_share_trading_day 为唯一权威）
+    # 节假日门禁：法定节假日与周末（含调休补班日）一律不推送（is_a_share_trading_day 为唯一权威）
     try:
         from common.trading_calendar import is_a_share_trading_day
         return is_a_share_trading_day(dt)
     except Exception:
-        return dt.weekday() < 5  # 兜底：common 不可用，至少排除周末
+        return dt.weekday() < 5  # trading-day-fallback: 唯一真源不可用时的周末兜底
 
 
 def last_intraday_push_ts() -> float:

@@ -91,7 +91,35 @@ def write_archives(snap: dict, merge_existing: bool = True,
             written.append(p)
         except Exception as e:  # noqa: BLE001 —— 单目录失败不拖垮另一目录
             print(f"[zt_archive] ⚠️ 归档失败 {d}: {e}")
+    _ingest_stock_registry(snap, written)
     return written
+
+
+def _ingest_stock_registry(snap: dict, written: list[Path]) -> None:
+    """把本次快照沉淀进统一个股特征底库（`common/stock_registry.py`）。
+
+    ⚠️ 必须放在**双目录循环之外**：循环内调用会按目录数重复记账。
+    ⚠️ 本函数**非致命**——底库异常不得中断归档主链；且受 `STOCK_REGISTRY_EOD` 开关控制。
+    ⛔ 本函数**不新增涨停归档写入路径**，只读快照、另写底库。
+    """
+    if not written:
+        return                      # 全部目录都失败 → 不沉淀，避免只写一半的语义
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from common import stock_registry as registry
+
+        if not registry.eod_enabled():
+            return
+        result = registry.ingest_eod_snapshot(snap)
+        if result.get("ok"):
+            print(f"[zt_archive] 📇 个股底库已更新：新增 {result.get('inserted', 0)}"
+                  f" 更新 {result.get('updated', 0)}"
+                  f" 收盘未封 {result.get('close_zero', 0)}")
+        elif result.get("reason"):
+            print(f"[zt_archive] 📇 个股底库跳过：{result['reason']}")
+    except Exception as e:  # noqa: BLE001 —— 底库失败不影响归档
+        print(f"[zt_archive] ⚠️ 个股底库更新失败(不影响归档): {e}")
 
 
 def _cache_archive_has_pool(date10: str, dirs: tuple[Path, ...] | None = None) -> bool:
@@ -173,7 +201,7 @@ def ensure_today_archive(today: str | None = None, now_hour: int | None = None,
             if not _mt.is_trading_day():
                 return "not-trading-day"
         except Exception:
-            if datetime.now().weekday() >= 5:
+            if datetime.now().weekday() >= 5:  # trading-day-fallback: 唯一真源不可用时的周末兜底
                 return "not-trading-day"
     hour = datetime.now().hour if now_hour is None else now_hour
     if hour < 15:

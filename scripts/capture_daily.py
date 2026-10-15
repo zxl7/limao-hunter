@@ -12,7 +12,7 @@
   （结构化情绪历史，供 gen_sentiment_summary 做 5 日汇总，2026-08-16 加）
 - 新闻归档：读 cache/pulse_snapshots/latest.json 的 newsflash → cache/newsflash_history/daily_YYYY-MM-DD.json
   （外部新闻维度沉淀，供 5 日汇总/复盘引用，2026-08-16 加）
-- 自动清理：涨停池/爆发快照/资金流 保留最近 5 个交易日，短期情绪日志保留最近 5 个交易日（按文件名日期判定，交易日计数天然跳过周末）
+- 自动清理：涨停池（主+镜像）/爆发快照/资金流 保留最近 RETAIN_DAYS(40) 个交易日，短期情绪日志保留最近 5 个交易日（按文件名日期判定，交易日计数天然跳过周末）
 - 交易日守卫：main() 先读 feedback_matrix.json 的 error 标记（non_trading_day / zt_pool_unreliable → 非交易日或数据不可靠，跳过归档，防周末假数据污染 5 日窗口）
 
 零新增数据源：复用 intraday_pulse 的 http_post/rc/ts/parse_tomorrow/parse_theme_stocks/build_sector_flow_snapshot。
@@ -21,11 +21,13 @@ import sys
 import json
 import subprocess
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))                 # import scripts.intraday_pulse
 sys.path.insert(0, str(ROOT / "scripts"))     # import intraday_pulse
+
+from common.market_time import iso_bj  # noqa: E402  规范时间戳（ISO8601 +08:00·2026-10-14 审计 P1-⑦）
 
 CACHE = ROOT / "cache"
 ERUPT_DIR = CACHE / "eruption_history"
@@ -35,13 +37,21 @@ ZT_DIR = CACHE / "zt_history"
 ZT_MIRROR_DIR = ROOT / "wealth_code" / "data" / "zt_history"
 FLOW_DIR = CACHE / "sector_flow_history"   # 板块资金流日级时间序列（回流趋势用）
 NEWSFLASH_DIR = CACHE / "newsflash_history"  # 外部新闻（快讯）日归档
-# 涨停池/爆发快照/资金流保留天数。
-# ⚠️【耦合铁律 2026-09-12 N1 修复】此值必须 ≥ 全部消费方的回看窗口上限：
-#   scripts/live_signal.py  N_SHAPE_HIST_DAYS = 12（第一波/N字/二波窗口）
-#   scripts/theme_rotation.py 的 zt_series 窗口
-# 原值 5 < 需求 12 → 盘中形态检测长期缺 7 天料（静默降级）。
-# 改任一回看窗口必须同步本值；tests/test_history_window.py 已加守卫断言。
-RETAIN_DAYS = 20          # 20 交易日（≈1 个月）·覆盖 12 天需求 + 8 天缓冲
+# 涨停池/爆发快照/资金流保留交易日数（供给）。
+# ⚠️【耦合铁律 · 2026-09-12 N1 修复 → 2026-10-14 审计 P1-⑤ 二次扩容】本值必须 ≥
+#    全部消费方的回看窗口上限（需求）。当前**最大需求 = 30**（leader_cycle.HISTORY_DAYS）：
+#      scripts/live_signal.py            N_SHAPE_HIST_DAYS       = 12（第一波/N字/二波）
+#      scripts/theme_rotation.py         REENTRY_LOOKBACK_LONG   = 15（回流确认长回看）
+#      scripts/theme_rotation.py         TRADING_LOOKBACK        =  5（5 日轮动窗）
+#      wealth_code/core/leader_cycle.py  HISTORY_DAYS            = 30 ← 最大（读 cache/zt_history + 新闻）
+#      wealth_code/core/defense_gate.py  POSITION_LOOKBACK_DAYS  = 20（位置闸·零缓冲）
+#      wealth_code/core/ambush_pullback.py LOOKBACK_DAYS         =  5
+#      wealth_code/core/reflow_scan.py   REFLOW_LOOKBACK_DAYS    =  5
+#      wealth_code/core/pool_call.py     LINE_CORE_LOOKBACK_DAYS =  4
+#    变更史：原值 5 < 需求 12 → 盘中形态检测长期缺 7 天料（静默降级）；
+#            20 → 对 30 仍差 10 天（leader_cycle 读满时**静默少料**，无告警）。
+#    ⛔ 改任一回看窗口必须同步本值 + tests/test_history_window.py 的 WINDOW_CONSUMERS 表。
+RETAIN_DAYS = 40          # 40 交易日（≈2 个月）·覆盖 30 天最大需求 + 10 天缓冲
 SHORT_TERM_RETAIN = 5     # 短期情绪 daily 日志 保留天数
 DAILY_DIR = CACHE / "short_term" / "daily"
 TOP_THEMES = 10          # 每天最多存前 10 个爆发题材
@@ -64,6 +74,25 @@ ENABLE_THEME_LINE_AUDIT = True
 #       这类跨日口径没法长窗验证。False = 不归档（行为等同改动前）。
 ENABLE_TOP5_HISTORY = True
 
+# ── 归档日集合差对账窗口（2026-10-14 审计 P1-④）────────────────────────────
+# 对账「最近 N 个**参考日**」内 flow / eruption 相对 zt 的缺口。
+# N 取 10：足够暴露「最近一次断链」，又不把 9 月的远古缺日天天重播成噪声。
+ARCHIVE_AUDIT_WINDOW = 10
+
+# ── 脉冲窗口存档保留期（2026-10-14 审计 P2-⑪）────────────────────────────
+# 背景：cache/pulse_windows/ 长期「无清理」式增长（实测 232 个 window_*.json +
+#   450 个 .closed_* 防重标记 = 682 项），产侧自 2026-09-03 起停用
+#   （pulse_fetcher.sh 的 close_window_step 因 HIGH_FREQ_INTRADAY=True 被注释；
+#    回滚 = 取消注释那一行）。
+# ⚠️ 但该目录**不是无主目录**，故**只加保留期、不删目录**：
+#   ① 狸猫终端 `OpsPage` 经 routes.ts `/api/pulse/windows` 读取 window_*.json 存档
+#      （该路由自带 limit=40，故保留 60 份足够覆盖 UI 展示 + 回看缓冲）；
+#   ② pulse_fetcher.sh 仍会在该目录落 `.closed_*` 防重标记（保留 10 天足够，
+#      标记语义是「当日窗口已闭合」，跨日即失效）。
+PULSE_WINDOW_DIR = CACHE / "pulse_windows"
+PULSE_WINDOW_RETAIN = 60       # window_*.json 保留份数（≥ 前端路由 limit 40）
+PULSE_MARK_RETAIN_DAYS = 10    # .closed_* 防重标记保留天数
+
 
 def _today():
     return datetime.now().strftime("%Y-%m-%d")
@@ -84,7 +113,17 @@ def _guard_trading_day(today: str) -> bool:
     """
     # ① 日历硬门禁（唯一真源·含法定休市日与周末）
     try:
-        from common.trading_calendar import is_a_share_trading_day
+        from common.trading_calendar import is_a_share_trading_day, uncovered_years
+        # ①b 覆盖度告警（2026-10-14 审计 R1）：休市表缺下一年度 ⇒ 元旦/春节会被判成交易日。
+        #     ⛔ 只打印、**不阻断**（若按「未覆盖=休市」处理，日历维护滞后会连续拦掉整年真实交易日，
+        #     伤害远大于幽灵日）。跨年提前量由 scripts/guard_eod_chain.py 的日历守卫负责推卡。
+        try:
+            _gaps = uncovered_years([datetime.now().year])
+            if _gaps:
+                print(f"[capture_daily] ⚠️ 交易日历未覆盖 {_gaps} 年（唯一真源 common/trading_calendar"
+                      " 的休市表只到 2026）→ 该年节假日会被判为交易日，需国办公布后补录")
+        except Exception:  # pragma: no cover - 覆盖度查询失败不影响主门禁
+            pass
         if not is_a_share_trading_day(today):
             print(f"[capture_daily] {today} 非A股交易日（交易日历），跳过归档")
             return False
@@ -267,8 +306,13 @@ def prune_history():
     导致「5 日数据」永远凑不齐——2026-08-12 修正）。
     """
     removed = []
-    # —— zt_history + eruption_history + sector_flow_history：RETAIN_DAYS ——
-    pref_map = {ERUPT_DIR: "eruption_", ZT_DIR: "zt_", FLOW_DIR: "sector_flow_"}
+    # —— zt_history(主) + zt_history(镜像) + eruption_history + sector_flow_history：RETAIN_DAYS ——
+    # ⚠️ 2026-10-14 审计 P1-⑥：镜像目录原先不在裁剪表内 → 主目录 19 文件 vs 镜像 40 文件
+    #    （同一份数据两套保留期，消费方读到哪份取决于它读哪个目录，属**隐式口径分裂**）。
+    #    两者同日写入、同一保留期，必须成对裁剪。ZT_DIR/ZT_MIRROR_DIR 在函数体内求值，
+    #    故测试 monkeypatch 模块属性即可生效（见 tests/test_history_window.py）。
+    pref_map = {ERUPT_DIR: "eruption_", ZT_DIR: "zt_", ZT_MIRROR_DIR: "zt_",
+                FLOW_DIR: "sector_flow_"}
     for d, pref in pref_map.items():
         dated = []
         for p in sorted(d.glob("*.json")):
@@ -299,6 +343,22 @@ def prune_history():
     for _, p in dated[SHORT_TERM_RETAIN:]:
         p.unlink()
         removed.append(p.name)
+    # —— cache/pulse_windows：window_*.json 按份数 + .closed_* 按天（审计 P2-⑪）——
+    # ⛔ 目录本身保留（前端 OpsPage 读取 + pulse_fetcher 落防重标记，见常量注释）。
+    if PULSE_WINDOW_DIR.exists():
+        wins = sorted(PULSE_WINDOW_DIR.glob("window_*.json"), reverse=True)  # 名内嵌 YYYYMMDD_HHMM → 倒序即最新在前
+        for p in wins[PULSE_WINDOW_RETAIN:]:
+            p.unlink()
+            removed.append(p.name)
+        cutoff = (datetime.now() - timedelta(days=PULSE_MARK_RETAIN_DAYS)).strftime("%Y%m%d")
+        for p in sorted(PULSE_WINDOW_DIR.glob(".closed_*")):
+            # 名形：.closed_YYYYMMDD_HHMM[_s15] → 取第 2 段判日期，解析失败即跳过（不误删）
+            parts = p.name.split("_")
+            if len(parts) < 3 or not parts[1].isdigit() or len(parts[1]) != 8:
+                continue
+            if parts[1] < cutoff:
+                p.unlink()
+                removed.append(p.name)
     return removed
 
 
@@ -315,12 +375,16 @@ def capture_sector_flow():
     try:
         boards = ip.build_sector_flow_snapshot()
         if not boards:
+            # ⛔ 2026-10-14 审计 P1-④：原实现此分支**静默 return 0**（全空却一声不响）
+            #    —— 这正是「flow 单侧缺口」能长期不被发现的原因之一。改为显式告警。
+            print("[capture_sector_flow] ⚠️ 板块资金流快照为空（build_sector_flow_snapshot 返回 {}）"
+                  "→ 今日 sector_flow 不落盘，将在 3.5) 日集合差对账中报为单侧缺口")
             return 0
         boards = _tx_backfill_flow(boards)
         FLOW_DIR.mkdir(parents=True, exist_ok=True)
         (FLOW_DIR / f"sector_flow_{_today()}.json").write_text(json.dumps({
             "date": _today(),
-            "generated_ts": datetime.now().isoformat(),
+            "generated_ts": iso_bj(),          # 规范形态（ISO8601 +08:00）· 2026-10-14 审计 P1-⑦
             "boards": boards,
         }, ensure_ascii=False))
         return len(boards)
@@ -464,7 +528,10 @@ def capture_emotion(today: str) -> dict:
         "prev_max_boards": d.get("prev_max_boards"),
         "sentiment_score": d.get("sentiment_score"),
         "sentiment_label": d.get("sentiment_label"),
-        "generated_ts": d.get("generated_ts") or datetime.now().isoformat(),
+        # ⚠️ 这里**故意**沿用上游值的原名：`feedback_matrix` 的 `generated_ts` 实为
+        # **15:00 收盘源时刻**（不是采集时刻）—— 属审计 P1-⑦ 点名的「字段名与语义不符」。
+        # 保留原值以免改变下游字符串切片行为；语义已在规范中登记，迁移另行立项。
+        "generated_ts": d.get("generated_ts") or iso_bj(),
     }
     DAILY_DIR.mkdir(parents=True, exist_ok=True)
     (DAILY_DIR / f"emotion_{today}.json").write_text(json.dumps(snap, ensure_ascii=False, indent=1))
@@ -500,7 +567,7 @@ def capture_newsflash(today: str) -> int:
     NEWSFLASH_DIR.mkdir(parents=True, exist_ok=True)
     (NEWSFLASH_DIR / f"daily_{today}.json").write_text(json.dumps({
         "date": today,
-        "generated_ts": datetime.now().isoformat(),
+        "generated_ts": iso_bj(),              # 规范形态（ISO8601 +08:00）· 2026-10-14 审计 P1-⑦
         "newsflash": out_items,
     }, ensure_ascii=False, indent=1))
     return len(out_items)
@@ -580,7 +647,7 @@ def capture_risk_watch(today: str, limit: int = 8) -> int:
         })
     out = {
         "date": today,
-        "generated_ts": datetime.now().isoformat(),
+        "generated_ts": iso_bj(),              # 规范形态（ISO8601 +08:00）· 2026-10-14 审计 P1-⑦
         "scope": f"涨停池板数 Top{len(ranked)}（高标风险面）",
         "items": items,
         "summary": {
@@ -592,6 +659,83 @@ def capture_risk_watch(today: str, limit: int = 8) -> int:
     }
     (CACHE / f"risk_watch_{today}.json").write_text(json.dumps(out, ensure_ascii=False, indent=1))
     return len(items)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 归档日集合差对账（2026-10-14 数据血缘审计 P1-④）
+# ══════════════════════════════════════════════════════════════════════
+# 【审计发现】`sector_flow_history/` 在 09-01~10-14 的 26 个交易日里缺 12 天；
+#   去掉目录诞生前的 09-01~09-04，**中后段仍缺 8 天**：09-21 / 23 / 24 / 29、
+#   10-08 / 10-09 / 10-12 / 10-14。`eruption_history` 缺同一批（少 09-29）。
+#
+# 【为什么会出现「单侧缺口」——按 mtime 实证】
+#   · `sector_flow_history` **只有一条触发路径** = 本文件 step 2.5（盘后复盘 17:18 链内）。
+#   · `zt_history` 有**两条及以上**：`record_zt_snapshot.py`（15:30 接力卡任务，
+#     实测镜像 `wealth_code/data/zt_history/zt_2026-10-13.json` mtime=17:19:11）
+#     以及一条 **~23:5x 的独立写入**（实测 `cache/zt_history` 多数文件 mtime=23:5x，
+#     如 zt_2026-10-13.json=10-13 23:50:01）。
+#   ⇒ 盘后链只要**没跑到 step 2.5**（整链未触发 / 其中一步失败），zt 仍会被其他路径补齐，
+#     而 flow 不会 —— 于是「zt 有、flow 没有」的单侧缺口静默产生。
+#   ⚠️ 诚实边界：那条 23:5x 写入方**未能确证**（crontab 在本环境不可读、launchd 无
+#     ~23:50 任务、平台 automation 列表无该时刻条目）。本文只登记**现象与 mtime 证据**，
+#     ⛔ 不臆造一个「02:00 僵尸任务」。
+#
+# 【为什么只告警、不回补（重要·勿擅自改成回补）】
+#   数据源侧是**可回补**的：`push2his.eastmoney.com/api/qt/stock/fflow/daykline/get`
+#   能按板块返回历史日主力净额，且口径已逐字段验证一致（BK0447 互联网服务 10-13
+#   历史值 +2.91 亿 / 0.92% 与存档 `flow_yi=2.91, pct=0.92` 完全吻合）。
+#   **但必须拒绝部分回补**，理由两条：
+#     ① 契约 §1 / §12 明令「缺失一律不裁决、**不以邻近日期代替**、缺失不填零」；
+#     ② `cache/em_stock_sectors.json` 只能反推出 **184 / 357（约 52%）** 板块的名称↔BK
+#        映射 ⇒ 部分回补会让「5 日累计净流入排行」**静默扭曲**——比缺一天更危险
+#        （缺一天下游能看见 NaN，回补一半下游会把错值当全量）。
+#   故此处只做「**消灭静默**」：把缺口显式打到盘后链汇总行，由人决定是否全量重跑。
+#   真正的兜底另有 `scripts/guard_eod_chain.py`（其 CHECKS 已含 sector_flow_history），
+#   本函数是**第二道**、也是唯一会指出「到底缺哪几天」的一道。
+def _dated_stems(d: Path, pref: str) -> set[str]:
+    """目录下 `{pref}{YYYY-MM-DD}.json` 的日期集合（不合法命名直接忽略）。"""
+    out: set[str] = set()
+    for p in d.glob(f"{pref}*.json"):
+        ds = p.name[len(pref):-5]
+        if len(ds) == 10 and ds[4] == "-" and ds[7] == "-":
+            out.add(ds)
+    return out
+
+
+def _short_dates(dates: list[str], cap: int = 6) -> str:
+    """`2026-09-21,2026-09-23` → `09-21,09-23`；超过 cap 个补 `+N`。"""
+    shown = ",".join(d[5:] for d in dates[:cap])
+    return f"{shown},+{len(dates) - cap}" if len(dates) > cap else shown
+
+
+def audit_archive_date_sets(window: int = ARCHIVE_AUDIT_WINDOW) -> str:
+    """对账 zt / flow / eruption 三目录的**日集合差**，返回一行人读摘要。
+
+    ⛔ 只对账、不写盘、不回补（理由见上方大段注释）。
+    参考日轴取三目录日期的并集（zt 是最全的一侧），窗口取最近 `window` 个。
+    """
+    zt = _dated_stems(ZT_DIR, "zt_")
+    flow = _dated_stems(FLOW_DIR, "sector_flow_")
+    erupt = _dated_stems(ERUPT_DIR, "eruption_")
+
+    ref = sorted(zt | flow | erupt)
+    if not ref:
+        return "archive_audit=空(三目录均无归档)"
+    win = ref[-window:]
+
+    msgs: list[str] = []
+    for label, have in (("flow", flow), ("eruption", erupt)):
+        miss = [d for d in win if d not in have]
+        if miss:
+            msgs.append(f"{label}缺{len(miss)}日[{_short_dates(miss)}]")
+    only_flow = [d for d in win if d in flow and d not in zt]
+    if only_flow:
+        msgs.append(f"zt缺{len(only_flow)}日[{_short_dates(only_flow)}]")
+
+    if not msgs:
+        return f"archive_audit=✓对称({len(win)}日·{win[0]}~{win[-1]})"
+    return (f"archive_audit=⚠️单侧缺口 {';'.join(msgs)}"
+            f"（窗口{win[0]}~{win[-1]}·{len(win)}日·只告警不回补）")
 
 
 def main():
@@ -609,7 +753,7 @@ def main():
         themes = capture_eruption()
         (ERUPT_DIR / f"eruption_{today}.json").write_text(json.dumps({
             "date": today,
-            "generated_ts": datetime.now().isoformat(),
+            "generated_ts": iso_bj(),          # 规范形态（ISO8601 +08:00）· 2026-10-14 审计 P1-⑦
             "themes": themes,
         }, ensure_ascii=False))
         erupt_msg = f"themes={len(themes)}"
@@ -658,6 +802,15 @@ def main():
     # 3) 清理
     removed = prune_history()
 
+    # 3.5) 归档日集合差对账（2026-10-14 审计 P1-④·**消灭静默缺口**）
+    #      必须排在 1)/2)/2.5) 全部写入之后，才能反映「本次跑完」的真实状态：
+    #      若某些步骤静默失败，今日就会以「单侧缺口」形式出现在窗口里。
+    #      ⛔ 只告警不回补（契约 §1/§12 + 板块映射仅 52% 覆盖，见函数上方大段说明）。
+    try:
+        arch_msg = audit_archive_date_sets()
+    except Exception as e:
+        arch_msg = f"archive_audit ERR:{e}"
+
     # 4) 当日题材时间线（融合进 daily_YYYY-MM-DD.md，不新建文件·2026-08-16）
     try:
         import subprocess
@@ -700,6 +853,24 @@ def main():
         zg_msg = zg.stdout.strip().splitlines()[-1] if zg.returncode == 0 else (zg.stderr.strip()[:80])
     except Exception as e:
         zg_msg = f"zt_genes ERR:{e}"
+
+    # 7.1) 股性档案刷新（**2026-10-14 审计修复 A4**）：`zt_genes.py gene --scope today`
+    #      → cache/zt_genes/gene_{code}.json（近期涨停行为：炸板率/晋级率/首日溢价/股性分）。
+    #
+    #      ⚠️ 缺口成因：`fetch`(盘后归档) 与 `hist`(EOD 候选) 都有人调，**唯独 `gene` 无人调**
+    #      → gene_*.json 冻结在 2026-09-09，而 `/api/gene/detail` 仍按 daily 路由在产，
+    #        `/gene` 页把 09-09 的「近期股性」与当日 hist 左连接后混展 ⇒ 静默失真 35 天。
+    #      `--scope today` = 最近一期 pool 全部代码 ∪ latest.json 的 top5 成分（候选常用票）；
+    #      `--scope today` 走 `with_kline=False` 纯本地快路径（不拉日K、不受腾讯限流）。
+    #      必须排在 7) fetch 之后 —— gene 依赖刚写入的当日 pool。失败静默降级不阻断归档。
+    try:
+        import subprocess
+        py = sys.executable
+        gg = subprocess.run([py, str(Path(__file__).resolve().parent / "zt_genes.py"), "gene", "--scope", "today"],
+                            capture_output=True, text=True, timeout=180)
+        gg_msg = gg.stdout.strip().splitlines()[-1] if gg.returncode == 0 else (gg.stderr.strip()[:80])
+    except Exception as e:
+        gg_msg = f"zt_genes gene ERR:{e}"
 
     # 7.5) 连板晋级事件当日归档（2026-09-09 用户立项 P1·promo_quant）：今日池落盘后，
     #    对(昨日,今日)相邻对生成晋级事件表(1进2..高标·成功率) → cache/promo/promo_{date}.json；
@@ -771,7 +942,7 @@ def main():
     else:
         th_msg = "top5_history=skip(开关关闭)"
 
-    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | {th_msg} | pruned={removed}")
+    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {arch_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {gg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | {th_msg} | pruned={removed}")
 
 
 if __name__ == "__main__":

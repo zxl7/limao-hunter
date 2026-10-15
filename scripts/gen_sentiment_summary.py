@@ -28,6 +28,13 @@ ERUPT_DIR = CACHE / "eruption_history"
 NEWS_DIR = CACHE / "newsflash_history"
 MD_PATH = CACHE / "short_term" / "短期情绪周期判断.md"
 OUT_PATH = CACHE / "short_term" / "summary_5d.json"
+
+# 规范时间戳（2026-10-14 审计 P1-⑦）：summary_5d.generated_ts 统一 ISO8601 带 +08:00。
+# CACHE 硬编码为本机绝对路径，故 ROOT 由其上溯两级推导（勿依赖 cwd）。
+_ROOT = CACHE.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from common.market_time import iso_bj  # noqa: E402
 TR_PATH = CACHE / "theme_rotation.json"  # P2-20① 轮动反哺输入（theme_rotation 盘后链产出）
 WINDOW = 5    # 情绪演变近端窗口（最近 5 交易日·卡面「📉情绪演变」用）
 WINDOW10 = 10  # 归纳周期窗口（2026-08-25 用户「以10个交易日为一个归纳周期」：10日数据归纳
@@ -268,7 +275,7 @@ def build():
                               "titles": titles[:8], "polarity": pol})
 
     summary = {
-        "generated_ts": __import__("datetime").datetime.now().isoformat(),
+        "generated_ts": iso_bj(),
         "window_days": WINDOW,
         "days": days,
         "trajectory": {
@@ -330,13 +337,13 @@ def build():
     }
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text(json.dumps(summary, ensure_ascii=False, indent=1))
-    _refresh_md(days, _why, _rotation)
+    _refresh_md(days, _why, _rotation, news_rows)
     print(f"[gen_sentiment_summary] {today} 汇总 {len(days)} 个交易日 → {OUT_PATH.name} | 周期提示: {summary['cycle_hint']} | 10日归纳窗口: {len(days10)} 交易日"
           + (f" | 因果: {_why['text'][:60]}" if _why else ""))
     return summary
 
 
-def _refresh_md(days, why=None, rotation=None):
+def _refresh_md(days, why=None, rotation=None, news_rows=None):
     """幂等刷新 短期情绪周期判断.md 的「## 5日情绪演变表」数据表（含 P2-20 因果/轮动注脚）"""
     if not days or not MD_PATH.exists():
         return

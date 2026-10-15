@@ -32,7 +32,7 @@ if str(ROOT) not in sys.path:
 # 时间统一 common.market_time，JSON 读写统一 common.json_io。
 from common.http_client import http_get as _hc_get
 from common.json_io import load_json, save_json
-from common.market_time import now as _now, BJ_TZ
+from common.market_time import now as _now, BJ_TZ, iso_bj, parse_dt
 from scripts.relay_effect import number as relay_number, publish as publish_relay
 
 CACHE = ROOT / "cache"
@@ -93,12 +93,21 @@ def fetch_ma510(code: str):
 
 
 def is_trading_day(now: datetime) -> bool:
-    """A股交易日判定：周一到周五（统一 common.market_time）。
+    """A股交易日判定：**唯一真源 = common.trading_calendar**（含法定休市日 + 周末）。
 
-    法定节假日（工作日休市）由下游「涨停池空 / 自交」双保险守卫兜底——
-    节假日东财 getTopicZTPool?date=今日 返回上一交易日池 → 与昨池自交 → 触发自交守卫拦截。
+    ⛔ 2026-10-09 修正：原实现只判 `weekday() < 5`，对**工作日休市**完全无感。
+    实证事故（2026-09-25 中秋·周五休市）：weekday 判过 → 落到「涨停池空/自交」兜底，
+    但东财当日返回的是**上一交易日(09-24)的完整池**（非空、且与昨池比是"同一批"，
+    却被当成当日真实池）→ 未触发 non_trading_day 标记 → capture_daily 据此归档出一份
+    **与 09-24 逐字段相同**的幽灵日 `cache/zt_history/zt_2026-09-25.json`，
+    污染断板/形态/N字/5 日窗序列（含 defense_gate 的位置判据）。
+    ⇒ 兜底守卫在「接口回吐上一交易日数据」这一形态下**不可靠**，必须前置日历判定。
     """
-    return now.weekday() < 5
+    try:
+        from common.trading_calendar import is_a_share_trading_day
+        return is_a_share_trading_day(now)
+    except Exception:  # pragma: no cover - 极端环境下退回周末判定
+        return now.weekday() < 5  # trading-day-fallback: 唯一真源不可用时的周末兜底
 
 
 def fetch_today_zt(date: str):
@@ -396,7 +405,7 @@ def main():
     if hm < 566:  # 00:00 - 09:25:59 全部跳过
         out = CACHE / "feedback_matrix.json"
         if not dry:
-            save_json(out, {"generated_ts": now.strftime("%Y-%m-%d %H:%M:%S"),
+            save_json(out, {"generated_ts": iso_bj(now),
                                        "error": "pre_auction",
                                        "msg": "9:26 竞价定价后首轮生效（当前时段不计算，防昨日数据假象）"})
         print("[feedback_matrix] ⏭ 9:26前跳过（防未开盘假象），已写 pre_auction 标记")
@@ -404,7 +413,7 @@ def main():
     snap = load_json(CACHE / "yesterday_zt.json")
     latest = load_json(SNAP / "latest.json")
 
-    empty = {"generated_ts": _now().strftime("%Y-%m-%d %H:%M:%S"),
+    empty = {"generated_ts": iso_bj(),
              "error": "no_prev_snapshot", "msg": "昨日涨停快照缺失（盘后复盘未记录），反馈矩阵不可用"}
     if not snap.get("zt_list"):
         print("[feedback_matrix] ⚠️ yesterday_zt.json 缺失或为空，跳过")
@@ -437,7 +446,7 @@ def main():
                 and old.get("promote_rate") is not None):
             print(f"[feedback_matrix] ⏭ 非交易日(周末/节假日)，保留上一交易日缓存({old.get('prev_date')})")
             return 0
-        err = {"generated_ts": _now().strftime("%Y-%m-%d %H:%M:%S"), "error": "non_trading_day",
+        err = {"generated_ts": iso_bj(), "error": "non_trading_day",
                "msg": "非交易日(周末/节假日)，不计算隔日反馈，防止涨停池接口返回上一交易日数据自交假象"}
         if not dry:
             save_json(out, err)
@@ -449,7 +458,10 @@ def main():
     old = load_json(out)
     if not dry and not force and old.get("prev_date") == snap.get("date") and old.get("generated_ts"):
         try:
-            old_ts = datetime.strptime(old["generated_ts"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=BJ_TZ)
+            # ⚠️ 2026-10-14 审计 P1-⑦：写侧已改 iso_bj()（ISO8601 +08:00），读侧因此
+            #    改用 parse_dt 宽松解析 —— 兼容**存量**空格格式（'2026-10-13 17:19:11'）。
+            #    ⛔ 不能再用 strptime("%Y-%m-%d %H:%M:%S")：带偏移的规范值会直接抛 ValueError。
+            old_ts = parse_dt(old["generated_ts"])
             if (_now() - old_ts).total_seconds() < QUOTE_TTL:
                 print(f"[feedback_matrix] ⏭ 缓存未过期(<{QUOTE_TTL}s)，跳过重算")
                 return 0
@@ -469,7 +481,7 @@ def main():
         if old_prev and old_prev != today_str and not old.get("error") and old.get("promote_rate") is not None:
             print(f"[feedback_matrix] ⏭ 快照({snap_date_norm})即今日，隔日反馈未产生，保留上一交易日缓存({old.get('prev_date')})")
             return 0
-        err = {"generated_ts": _now().strftime("%Y-%m-%d %H:%M:%S"), "error": "snapshot_is_today",
+        err = {"generated_ts": iso_bj(), "error": "snapshot_is_today",
                "msg": "昨涨停快照为今日，隔日反馈待明日产生，反馈矩阵暂不可用"}
         if not dry:
             save_json(out, err)
@@ -482,7 +494,7 @@ def main():
         if str(old.get("prev_date", "")).replace("-", "") == snap_date_norm and not old.get("error") and old.get("promote_rate") is not None:
             print(f"[feedback_matrix] ⏭ 非交易时段，保留缓存({old.get('prev_date')})")
             return 0
-        err = {"generated_ts": _now().strftime("%Y-%m-%d %H:%M:%S"), "error": "non_trading_no_cache",
+        err = {"generated_ts": iso_bj(), "error": "non_trading_no_cache",
                "msg": "非交易时段涨停池接口不可靠，反馈矩阵暂用缓存/不可用"}
         if not dry:
             save_json(out, err)
@@ -500,7 +512,7 @@ def main():
         if old_prev_norm3 and not old.get("error") and old.get("promote_rate") is not None:
             print(f"[feedback_matrix] ⏭ 今日涨停池空/自交({len(today_codes)}只)，判非交易日或接口异常，保留缓存({old.get('prev_date')})")
             return 0
-        err3 = {"generated_ts": _now().strftime("%Y-%m-%d %H:%M:%S"), "error": "zt_pool_unreliable",
+        err3 = {"generated_ts": iso_bj(), "error": "zt_pool_unreliable",
                 "msg": "今日涨停池为空或与昨池重合，判非交易日/接口异常，反馈矩阵不可用"}
         if not dry:
             save_json(out, err3)
@@ -670,7 +682,7 @@ def main():
                                     regulatory_pressure=regulatory_pressure)
 
     m = {
-        "generated_ts": _now().strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_ts": iso_bj(),
         "date": _now().strftime("%Y-%m-%d"),   # 2026-08-19 补：date 缺失致 pulse_aggregator._money_effect 守卫拦截
         "prev_date": snap.get("date"),
         "prev_zt_count": len(prev_codes),
@@ -702,6 +714,9 @@ def main():
         # 「某票今天晋级了吗」的判定会产生**假阴性**（第 9 只之后的晋级票全被判成未晋级）。
         # 消费方 = 前端「连板天梯」（昨日梯队 × 今日晋级），纯代码数组、体积 <1KB。
         "promote_codes": promote_codes,
+        # 今日完整涨停集合供数据层辨认“前日连板→昨日断板→今日反包”，
+        # 不增加抓取，也不拿截断的 promote_list 推断失败或修复。
+        "today_zt_codes": sorted(today_codes),
         # 逐票实时行情（全量 · 前端「连板天梯」用）：code → {name, pct, price, seal_yi}
         # ⚠️ 与 promote_list 的区别：**不截断**，且每票带**封单额**（仅真封板时非空）
         "quotes": quotes_out,
@@ -719,6 +734,12 @@ def main():
     # 读历史5日 emotion_*.json，检测 promote_rate 连续下滑 / 溢价走弱 → 防守警示字段
     m["trend"] = _trend_signal(prev_date=_now().strftime("%Y-%m-%d"))
     save_json(out, m)
+    try:
+        from scripts.selection_effect import publish as publish_selection_effect
+        if not publish_selection_effect(m):
+            print("[selection_effect] 候选或完整历史证据未齐，保留原快照")
+    except Exception as exc:
+        print(f"[selection_effect] 发布失败: {exc}")
     try:
         if not publish_relay(CACHE, snap, quotes_out, _now()):
             print("[relay_effect] 样本日期不匹配或发布失败，保留原快照")

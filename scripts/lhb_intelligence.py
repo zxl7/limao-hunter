@@ -16,7 +16,6 @@ import argparse
 import json
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -26,6 +25,9 @@ CACHE = ROOT / "cache"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from common.tencent_kline import fetch_kline_ohlc  # noqa: E402
+# 时间工具唯一实现（2026-10-14 审计 P1-⑦）：原 `datetime.now(timezone(timedelta(hours=8)))`
+# 自写 BJ_TZ，违反 common/market_time 铁律 1；统一转发（输出带 +08:00）。
+from common.market_time import iso_bj  # noqa: E402
 
 MIN_SAMPLES = 5
 HORIZONS = {"t1_open": (1, "open"), "t1_close": (1, "close"), "t3_close": (3, "close")}
@@ -210,7 +212,7 @@ def build(as_of: str | None = None, fetch: bool = True) -> dict:
         stat = stats_by_actor.get(("hotmoney", item["actor"]), {})
         item["actor_history"] = {k: stat.get(k) for k in ("mature_t1", "t1_open_avg_pct", "t1_open_win_rate", "qualified", "label")}
     return {
-        "as_of": _date10(as_of or latest), "generated_ts": datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
+        "as_of": _date10(as_of or latest), "generated_ts": iso_bj(),
         "method": {"entry": "信号日收盘", "horizons": "T+1开盘、T+1收盘、T+3收盘", "min_samples": MIN_SAMPLES,
                    "scope": "同花顺龙虎榜全量单票净买；仅沪深主板及创业板；不将卖出反推为做空"},
         "source_files": len(paths), "signal_count": len(signals), "kline_failures": failures,

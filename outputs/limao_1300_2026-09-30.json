@@ -1,0 +1,113 @@
+{
+  "msg_type": "interactive",
+  "card": {
+    "config": {
+      "wide_screen_mode": true
+    },
+    "header": {
+      "template": "red",
+      "title": {
+        "tag": "plain_text",
+        "content": "盘中猎手·增量 | 13:53 | 医药·贝瑞基因+10.02% | 涨停50"
+      }
+    },
+    "elements": [
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "<text_tag color='neutral'>🎯 结论定调</text_tag>\n**观望偏防守，局部强势尚未带动接力全面转强。**\n<text_tag color='green'>晋级率21.1%</text_tag>，昨日涨停股整体仍有正收益。"
+        }
+      },
+      {
+        "tag": "hr"
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "<text_tag color='neutral'>📉 情绪演变</text_tag>\n<text_tag color='blue'>首卡行情基准：3.4/10·分歧</text_tag>；强势集中于少数方向，尚非全面修复。"
+        }
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "<text_tag color='neutral'>📊 昨日涨停反馈</text_tag>\n连板晋级60.0%｜昨涨停今均+1.69%\n<text_tag color='green'>核按钮5只，其中真破位1只</text_tag>｜炸板率18.0%"
+        }
+      },
+      {
+        "tag": "hr"
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "<text_tag color='neutral'>💰 板块资金流向</text_tag>"
+        }
+      },
+      {
+        "tag": "div",
+        "fields": [
+          {
+            "is_short": true,
+            "text": {
+              "tag": "lark_md",
+              "content": "资金流入数据缺失"
+            }
+          },
+          {
+            "is_short": true,
+            "text": {
+              "tag": "lark_md",
+              "content": "资金流出数据缺失"
+            }
+          }
+        ]
+      },
+      {
+        "tag": "hr"
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "<text_tag color='neutral'>👑 情绪核心</text_tag>\n<text_tag color='red'>新华传媒 7天7板｜资产重组｜持续封板，是市场高度锚。</text_tag>\n同线带动不足，不能仅凭最高板认定市场总龙头。\n<text_tag color='red'>医药辨识度票：贝瑞基因 4天2板，属于断板回封，并非纯连板。</text_tag>\n<text_tag color='red'>锂电高度参照：时代万恒 3天3板｜加速；传艺科技 2连板继续封板。</text_tag>\n医药行业催化更明确，贝瑞基因的AI基因检测与创新药授权并非同一业务；时代万恒的产业政策共振较强，直接带动仍不宜确认。\n下一交易日看点：高度票能否延续，以及有真实产业催化的核心能否带动同方向继续走强。"
+        }
+      },
+      {
+        "tag": "hr"
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "<text_tag color='neutral'>🧠 AI综合研判</text_tag>\n① 主线定性：\n<text_tag color='purple'>⭐确定性最强主线：医药·创新药/CRO</text_tag>，行业授权与临床合作消息叠加板块走强，优先看真正对应业务的核心，不把泛医药上涨一概视为创新药受益。\n<text_tag color='blue'>确定性次强：新型电池</text_tag>，七部门产业规划提供持续政策支撑；<text_tag color='purple'>传艺科技</text_tag>是封板观察对象，不能由概念上涨推断固态电池收入已经落地。\n<text_tag color='yellow'>第三：染料涨价链，仅观察核心延续</text_tag>。<text_tag color='purple'>善水科技</text_tag>连续封板，但公司已提示涨价对业绩影响有限，不将价格上涨直接等同利润大增。"
+        }
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "② 资金与情绪：\n午间医药走强与半导体调整并存，但当前资金榜缺失，不能据此确认午后资金切换。连板股相对强，普通首板接力未同步改善，局部强势不等于普遍好做。"
+        }
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "③ 风险与纪律：\nA. <text_tag color='green'>新华传媒重组审计、评估尚未完成，批准结果不确定</text_tag>；一字封板是结构参照，不作现成买点。\nB. <text_tag color='green'>九阳股份已否认与华为存在传闻所称战略合作</text_tag>，机器人参股对当期业绩无重大影响；不能据此包装强业务催化。\nC. 深物业A早盘从跌停拉到涨停，属于剧烈分歧后的回封，不按平稳加速处理。候选当前均封板，没有可直接买入的候选。\nD. <text_tag color='green'>善水科技为20cm，波动大，紧止损</text_tag>；封板不追，开板也不自动构成买点。"
+        }
+      },
+      {
+        "tag": "note",
+        "elements": [
+          {
+            "tag": "plain_text",
+            "content": "2026-09-30 13:53｜基于公开信息分析，投资需谨慎"
+          }
+        ]
+      }
+    ]
+  }
+}

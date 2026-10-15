@@ -35,6 +35,9 @@ if str(ROOT) not in sys.path:
 
 from common.hithink_api import hithink_get, to_thscode  # noqa: E402
 from common.json_io import load_json, save_json  # noqa: E402
+# 规范时间戳（2026-10-14 审计 P1-⑦）：全部 hithink_*.json 的 generated_ts 改带 +08:00
+# （原 `datetime.now().strftime("%Y-%m-%d %H:%M:%S")` = 空格无时区，是审计列出的 3 种形态之一）。
+from common.market_time import iso_bj  # noqa: E402
 
 
 def _log(msg: str) -> None:
@@ -101,7 +104,7 @@ def cmd_limitup(date: str | None, check: bool) -> int:
         })
     kept, n688, nst = _filter_flags(norm)
     out = {
-        "source": "hithink", "date": d, "generated_ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source": "hithink", "date": d, "generated_ts": iso_bj(),
         "total": len(items), "zt_count": len(kept),
         "excluded_688": n688, "excluded_st": nst,
         "items": kept, "items_raw": items,
@@ -180,7 +183,7 @@ def cmd_lhb(date: str | None, check: bool) -> int:
                 "stocks": [{"code": str(r.get("ticker") or "").split(".")[0], "name": r.get("name")}
                            for r in (h.get("rows") or [])[:4]]} for h in hm_top]
     out = {
-        "source": "hithink", "date": trade_date, "generated_ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source": "hithink", "date": trade_date, "generated_ts": iso_bj(),
         "stock_count": data.get("stock_count") or len(stocks),
         "org_top5": org_rows, "hotmoney_top5": hm_rows, "stocks": stocks, "hotmoney": hot,
     }
@@ -219,7 +222,7 @@ def cmd_ladder(check: bool) -> int:
     window = data.get("window") or {}
     items = data.get("item") or []
     p = CACHE / "hithink_ladder.json"
-    save_json(p, {"source": "hithink", "generated_ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    save_json(p, {"source": "hithink", "generated_ts": iso_bj(),
                   "window": window, "items": items})
     _log(f"[hithink] ✅ 连板天梯: 窗口{window.get('length')}日 共{len(items)}日 → {p}")
     # items 实测倒序（最新在前）——按 date 取最近交易日，兼容任意排序（2026-08-26 实证）
@@ -260,7 +263,7 @@ def cmd_auction(date: str | None, verify_aux: bool) -> int:
         return 1
     items = data.get("item") or []
     p = CACHE / f"hithink_auction_{_norm_date(d)}.json"
-    save_json(p, {"source": "hithink", "date": d, "generated_ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    save_json(p, {"source": "hithink", "date": d, "generated_ts": iso_bj(),
                   "benchmark": items})
     _log(f"[hithink] ✅ 竞价风向标 {d}: {len(items)}条 → {p}")
     for x in items[:10]:
@@ -330,7 +333,7 @@ def cmd_anomaly(date: str | None) -> int:
 
     stats = dict(Counter(x["tag"] for x in kept))
     p = CACHE / f"hithink_anomaly_{_norm_date(d)}.json"
-    save_json(p, {"source": "hithink", "date": d, "generated_ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    save_json(p, {"source": "hithink", "date": d, "generated_ts": iso_bj(),
                   "total": len(items), "filtered": len(kept), "excluded_688": n688, "excluded_st": nst,
                   "stats": stats, "items": kept})
     _log(f"[hithink] ✅ 异动原因 {d}: 总{len(items)}条(过滤688×{n688}/ST×{nst}后{len(kept)}) 分布={stats} → {p}")
@@ -376,7 +379,7 @@ def cmd_valuation(codes: list[str], enrich: bool, apply: bool) -> int:
             val_map[c] = {k: it.get(m) for k, m in
                           (("pe", "pe_ttm"), ("pb", "pb_mrq"), ("ps", "ps_ttm"), ("pcf", "pcf_ttm"))}
     p = CACHE / f"hithink_valuation_{_norm_date(d)}.json"
-    save_json(p, {"source": "hithink", "date": d, "generated_ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    save_json(p, {"source": "hithink", "date": d, "generated_ts": iso_bj(),
                   "requested": len(code_set), "got": len(val_map), "values": val_map})
     _log(f"[hithink] ✅ 估值快照 {d}: 请求{len(code_set)} 返回{len(val_map)} → {p}")
     for c in sorted(val_map)[:8]:

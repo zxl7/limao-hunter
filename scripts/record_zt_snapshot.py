@@ -16,6 +16,10 @@
   python3 record_zt_snapshot.py            # 默认记录当日（date=今天）
   python3 record_zt_snapshot.py --date 20260810
   python3 record_zt_snapshot.py --dry-run  # 只打印结果不写文件
+  python3 record_zt_snapshot.py --date 20260810 --force   # 非交易日强制写入（仅限确知的回填）
+
+⛔ 交易日门禁（2026-10-09）：非A股交易日一律拒绝写入（`common.trading_calendar` 为唯一真源）。
+   事故：2026-09-25（中秋休市）数据源回吐 09-24 的池 → 落盘幽灵日，污染历史序列。
 
 输出: cache/yesterday_zt.json
 """
@@ -32,7 +36,12 @@ COMMON = ROOT / "common"
 # 把 common/ 加入路径，导入共享 biying 客户端（token 不入库）
 if str(COMMON) not in sys.path:
     sys.path.insert(0, str(COMMON))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 from biying_client import fetch_zt_pool, is_20cm  # noqa: E402
+# 规范时间戳（2026-10-14 审计 P1-⑦）：快照 generated_ts 统一 ISO8601 带 +08:00
+# （本文件是 defense_gate §12「位置输入=zt_history 逐票序列」的上游，格式混用会波及下游相减）。
+from common.market_time import iso_bj  # noqa: E402
 
 
 def _norm_date(date_arg: str) -> tuple[str, str]:
@@ -56,7 +65,7 @@ def build_snapshot(date: str) -> dict:
     return {
         "date": date,
         "date_raw": date.replace("-", ""),
-        "generated_ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_ts": iso_bj(),
         "zt_count": len(pool),
         "tc": len(pool),  # biyingapi 不直接给全市场涨停总数，以池长度代替
         "max_boards": max_boards,
@@ -79,6 +88,20 @@ def main() -> int:
         pretty, _ = _norm_date(date_arg)
     else:
         pretty = datetime.now().strftime("%Y-%m-%d")
+
+    # 交易日门禁（2026-10-09）：非A股交易日禁止写入涨停快照。
+    # 事故：2026-09-25（中秋·周五休市）本脚本 17:19 落盘了一份**与 09-24 逐字段相同**
+    # 的幽灵日（数据源在休市日回吐上一交易日池），污染断板/形态/5 日窗序列。
+    # `--force` 仅供**确知有数据的手工回填**，日常调度一律不加。
+    if "--force" not in sys.argv[1:]:
+        try:
+            from trading_calendar import is_a_share_trading_day  # COMMON 已在模块顶部入 path
+        except Exception:  # pragma: no cover
+            is_a_share_trading_day = None
+        if is_a_share_trading_day is not None and not is_a_share_trading_day(pretty):
+            print(f"[record_zt_snapshot] ⏭ {pretty} 非A股交易日（交易日历），拒绝写入涨停快照"
+                  f"（确需强制回填加 --force）")
+            return 1
 
     try:
         snap = build_snapshot(pretty)

@@ -1,0 +1,157 @@
+{
+  "title": "📝 盘后复盘 10-14 | 情绪再探冰点·传媒抱团撑高度",
+  "color": "grey",
+  "elements": [
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>① 📉 情绪演变与五日轨迹</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "**昨日从1分回到3.6分的修复没有站住，今天又回到1分；核按钮从6只增至18只，市场重新进入冰点。**\n昨日 3.6分·分歧 → 今日 1分·市场很冷；涨停由67只缩至36只，晋级率由21.7%降至19.4%。\n📈 五日评分：1→8.2→1→3.6→<text_tag color='green'>1</text_tag>；近3日均值1.87，今天不仅低于均值，还是近五日核按钮最多的一天。今日的增量不是单纯涨停减少，而是昨日修复后负反馈重新扩散。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>② 📊 真实情绪总览</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "指数：上证 3767.23 -0.88%｜深证 12110.59 -1.97%｜创业板 2866.76 -3.10%\n上涨/下跌 <text_tag color='red'>937</text_tag>:<text_tag color='green'>4262</text_tag>（东财沪深口径）｜沪深两市成交额约1.41万亿，较昨日缩量\n做多气氛 **1分/10·市场很冷**｜涨停36只｜炸板率41.9%｜晋级率 <text_tag color='green'>19.4%</text_tag>\n昨日涨停今日均幅 +0.04%｜核按钮 <text_tag color='green'>18只</text_tag>｜大面11只｜最高板 <text_tag color='green'>3→4板</text_tag>"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>⑤ 🔥 主线复盘</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='red'>⭐确定性最强：文化传媒、短剧与出版·继续抱团</text_tag>\n· 8只涨停：<text_tag color='purple'>慈文传媒(002343)4板</text_tag>、<text_tag color='purple'>新经典(603096)4板</text_tag>、<text_tag color='purple'>掌阅科技(603533)首板</text_tag>、<text_tag color='purple'>引力传媒(603598)首板</text_tag>、<text_tag color='purple'>中国科传(601858)首板</text_tag>、<text_tag color='purple'>新华文轩(601811)首板</text_tag>、<text_tag color='purple'>电魂网络(603258)首板</text_tag>、<text_tag color='purple'>富春股份(300299)首板</text_tag>。\n· 市场叙事仍围绕AI内容、短剧出海和出版内容，但做多气氛只有1分，传媒是弱市中的抱团方向，不等于大盘已经转暖。\n⚠️ 三家4板并列，没有唯一高度票；首板不少，明日要看能否出现新的3进4或首板晋级。\n\n<text_tag color='blue'>元件与PCB·低位试探</text_tag>\n· 2只涨停：<text_tag color='purple'>超声电子(000823)2板</text_tag>、<text_tag color='purple'>宝鼎科技(002552)首板</text_tag>。\n⚠️ 只有两只涨停，且当日板块资金文件缺失，不能把低位试探写成主线回归。\n\n<text_tag color='blue'>化工·局部连板</text_tag>\n· <text_tag color='purple'>醋化股份(603968)3板</text_tag>、<text_tag color='purple'>金奥博(002917)2板</text_tag>、<text_tag color='purple'>三维化学(002469)首板</text_tag>。\n⚠️ 方向内部票数有限，封板不够稳定，暂按局部活跃观察。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>⑥.5 👑 核心演化史</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "**昨日核心今日命运**\n· 慈文传媒、新经典、百洋股份：昨日3板 → 今日4板；三只票共同抬高市场高度。\n· 龙版传媒、丽人丽妆：昨日3板 → 今日未进入涨停池；丽人丽妆收跌约9%，高位分化继续。\n· 农心科技：昨日2板 → 今日跌停，成为核按钮案例。\n\n**今日市场核心**\n· 4板并列：<text_tag color='purple'>百洋股份(002696)</text_tag>、<text_tag color='purple'>慈文传媒(002343)</text_tag>、<text_tag color='purple'>新经典(603096)</text_tag>。生命周期：分歧中的并列竞争，暂时没有唯一龙头。\n\n**明日核心推演**\n· 先看三只4板谁能独自走到5板；传媒方向看慈文传媒、新经典能否继续抬高，百洋股份能否维持高度。3板醋化股份若不能晋级，市场高度仍可能再次压回。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>⑥ 📊 轮动复盘</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "✅ 文化传媒、短剧与出版：昨日的传媒方向继续扩散，4板从3家中走出，掌阅科技、引力传媒、中国科传、新华文轩等首板补充。\n❌ 商业百货：昨日待回流方向今天明显走弱，中兴商业、南宁百货进入核按钮列表，不能视为回流。\n❌ 粮食概念与有机硅：昨日待回流方向没有形成当日涨停扩散，资金回流未确认。\n❌ 电池与科技硬件：两市普跌背景下，强势方向没有形成新的涨停集群，暂不写成反转。\n\n<text_tag color='orange'>切换日判断：不成立。</text_tag>旧的传媒抱团没有退位，今天只是同一方向继续扩散；虽然4板高度从3板抬到4板，但市场总情绪从3.6分降到1分、量能缩到约1.41万亿，属于弱市抱团，不是新周期启动。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>⑦ 💰 板块资金</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "当日板块资金流文件缺失，净流入与净流出双列数据待补；本卡不使用昨日资金数据替代今日结论。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>③ 🧠 AI综合判断</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "**今天最值得注意的变化，是修复只活了一天，负反馈又重新扩散。**传媒仍然能把高度抬到4板，但它没有带动全市场，指数三指齐跌、创业板跌3.10%，涨跌比937:4262，市场更像局部抱团而不是整体转暖。\n<text_tag color='neutral'>⚠️ 风险</text_tag>\nA. 晋级率19.4%，低于近10日门槛24.1%，核按钮18只，已经不是单个高标分歧。\nB. 炸板率41.9%超过40%警戒线，今天追涨停的容错明显下降。\nC. 三只4板并列，暂时没有唯一高度票；传媒首板扩散能否留下，必须看明日晋级。\nD. 当日板块资金流文件缺失，不能用资金数字给传媒、PCB或其他方向加确定性。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>⑨ 📎 明日展望与延续观察</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "· 看新方向能不能走出高度：传媒与出版的4板三足竞争，谁能走到5板并带动同方向的票。\n· 看板块大票能不能连板：首板扩散票能否留下晋级，不能只看今天涨停家数。\n· 看老龙头反包还是续杀：龙版传媒、丽人丽妆和商业百货核按钮票明日能否止跌。\n· 看新龙头有没有资金接：晋级率先回到25%以上（今日19.4%），核按钮先收回个位数（今日18只），炸板率回到30%以下（今日41.9%）。\n\n<text_tag color='green'>⚠️ 当前仍是市场很冷的阶段。连续两次修复都没有延续，明日只有负反馈收敛、传媒继续晋级或出现新的板块级硬催化，才有资格把观察从弱市抱团升级为修复。</text_tag>\n\n**延续观察**\n· 传媒、短剧与出版：重点看慈文传媒、新经典、百洋股份谁能成为唯一高度。\n· 元件与PCB、化工：仅观察超声电子、醋化股份等真实涨停票能否继续晋级，资金数据补齐前不扩大判断。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>🧘 心法</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "弱市里，最高板抬高不等于市场转暖；先看负反馈能不能收敛，再看抱团能不能扩散。"
+      }
+    }
+  ],
+  "note": "📡 选股宝+东财+腾讯自选股 | 19:32 | AI盘中诊断\n⚠️ 本报告基于公开信息分析，投资需谨慎"
+}

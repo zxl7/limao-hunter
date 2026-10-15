@@ -1,0 +1,33 @@
+{
+  "title": "📝 盘后复盘 10-08 | 8板独行·市场转冷加深",
+  "color": "grey",
+  "elements": [
+    {"tag":"div","text":{"tag":"lark_md","content":"<text_tag color='neutral'>① 📉 情绪演变与五日轨迹</text_tag>"}},
+    {"tag":"div","text":{"tag":"lark_md","content":"**8板独行，整体情绪由修复转入市场转冷。**\n09-30 4.5/10·修复 → 今日 1.0/10·市场转冷。\n📈 五日评分：8→3.5→8→4.5→1；今日低于3日均值4.5，弱势确认。"}},
+    {"tag":"hr"},
+    {"tag":"div","text":{"tag":"lark_md","content":"<text_tag color='neutral'>② 📊 真实情绪总览</text_tag>"}},
+    {"tag":"div","text":{"tag":"lark_md","content":"指数均值 <text_tag color='green'>-2.05%</text_tag>｜上涨/下跌 <text_tag color='red'>1655</text_tag>:<text_tag color='green'>3775</text_tag>｜两市成交额 2.08万亿。\n情绪分 <text_tag color='green'>1.0</text_tag>｜涨停 43只｜炸板率 <text_tag color='green'>44.7%</text_tag>｜晋级率 <text_tag color='green'>19.2%</text_tag>。\n昨日涨停今日均幅 <text_tag color='green'>-0.01%</text_tag>｜核按钮 <text_tag color='green'>11只</text_tag>｜最高板 8板。"}},
+    {"tag":"hr"},
+    {"tag":"div","text":{"tag":"lark_md","content":"<text_tag color='neutral'>③ 🧠 AI综合判断</text_tag>"}},
+    {"tag":"div","text":{"tag":"lark_md","content":"**市场不是没有高度，而是高度与多数个股脱节。** 新华传媒8板继续封住，但指数普跌、炸板率44.7%、核按钮11只同步走坏，说明高位独行不能代表全场修复。\n⚠️\nA. 晋级率19.2%，低于近10日门槛22.1%，连板扩散仍弱。\nB. 昨日涨停平均回报转负，追涨停的隔日回报没有优势。\nC. 泰诺麦博-U、龙版传媒、东风科技等出现大幅回落，亏钱效应在扩散。\nD. T+1下，弱市追高后无法当日退出；等待核按钮回到个位数、晋级率回到25%以上再看修复质量。"}},
+    {"tag":"hr"},
+    {"tag":"div","text":{"tag":"lark_md","content":"<text_tag color='neutral'>⑤ 🔥 主线复盘</text_tag>"}},
+    {"tag":"div","text":{"tag":"lark_md","content":"<text_tag color='purple'>⭐确定性相对更强：固态电池·启动</text_tag>\n· 今日有6只涨停：雄韬股份、丰元股份、传艺科技、上海洗霸、紫竹高科、龙蟠科技；板块资金流入15.7亿。\n· 其中时代万恒4板、紫竹高科/传艺科技/上海洗霸3板，连板票开始出现，但仍要看明日能否继续扩散。\n⚠️ 板块资金归档缺失，今日资金仅为轮动文件的抓取结果，不作为连续流入结论。\n\n<text_tag color='blue'>创新药·分歧</text_tag>\n· 华北制药、联环药业涨停；板块整体跌2.61%，涨停与板块指数背离。\n⚠️ 仅两只涨停，且上一交易日的涨停数量已由3降至2，不宜据此确认强势延续。\n\n<text_tag color='blue'>航运能源·低位脉冲</text_tag>\n· 中远海能、招商南油涨停；国新能源、广西能源同步涨停。\n⚠️ 均为首板，尚未形成连续表现，先看消息驱动能否留下第二天的涨停。"}},
+    {"tag":"hr"},
+    {"tag":"div","text":{"tag":"lark_md","content":"<text_tag color='neutral'>⑥.5 👑 核心演化史</text_tag>"}},
+    {"tag":"div","text":{"tag":"lark_md","content":"**昨日市场核心今日命运**\n· 新华传媒由7板升至8板，09:25封住，封单17.76亿，出版方向的高度仍在延续。\n· 襄阳轴承昨日4板，今日跌5.35%；高位票回落没有收敛。\n\n**今日市场核心**\n· 新华传媒是当前唯一8板票，连续性和封单最强，但出版方向未出现同高度呼应，属于高位独行。\n\n**明日演化**\n· 看新华传媒能否继续封住，以及时代万恒、九阳股份两只4板能否向上；若高位继续分化，8板对市场的带动将进一步减弱。"}},
+    {"tag":"hr"},
+    {"tag":"div","text":{"tag":"lark_md","content":"<text_tag color='neutral'>⑥ 📊 轮动复盘</text_tag>"}},
+    {"tag":"div","text":{"tag":"lark_md","content":"✅ 固态电池：政策与产业化消息推动，今日6只涨停，成为弱市中最有集群特征的方向。\n❌ PCB：前期8只涨停的热度已降，今日相关票未形成新的涨停集群。\n❌ 房地产开发：陆家嘴2板，但板块指数跌1.25%，此前热度继续降温。\n❌ 黄酒：今日无涨停，前期回流预期未兑现为当日强度。\n\n**切换日判断：不成立。** 新华传媒继续走高，并非旧高标退位；固态电池虽有首板扩散，但市场整体处于退潮，暂按弱市中的新方向观察。"}},
+    {"tag":"hr"},
+    {"tag":"div","text":{"tag":"lark_md","content":"<text_tag color='neutral'>⑦ 💰 板块资金</text_tag>"}},
+    {"tag":"div","fields":[{"is_short":true,"text":{"tag":"lark_md","content":"<text_tag color='red'>电池 +32.8亿</text_tag>"}},{"is_short":true,"text":{"tag":"lark_md","content":"<text_tag color='green'>电子 -233.0亿</text_tag>"}},{"is_short":true,"text":{"tag":"lark_md","content":"<text_tag color='red'>锂电池概念 +26.7亿</text_tag>"}},{"is_short":true,"text":{"tag":"lark_md","content":"<text_tag color='green'>国产芯片 -231.7亿</text_tag>"}},{"is_short":true,"text":{"tag":"lark_md","content":"<text_tag color='red'>电池化学品 +20.2亿</text_tag>"}},{"is_short":true,"text":{"tag":"lark_md","content":"<text_tag color='green'>半导体概念 -204.9亿</text_tag>"}},{"is_short":true,"text":{"tag":"lark_md","content":"<text_tag color='red'>电池技术 +19.7亿</text_tag>"}},{"is_short":true,"text":{"tag":"lark_md","content":"<text_tag color='green'>CPO概念 -173.1亿</text_tag>"}},{"is_short":true,"text":{"tag":"lark_md","content":"<text_tag color='red'>电力设备 +19.4亿</text_tag>"}},{"is_short":true,"text":{"tag":"lark_md","content":"<text_tag color='green'>通信技术 -164.9亿</text_tag>"}}]},
+    {"tag":"div","text":{"tag":"lark_md","content":"⚠️ 守卫提示当日板块资金文件未落盘；以上为本轮轮动文件中的当日抓取结果，连续趋势数据待补。"}},
+    {"tag":"hr"},
+    {"tag":"div","text":{"tag":"lark_md","content":"<text_tag color='neutral'>⑨ 📎 明日展望与延续观察</text_tag>"}},
+    {"tag":"div","text":{"tag":"lark_md","content":"· 看固态电池能否走出更高连板：时代万恒4板、传艺科技/上海洗霸3板是否继续向上。\n· 看板块大票能不能连板：固态电池的涨停集群能否从首板走向二板。\n· 看新华传媒8板之后是继续封住还是出现分歧；同时看九阳股份、时代万恒能否缩小高度差。\n· 看核按钮能否从11只降回个位数、晋级率能否回到25%以上；两项未改善前，弱市反弹先按短线看待。\n\n**延续观察**\n· 固态电池今日资金与涨停同步出现，是明日最需要跟踪的方向。\n· 科技硬件资金大幅流出，电子、国产芯片、半导体概念合计净流出超过669亿，未见止跌前不急于下结论。"}},
+    {"tag":"hr"},
+    {"tag":"div","text":{"tag":"lark_md","content":"<text_tag color='neutral'>🧘 心法</text_tag>\n高板独行不是全场转强；先等亏钱效应收敛，再谈进攻。"}},
+    {"tag":"note","elements":[{"tag":"plain_text","content":"📡 选股宝+东财+腾讯自选股 | 17:24 | AI盘中诊断"},{"tag":"plain_text","content":"⚠️ 本报告基于公开信息分析，投资需谨慎"}]}
+  ]
+}

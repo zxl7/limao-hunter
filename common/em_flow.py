@@ -16,7 +16,11 @@
 
 契约命名（全局统一，见 design 文档 §3.1）：
   元值：main_net / super_large_net / large_net / mid_net / small_net（单位=元）
-  时间：source_ts（f124 · Unix 秒）
+  时间：source_ts（f124 · **Unix 秒**，历史命名保留）+ source_ts_iso（同刻·ISO8601 带 +08:00）
+        ⚠️ 2026-10-14 审计 P1-⑦：全系统 `source_ts` 另有「ISO 字符串」用法
+        （realtime_data_pipeline / realtime_analytics / leader_cycle），**本模块是唯一用 Unix 秒的**。
+        为免误用，本模块额外输出 `source_ts_iso`；新消费方一律读它，`source_ts` 留作向下兼容。
+        规范见 `common.market_time` 末尾「时间戳字段规范」。
   展示：{field}_yi（亿）只由 net_to_yi() 换算，禁消费方自算
 校验恒等式（parse 层强制）：main = super + large（容差 1%）；main+mid+small ≈ 0（守恒，容差 1%）
 """
@@ -27,6 +31,7 @@ import time
 from typing import Any, Optional
 
 from common.http_client import http_get
+from common.market_time import iso_bj_from_unix
 
 logger = logging.getLogger("em_flow")
 
@@ -164,7 +169,8 @@ def parse_snapshot_item(item: dict[str, Any]) -> Optional[dict[str, Any]]:
     return {
         "code": code,
         "name": str(item.get("f14") or ""),
-        "source_ts": source_ts,
+        "source_ts": source_ts,                      # 兼容保留：Unix 秒（历史命名）
+        "source_ts_iso": iso_bj_from_unix(source_ts),  # 规范形态：ISO8601 +08:00
         "flow_consistent": flow_consistent,
         "main_net": main_net,
         "super_large_net": super_large_net,
@@ -312,4 +318,6 @@ def sector_flow_structure(item: dict[str, Any]) -> dict[str, Any]:
         "mid_yi": net_to_yi(item.get("mid_net")),
         "small_yi": net_to_yi(item.get("small_net")),
         "source_ts": item.get("source_ts") or 0,
+        "source_ts_iso": item.get("source_ts_iso")
+                          or iso_bj_from_unix(item.get("source_ts")),
     }

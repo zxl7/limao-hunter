@@ -15,6 +15,12 @@ CACHE = ROOT / "cache"
 PULSE = CACHE / "pulse_snapshots"
 READY = PULSE / "data_ready.json"
 
+# 规范时间戳（2026-10-14 审计 P1-⑦）：data_ready.generated_ts 是 link_guard 的断档判据，
+# 统一带 +08:00（原 `.astimezone()` 形态依赖本机时区，换机即漂移）。
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from common.market_time import iso_bj  # noqa: E402
+
 STEPS = (
     ("intraday_pulse", ("scripts/intraday_pulse.py", "--mode", "intra", "--json-only", "--force"), "intraday.log"),
     ("gen_candidates", ("scripts/gen_candidates.py",), "candidates.log"),
@@ -115,7 +121,7 @@ def main() -> None:
         "ready": ready,
         "date": str(source_ts or "")[:10],
         "source_ts": source_ts,
-        "generated_ts": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "generated_ts": iso_bj(),
         "steps": results,
         "reason": reason,
     })

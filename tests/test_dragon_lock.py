@@ -172,9 +172,14 @@ def test_update_lock_resets_time_when_handover_happens():
     assert handover["code"] == "600002" and handover["at"] == "13:30"
 
 
-# ── ⑤ 端到端：抖动不再产生「龙头切换」事件 ────────────────────
+# ── ⑤ 端到端：换人不再是事件；只有「真爆发」才是 ──────────────
 def _run_day(rounds, use_lock):
-    """按 `main` 的顺序跑若干轮，返回**龙头切换事件**文案（走真实的 `memory_lib.detect_events`）。"""
+    """按 `main` 的顺序跑若干轮，返回事件 dict 列表（走真实的 `memory_lib.detect_events`）。
+
+    ⚠️ 2026-10-14 用户概念纠正：「**龙头切换就是错误的概念，那只是短期的爆发个股而已**」
+    ⇒ `detect_events` **不再产出「龙头切换」**，改为「个股爆发」（须真达各自涨停线附近）。
+    本组用例语义随之调整：不再是"抑制切换次数"，而是**"换人本身不再是事件，只有真爆发才是"**。
+    """
     locks, mem, out = {}, ml.empty_mem("2026-09-17"), []
     for stocks in rounds:
         prev = locks.get("题材")
@@ -185,9 +190,10 @@ def _run_day(rounds, use_lock):
         if use_lock:
             locks["题材"] = ip.update_lock(prev, c, "10:00")
         latest = {"top5": [{"name": "题材", "zt_count": 3,
-                            "leader": {"name": c["name"], "code": c["code"]}}],
+                            "leader": {"name": c["name"], "code": c["code"], "pct": c["pct"]}}],
                   "total_zt": 30}
-        out += [e["event"] for e in ml.detect_events(latest, mem=mem) if "龙头切换" in e["event"]]
+        out += [e for e in ml.detect_events(latest, mem=mem)
+                if "个股爆发" in e["event"] or "龙头切换" in e["event"]]
     return out
 
 
@@ -197,20 +203,25 @@ C = S("300003", "丙", "3天3板", 20.0, et=35400)     # 后来者，板更高
 
 
 def test_end_to_end_no_spurious_switch_when_newcomer_arrives():
-    """后来者（更高板、20cm）入场 → **不应产生任何龙头切换事件**。"""
+    """后来者（更高板、20cm）入场 → **不应产生任何事件**（锁定生效）。"""
     rounds = [[A, B], [A, B], [A, B, C], [A, B, C], [A, B, C]]
     assert _run_day(rounds, use_lock=True) == []
-    # 对照：无锁时同一个 newcomer 会（按连板数）接任 → 产生 1 次事件
-    assert len(_run_day(rounds, use_lock=False)) == 1
+    # 对照：无锁时 newcomer 会接任 → 但它本身真爆发（20cm +20.0% ≥ 19.0 门槛）→ 记 1 条
+    ev = _run_day(rounds, use_lock=False)
+    assert len(ev) == 1
+    # ⛔ 新概念下严重度为 mid 而非 high ——「只是短期的爆发个股而已」，不该触发全量推卡
+    assert ev[0]["severity"] == "mid"
+    assert "龙头切换" not in ev[0]["event"]
 
 
 def test_end_to_end_retirement_produces_exactly_one_event():
-    """原龙头退位 → **恰好 1 次**换人事件，此后不再重复。"""
+    """原龙头退位 → **恰好 1 条**事件（新概念下 = 1 条「个股爆发」）。"""
     rounds = [[A, B], [A, B], [A, B, C],      # 甲在位，丙入场但不换
               [B, C], [B, C], [B, C]]         # 甲退位 → 丙接棒
     events = _run_day(rounds, use_lock=True)
     assert len(events) == 1
-    assert "龙头切换：甲 → 丙" in events[0]
+    assert "个股爆发" in events[0]["event"]
+    assert "丙" in events[0]["event"]
 
 
 # ── ⑥ 锁文件：按日隔离 + 容错 ────────────────────────────────

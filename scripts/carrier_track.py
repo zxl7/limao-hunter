@@ -24,7 +24,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+import sys
 from pathlib import Path
 
 CACHE = Path(__file__).resolve().parent.parent / "cache"
@@ -33,9 +33,12 @@ MIN_BOARDS = 2  # 载体候选 = 连板 ≥2 的辨识度票（3板以上=高标
                 # 2026-08-25 用户「老抱团高标证伪」实证：天洋新材 2板 也是老抱团成员，
                 # 只筛 ≥3 会漏 2板 载体（老抱团 8/24 仅 1-2 板但题材辨识度高））
 
-
-def _bj_now() -> datetime:
-    return datetime.now(timezone(timedelta(hours=8)))
+# 时间工具唯一实现（2026-10-14 审计 P1-⑦）：原 `_bj_now()` 自写 BJ_TZ
+# （`timezone(timedelta(hours=8))`）违反 common/market_time 铁律 1（禁再自写 BJ_TZ），
+# 且 `.isoformat()` 的偏移形态不稳定，现统一转发唯一实现。
+if str(Path(__file__).resolve().parent.parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from common.market_time import iso_bj, now as _bj_now  # noqa: E402
 
 
 def _load_json(p: Path) -> dict | None:
@@ -125,7 +128,7 @@ def run() -> dict:
         "carriers_today": carriers_today,
         "carriers_dead": carriers_dead,
         "carrier_migration": migration,
-        "generated_ts": _bj_now().isoformat(timespec="seconds"),
+        "generated_ts": iso_bj(),
     }
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")

@@ -34,6 +34,9 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# 时间戳解析唯一入口（2026-10-14 审计 P1-⑦）：_age_seconds 用它兼容 aware/naive/Unix 三形态。
+from common.market_time import BJ_TZ, parse_dt  # noqa: E402
+
 PULSE = ROOT / "cache" / "pulse_snapshots"
 READY = PULSE / "data_ready.json"
 STATE = PULSE / ".link_guard_state.json"
@@ -72,22 +75,36 @@ def _in_session(now: datetime) -> bool:
     ⛔ 2026-10-06 国庆误报事故：原实现只判 weekday<5 + 时段，未豁免法定节假日，
        休市日（如 10-06 周二）被当盘中 → data_ready.ready=false（休市无数据，本属正常）
        → 误判断链狂推「盘面数据断了」。现把「是否交易日」完全委托
-       is_a_share_trading_day（唯一真源，含调休补班），仅 import 失败才兜底判周末。
+       is_a_share_trading_day（唯一真源，周末恒休市），仅 import 失败才兜底判周末。
     """
     try:
         from common.trading_calendar import is_a_share_trading_day
         if not is_a_share_trading_day(now):
             return False
     except Exception:
-        if now.weekday() >= 5:
+        if now.weekday() >= 5:  # trading-day-fallback: 唯一真源不可用时的周末兜底
             return False
     return SESSION_START_HHMM <= now.hour * 100 + now.minute < SESSION_END_HHMM
 
 
-def _age_seconds(generated_ts: str, now: datetime) -> float | None:
+def _age_seconds(generated_ts, now: datetime) -> float | None:
+    """新旧时间戳混用安全版（2026-10-14 数据血缘审计 P1-⑦）。
+
+    ⛔ 原实现 = `(now - datetime.fromisoformat(str(generated_ts)))` 全 naive 解析：
+       · 存量值 `2026-10-13T15:30:32`（空格/T 分隔、无时区）→ 与 naive now 相减正常；
+       · 规范值 `2026-10-14T15:30:32+08:00`（带偏移）→ aware 与 naive 相减 **直接 TypeError**，
+         被下方 except 吞掉返回 None ⇒ B 类「守护进程可能没在跑」**永远检不出**（静默失效）。
+    现统一走 `parse_dt`（ISO 带/不带偏移 + 秒/毫秒时间戳三种形态全吃），
+    并把 `now` 也归一为 aware，消除混用。
+    """
+    dt = parse_dt(generated_ts)
+    if dt is None:
+        return None
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=BJ_TZ)
     try:
-        return (now - datetime.fromisoformat(str(generated_ts))).total_seconds()
-    except (ValueError, TypeError):
+        return (now - dt).total_seconds()
+    except (TypeError, ValueError):
         return None
 
 

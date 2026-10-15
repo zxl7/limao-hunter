@@ -1,0 +1,30 @@
+{
+  "date": "2026-09-30",
+  "status": "sent_after_limit_up_fix",
+  "feishu_sent": true,
+  "push_result": "OK",
+  "initial_block": {
+    "theme": "房地产开发",
+    "pool_stock": "深物业A(000011)",
+    "reason": "题材池股票当日已涨停，但旧逻辑只扫描leaders等摘要列表，未扫描limit_up_stocks全量涨停池。"
+  },
+  "fix": {
+    "file": "wealth_code/pipelines/build_cards.py",
+    "function": "_pool_today_status",
+    "change": "将limit_up_stocks全量涨停池加入题材启动排除扫描，并保留leaders等摘要兼容。",
+    "regression_test": "tests/test_ambush_card.py::test_pool_today_status_uses_full_limit_up_list"
+  },
+  "validation": {
+    "self_check": "passed",
+    "rendered_real_estate_candidate": false,
+    "rendered_deep_property": false,
+    "copy_gate_failures": [],
+    "tests": "test_ambush_card.py + test_card_copy_rules.py: 18 passed; test_card_quality.py: 8 passed"
+  },
+  "content_decision": {
+    "picks": [],
+    "stock_scan_count": 6,
+    "next_trading_day": "2026-10-08",
+    "note": "医药资金强但相关池多股已涨停，断板池当日行情覆盖0/143，因此保留观察、未硬凑重点推荐。"
+  }
+}

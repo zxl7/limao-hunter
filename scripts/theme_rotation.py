@@ -16,6 +16,8 @@
 - 第一周数据不足时只产 boom 跟踪基线，不强行预测回流；攒满 5 天后模式才生效。
 """
 import json
+import os
+import sys
 import urllib.request
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -25,6 +27,33 @@ CACHE = ROOT / "cache"
 ERUPT_DIR = CACHE / "eruption_history"
 ZT_DIR = CACHE / "zt_history"
 OUT_PATH = CACHE / "theme_rotation.json"
+
+# 交易日历（唯一真源·2026-10-09）。窗口必须按交易日计：长假期间盘中写入的空壳
+# （intraday_only·zt_list=[]，如 10-01/02/05）会占满 `files[-ndays:]` 的名额。
+# 防御性导入，失败退化为不过滤（保旧行为），绝不因日历不可用而中断本模块。
+try:
+    from common.trading_calendar import is_a_share_trading_day
+except ImportError:
+    sys.path.insert(0, str(ROOT))
+    try:
+        from common.trading_calendar import is_a_share_trading_day
+    except Exception:  # pragma: no cover
+        def is_a_share_trading_day(_value) -> bool:  # type: ignore[misc]
+            return True
+
+# 规范时间戳（2026-10-14 审计 P1-⑦）：generated_ts 统一 ISO8601 带 +08:00，
+# 旧 naive `.isoformat()`（无时区）会让 `link_guard` 的 aware-naive 相减抛错而静默失效。
+try:
+    from common.market_time import iso_bj
+except ImportError:  # pragma: no cover - 极端环境兜底（脚本从任意 cwd 调用）
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT))
+    try:
+        from common.market_time import iso_bj
+    except Exception:
+        def iso_bj(_dt=None) -> str:  # type: ignore[misc]
+            return (_dt or datetime.now()).astimezone().isoformat(timespec="seconds")
+
 TRADING_LOOKBACK = 5     # 5 日窗口：最近 5 个**交易日**文件（2026-08-16 由日历日回看 6 天改交易日计数）
 BOOM_ZT = 3                # 爆发阈值：题材当日涨停数 >= 3 视为 boom
 REENTRY_GAP_MIN_DAYS = 2   # 回流确认：两次爆发间隔≥2个冷却交易日（间隔≥3交易日）才认回流，过滤电风扇
@@ -64,7 +93,6 @@ def _load(path):
 try:
     from flow_noise import SECTOR_FLOW_NOISE, is_flow_noise
 except ImportError:
-    import os, sys
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from flow_noise import SECTOR_FLOW_NOISE, is_flow_noise
 
@@ -280,7 +308,10 @@ def _load_zt_pool_series(ndays: int = TRADING_LOOKBACK):
     排除今日文件（今日涨停用 build 内 today_zt_codes 从 yesterday_zt 直接取·口径一致）。"""
     import glob
     import os
-    files = sorted(glob.glob(str(ZT_DIR / "zt_*.json")))[-ndays:]
+    # ⛔ 2026-10-09：**先按交易日过滤，再切片**。原实现先 `files[-ndays:]` 后靠
+    # `if not zl: continue` 跳空壳 → 长假空壳照样占名额，5 日窗实际只剩 2 个真实交易日。
+    files = [f for f in sorted(glob.glob(str(ZT_DIR / "zt_*.json")))
+             if is_a_share_trading_day(Path(f).stem[3:])][-ndays:]
     yz_path = CACHE / "yesterday_zt.json"
     try:
         sig = tuple(os.path.getmtime(f) for f in files) + (os.path.getmtime(yz_path),)
@@ -883,7 +914,7 @@ def build(*, live_day=None, live_themes=None, live_codes=None):
         today_zt_codes = set(live_codes)
     if not series:
         return {"date": datetime.now().strftime("%Y-%m-%d"),
-                "generated_ts": datetime.now().isoformat(),
+                "generated_ts": iso_bj(),
                 "data_days": [], "candidates": [],
                 "market_context": mctx,
                 "note": "无 eruption_history 数据，等待 capture_daily 攒数据"}
@@ -1173,7 +1204,7 @@ def build(*, live_day=None, live_themes=None, live_codes=None):
 
     return {
         "date": today_date,
-        "generated_ts": datetime.now().isoformat(),
+        "generated_ts": iso_bj(),
         "data_days": [d for d, _ in series],
         "candidates": candidates,
         "sector_zt_trends": sector_zt_trends,   # 看板「板块涨停数增长趋势」卡数据源

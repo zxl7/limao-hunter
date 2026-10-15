@@ -43,25 +43,32 @@ tasks:
     writeback: null
     retired: true
 
-  # ---------- 盘中猎手 ×11（骨架B）----------
-  - name: "【盘中】盘中猎手-0925"
-    id: "automation-1785767201967"
-    kind: "骨架B"
-    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=25"
-    webhook: "auto"
-    writeback: "盘中猎手-0925"
+  # ---------- 盘中猎手 ×12 ACTIVE（骨架B）+ 1 PAUSED 留档 + 1 retired 留档 ----------
   - name: "【盘中】盘中猎手-0930"
-    id: "automation-1785767247210"
+    id: "automation-1785767201967"
     kind: "骨架B"
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=30"
     webhook: "auto"
     writeback: "盘中猎手-0930"
+    # 2026-10-14 校准：原登记「猎手-0925 / 09:25」，DB 实为「猎手-0930 / 09:30」（时间早前已改·名称未同步）→ 按 DB 对齐
   - name: "【盘中】盘中猎手-0935"
+    id: "automation-1785767247210"
+    kind: "骨架B"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=35"
+    webhook: "auto"
+    writeback: "盘中猎手-0935"
+    # 2026-10-14 校准：原登记「猎手-0930 / 09:30」，DB 实为「猎手-0935 / 09:35」→ 按 DB 对齐
+  # ⚠️ 遗留重复（2026-10-14 发现）：本 id 亦名「猎手-0935」且 rrule 同为 09:35，
+  #    与上面 ACTIVE 的 0935 **同名同时刻**；DB 状态 PAUSED → 不触发、无实际影响。
+  #    ⛔ 2026-10-14 处置（用户指令「删除！」）：已从 automation DB 永久删除，
+  #    本条目降级为 **retired 留档**（validate_tasks 跳过校验，仅保留历史痕迹）。
+  - name: "【盘中】盘中猎手-0935（重名遗留·已暂停）"
     id: "automation-1785767269889"
     kind: "骨架B"
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=35"
     webhook: "auto"
     writeback: "盘中猎手-0935"
+    retired: true
   - name: "【盘中】盘中猎手-0940"
     id: "automation-1785767293798"
     kind: "骨架B"
@@ -104,34 +111,40 @@ tasks:
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=14;BYMINUTE=0"
     webhook: "auto"
     writeback: "盘中猎手-1400"
-  - name: "【盘中】盘中猎手-1430"
+  - name: "【盘中】盘中猎手-1445"
     id: "automation-1785767450595"
     kind: "骨架B"
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=14;BYMINUTE=45"
     webhook: "auto"
-    writeback: "盘中猎手-1430"
+    writeback: "盘中猎手-1445"
     # 2026-09-03 曾 PAUSED（与尾盘潜伏卡 14:30 撞车）；2026-10-10 同步DB：用户已移回 ACTIVE 并改至 14:45（与尾盘潜伏卡 14:30 错峰）
+    # 2026-10-14 用户「名称与实际跑的时间对齐」：原名 猎手-1430（跑 14:45）→ 猎手-1445。rrule 未动，仅改名+prompt。
+    # 同批：prompt 由旧骨架（含已删的 大盘概览/昨日涨停反馈/独立情绪核心）刷新为现行 骨架B（含 4.52 📡核心标的）。
 
-  # ---------- 盘中快照 ×3（骨架B.5）----------
-  - name: "【盘中】盘中快照-1000"
+  # ---------- 原「盘中快照」×3 → 2026-10-14 并入猎手（骨架B·任务名同改）----------
+  - name: "【盘中】盘中猎手-1000"
     id: "automation-1786674820933"
-    kind: "骨架B.5"
+    kind: "骨架B"
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=10;BYMINUTE=0"
     webhook: "auto"
-    writeback: "盘中快照-1000"
-  - name: "【盘中】盘中快照-1100"
+    writeback: "盘中猎手-1000"
+    # 2026-10-14 用户「快照合并进猎手」：原名 盘中快照-1000 → 猎手-1000（内容按骨架B·含步骤4.52 📡核心标的）
+  - name: "【盘中】盘中猎手-1100"
     id: "automation-1786674820934"
-    kind: "骨架B.5"
+    kind: "骨架B"
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=11;BYMINUTE=0"
     webhook: "auto"
-    writeback: "盘中快照-1100"
-  - name: "【盘中】盘中快照-1445"
+    writeback: "盘中猎手-1100"
+    # 2026-10-14 同上：原名 盘中快照-1100 → 猎手-1100
+  - name: "【盘中】盘中猎手-1430"
     id: "automation-1786674820935"
-    kind: "骨架B.5"
+    kind: "骨架B"
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=14;BYMINUTE=30"
     webhook: "auto"
-    writeback: "盘中快照-1445"
-    # 2026-08-25 曾 PAUSED；2026-10-10 同步DB：用户已移回 ACTIVE 并改至 14:30（与猎手-1430 14:45 错峰）
+    writeback: "盘中猎手-1430"
+    # 2026-08-25 曾 PAUSED
+    # 2026-10-14 用户「快照合并进猎手」：原名 盘中快照-1445 → 暂名猎手-1445（名实错配）
+    # 2026-10-14 用户「名称与实际跑的时间对齐」：猎手-1445（跑 14:30）→ 猎手-1430。rrule 未动，仅改名+prompt。
 
   # ---------- 盘后选股（pipeline）----------
   - name: "【财富密码】财富密码·接力卡"

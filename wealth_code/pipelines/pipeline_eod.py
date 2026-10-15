@@ -46,6 +46,15 @@ from core.dimension_score import build_dimension_panel
 from core.quant_score import select_relay_watch
 from core.historical_relay import annotate_historical_relay
 
+# ⛔ `common/` 在**项目根**、不在 wealth_code/ 下；以脚本/CLI 方式运行时 cwd 不入 sys.path，
+#    调用方只把 wealth_code 导进 PYTHONPATH 就会在此行抛 ModuleNotFoundError。
+#    2026-10-01 实证：launchd 竞价卡整轮 import 期即崩（verify RC=1，当日无卡）。
+#    与 core/ai_caliber.py、adapters/input_auction.py 同法：本模块自插项目根。
+_BASE = Path(__file__).resolve().parents[2]
+if str(_BASE) not in sys.path:
+    sys.path.insert(0, str(_BASE))
+from common.trading_calendar import next_a_share_trading_day  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = ROOT / "cache"
 DATA_DIR = ROOT / "data"
@@ -406,6 +415,71 @@ def _build_weak2strong_map(zt_history_dir: Path, today: str, yesterday: str,
     return m
 
 
+def _build_second_leg_map(zt_history_dir: Path, today: str,
+                          scored: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """确认前段 N 连板、断板 1 日、当前第二段连续 M 板的 N+M 进度。"""
+    days: list[tuple[str, dict[str, dict[str, Any]]]] = []
+    history_files = [path for path in sorted(zt_history_dir.glob("zt_*.json")) if path.stem[3:] < today][-40:]
+    for path in history_files:
+        date = path.stem[3:]
+        try:
+            day = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(day, dict):
+                continue
+            rows = day.get("zt_list")
+            stamp = str(day.get("generated_ts") or "")
+            # 断板只能从完整收盘池确认；任何缺日都会在交易日相邻检查处中止。
+            if (day.get("date") != date or not isinstance(rows, list)
+                    or day.get("zt_count") != len(rows) or stamp[:10] != date or stamp[11:16] < "15:00"):
+                continue
+            days.append((date, {str(row["code"]): row for row in rows}))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    result: dict[str, dict[str, Any]] = {}
+    for cand in scored:
+        code = str(cand.get("code") or "")
+        boards = int(cand.get("boards") or 0)
+        if not code or boards < 1 or len(days) < boards + 1:
+            continue
+        break_index = len(days) - boards
+        prior_date, prior_rows = days[break_index - 1]
+        break_date, break_rows = days[break_index]
+        prior_boards = int((prior_rows.get(code) or {}).get("boards") or 0)
+        if (prior_boards < 2 or code in break_rows
+                or next_a_share_trading_day(prior_date) != break_date):
+            continue
+        if break_index < prior_boards:
+            continue
+        # 前段 N 板也逐日核实；只凭断板前一日的板数会把缺日历史误认成 N+N。
+        prior_valid = True
+        for prior_board in range(1, prior_boards + 1):
+            prior_index = break_index - prior_boards + prior_board - 1
+            day_date, day_rows = days[prior_index]
+            if int((day_rows.get(code) or {}).get("boards") or 0) != prior_board:
+                prior_valid = False
+                break
+            if prior_board > 1 and next_a_share_trading_day(days[prior_index - 1][0]) != day_date:
+                prior_valid = False
+                break
+        if not prior_valid:
+            continue
+        previous = break_date
+        valid = True
+        # 第二段必须从 1 板逐日递增到今日 M 板，缺完整交易日不推断连续性。
+        for current_board in range(1, boards):
+            day_date, day_rows = days[break_index + current_board]
+            if (next_a_share_trading_day(previous) != day_date
+                    or int((day_rows.get(code) or {}).get("boards") or 0) != current_board):
+                valid = False
+                break
+            previous = day_date
+        if not valid or next_a_share_trading_day(previous) != today:
+            continue
+        result[code] = {"prior_boards": prior_boards, "second_boards": boards,
+                        "break_date": break_date, "n_plus_n_confirmed": boards >= prior_boards}
+    return result
+
+
 def _load_theme_ctx() -> dict[str, Any] | None:
     """
     加载题材动量上下文（来自 theme_roll 的 5 日题材强度表，可选）。
@@ -580,6 +654,14 @@ def run_eod(
     zt = load_zt_pool(cache_dir)
     env = load_environment(cache_dir)
     pulse = load_pulse(cache_dir)            # 真实大盘+板块环境（pulse 快照）
+    from common.json_io import load_json
+    effect = load_json((cache_dir or ROOT.parent / "cache") / "selection_effect.json")
+    # 盘后路径判断只认候选当日的收盘后快照；盘中暂态不改变既有分池。
+    if (isinstance(effect, dict) and effect.get("date") == zt["date"]
+            and str(effect.get("generated_ts") or "")[:10] == zt["date"]
+            and str(effect.get("generated_ts") or "")[11:16] >= "15:00"
+            and isinstance(effect.get("market"), dict)):
+        env["relay_feedback"] = effect["market"]
 
     # ⛔ 2026-08-25 三修（用户「黄河旋风明明是钻石·你把它定到机器人里去了·以题材的涨停
     # 为准不要以板块的涨停」）：**完整涨停池(ztgc)回填 core_theme（炒作题材）**，且在
@@ -588,6 +670,7 @@ def run_eod(
     # 旧实现只在 annotate_lone 之后对 relay+watch 候选拉题材，pool 行只有静态行业
     # → 候选与 pool 失配，题材层聚合到「机器人」错误桶（实证：黄河旋风 theme_name=机器人
     # ·theme_mates_cnt=6 误判）。ThemeFetcher 带缓存（fetch_all 幂等），后续候选回填复用。
+    _theme_map_all = {}
     try:
         from common.stock_theme import ThemeFetcher
         _theme_map_all = ThemeFetcher().fetch_all()
@@ -680,6 +763,22 @@ def run_eod(
             it["w2s_prev_zbc"] = w2s_map[it_code].get("prev_zbc", 0)
             w2s_hits += 1
 
+    second_legs = _build_second_leg_map(ZT_HIST_DIR, zt["date"], scored)
+    stage_feedback = (env.get("relay_feedback") or {}).get("stages") or {}
+    for it in scored:
+        code = str(it.get("code") or "")
+        boards = int(it.get("boards") or 0)
+        second_leg = second_legs.get(code)
+        # N+N 二波与普通 1进2/2进3 分开判断；身份仍由已有龙头证据决定。
+        stage_key = ("n_plus_n" if second_leg else "one_to_two" if boards == 1
+                     else "two_to_three" if boards == 2 else "high_relay")
+        stage = stage_feedback.get(stage_key) if isinstance(stage_feedback, dict) else None
+        it["relay_stage"] = stage_key
+        it["relay_mood"] = (stage.get("mood") if isinstance(stage, dict) else None) or "insufficient"
+        it["relay_mood_evidence"] = stage if isinstance(stage, dict) else None
+        if second_leg:
+            it["n_plus_n"] = second_leg
+
     # 历史连板晋级因子：必须在实际生效的 select_relay_watch 之前回填，避免只展示不参与排序。
     # 统计同一股票/同一高度的真实次日晋级后验，再按当前晋级率、连板晋级率、情绪分小幅校准。
     history_diag = annotate_historical_relay(
@@ -687,7 +786,15 @@ def run_eod(
     )
 
     # faithful §4.4 四档接力/观察选择（spec 十一维 raw_score 驱动 + 真实环境 + AI）
-    relay, watch, diagnostics, sel_mode = select_relay_watch(scored, env, pulse, ai_env)
+    from core import leader_cycle
+    comparison = None
+    if leader_cycle.ENABLE_PRESELECT_STATUS:
+        comparison = leader_cycle.build_preselect_context(
+            scored, zt.get("ztgc") or [],
+            leader_cycle.load_history(ROOT.parent, zt["date"], before_only=True),
+            asof=zt["date"], cutoff=datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            themes=_theme_map_all)
+    relay, watch, diagnostics, sel_mode = select_relay_watch(scored, env, pulse, ai_env, comparison=comparison)
     diagnostics["historical_relay"] = history_diag
 
     # early 回标统计（diagnostics 来自 select_relay_watch 返回值，须在其后写入）
@@ -714,7 +821,8 @@ def run_eod(
     try:
         from common.stock_theme import ThemeFetcher, annotate_candidate
         _tf = ThemeFetcher()
-        _theme_map = _tf.for_codes([str(it.get("dm") or it.get("code") or "") for it in relay + watch])
+        _theme_map = (_theme_map_all if comparison is not None else
+                      _tf.for_codes([str(it.get("dm") or it.get("code") or "") for it in relay + watch]))
     except Exception:
         _theme_map = {}
     for it in relay + watch:
@@ -810,7 +918,11 @@ def run_eod(
         "global_narrative": global_narrative,
     }
     from core.leader_cycle import enrich_payload
-    enrich_payload(payload, ROOT.parent)
+    if comparison is None:
+        enrich_payload(payload, ROOT.parent)
+    else:
+        for rank, row in enumerate(sorted(relay + watch, key=lambda r: comparison["entries"][r["code"]]["key"], reverse=True), 1):
+            row["status_rank"] = rank
     out_path = out_path or (CACHE_DIR / f"candidates-{zt['date'] or 'latest'}.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -1,19 +1,23 @@
 # -*- coding: utf-8 -*-
-"""客户群镜像广播（2026-09-10 建立·蒋坤阳 / 2026-09-11 收窄）回归锁。
+"""客户群镜像广播（2026-09-10 建立·蒋坤阳 / 2026-09-11 收窄 / 2026-10-14 扩容）回归锁。
 
 client_mirror 判定语义（push_card.mirror_targets）：
   1. 短线精灵（卡名含 short_spirit）→ 命中（客户约定的成品卡之一）
-  2. 盘中快照（卡标题含「盘中快照」）→ 命中；⛔ 盘中猎手卡同名
-     /tmp/limao_card.json 但标题为「盘中猎手·增量」→ 不命中（标题是唯一区分维度）
-  3. 复盘卡（fupan_*/review_* → prod）→ 命中
-  4. 异动群内部高频卡（要闻快递/板块拉升/脉冲心跳/核按钮）→ 不命中（2026-09-11 收窄）
-  5. 测试群 test 来源 → 一律不命中（硬门·防测试卡外泄）
-  6. client_mirror.enabled=false → 全部不命中（一键 kill switch）
-  7. client_key == source_key → 跳过（防自指循环）
-  8. exclude_patterns 命中卡名或标题 → 排除（优先级最高）
+  2. 盘中猎手（卡标题含「盘中猎手」）→ 命中；⛔ 与快照共用 /tmp/limao_card.json
+     ⚠️ 2026-10-14 用户指令纳入（原为不命中·见 docstring「白名单扩容」）
+  3. 盘中快照（卡标题含「盘中快照」）→ 命中；⚠️ 该卡型 10-14 已并入猎手，此 pattern 现为**已失效项**
+  4. 复盘卡（fupan_*/review_* → prod）→ 命中
+  5. 异动群内部高频卡（要闻快递/板块拉升/脉冲心跳/核按钮）→ 不命中（2026-09-11 收窄）
+  6. 测试群 test 来源 → 一律不命中（硬门·防测试卡外泄）
+  7. client_mirror.enabled=false → 全部不命中（一键 kill switch）
+  8. client_key == source_key → 跳过（防自指循环）
+  9. exclude_patterns 命中卡名或标题 → 排除（优先级最高）
      ⛔ 生产配置必须含 "gangtise"：机构卡 `gangtise_weekend_review.json` 含 "review"
      会被 prod_card_patterns 误命中（2026-09-13 实测曾尝试外发），靠此排除项拦住。
-  9. mirror_push 直推：不查主群幂等去重（主推已写 dedup hash，查则必然被误跳）
+  10. mirror_push 直推：不查主群幂等去重（主推已写 dedup hash，查则必然被误跳）
+
+⚠️ 判定维度铁律：`limao_card.json` 是猎手/快照**共用管道**，两者靠**标题**区分
+（`card_patterns` 不含它）⇒ 按文件名放行 = 未来任何写该文件的卡型都会被无差别外发。
 """
 import importlib.util
 import json
@@ -92,9 +96,41 @@ def test_snapshot_card_mirrors_by_title(monkeypatch, tmp_path):
 
 
 def test_hunter_card_same_filename_not_mirrored(monkeypatch, tmp_path):
-    """⛔ 关键：猎手与快照共用 limao_card.json，标题不同者不得外发。"""
+    """⛔ 关键：判定维度是**标题**，不是文件名。
+
+    ⚠️ 2026-10-14 语义变更（勿误读）：本测试用的是 `_write_settings` 造的**替身配置**
+    （`title_patterns: ["盘中快照"]`），断言的是「文件名 `limao_card.json` 本身不构成命中」
+    —— 即 **`card_patterns` 不含 limao_card**，判定必须落到标题。
+    **它不再是「猎手不外发」的证据**：生产配置 2026-10-14 起 `title_patterns` 已含「盘中猎手」，
+    猎手卡在生产语义下**应当命中**（见 `test_real_settings_title_patterns_include_hunter`）。
+    """
     assert _targets(monkeypatch, tmp_path, "limao_card.json", "feishu_webhook_prod",
                     card=_feishu_card(HUNTER_TITLE)) == []
+
+
+def test_hunter_card_mirrors_when_title_pattern_enabled(monkeypatch, tmp_path):
+    """生产语义：`title_patterns` 含「盘中猎手」→ 猎手卡命中（2026-10-14 用户拍板纳入客户群）。
+
+    与上一条互为阴阳：同一张卡、同一文件名，只因配置不同而结果相反 ⇒ 锁定「配置是唯一开关」。
+    """
+    t = _targets(monkeypatch, tmp_path, "limao_card.json", "feishu_webhook_prod",
+                 card=_feishu_card(HUNTER_TITLE),
+                 title_patterns=["盘中猎手", "盘中快照", "复盘"])
+    assert len(t) == 1, "生产语义下猎手卡应命中客户群"
+    assert t[0]["key"] == CLIENT_KEY
+
+
+def test_real_settings_title_patterns_include_hunter():
+    """锁死生产配置：`client_mirror` 的 title_patterns 必须含「盘中猎手」（2026-10-14 用户指令）。
+
+    防回归：日后有人「整理配置」时删掉它 → 客户群静默收不到猎手卡（不报错、无告警）。
+    """
+    p = Path(__file__).resolve().parents[1] / "config" / "settings.json"
+    cfg = json.loads(p.read_text(encoding="utf-8"))
+    for r in cfg["client_mirror"]["rules"]:
+        tp = r.get("title_patterns") or []
+        assert "盘中猎手" in tp, \
+            f"规则 {r.get('client_name')} 的 title_patterns 缺少「盘中猎手」（客户群将静默收不到猎手卡）"
 
 
 # ---- 3：复盘卡（仅 prod）----

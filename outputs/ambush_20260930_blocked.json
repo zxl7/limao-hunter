@@ -1,0 +1,32 @@
+{
+  "date": "2026-09-30",
+  "status": "blocked_not_sent",
+  "feishu_sent": false,
+  "mechanical_cli_exit_code": 0,
+  "render_self_check_passed": true,
+  "full_copy_scan_failures": [],
+  "full_copy_scan_warnings": ["固定模块名含研判，非阻断建议"],
+  "blocking_issue": {
+    "theme": "房地产开发",
+    "pool_stock": "深物业A(000011)",
+    "today_pct": 9.97,
+    "today_limit_up_confirmed": true,
+    "evidence_asof": "2026-09-30T14:46:37.503177+08:00",
+    "facts": "实时全量涨停列表确认深物业A今天涨停，相关题材池包含该股；真实渲染卡却仍把房地产开发列为次日回流候选，并标红资金热度仍在。",
+    "decision": "违反已涨停启动题材不得推潜伏的硬门槛，停止正式推送。"
+  },
+  "analysis": {
+    "asof": "2026-09-30 14:41",
+    "main_sector_inflow_yi": {"医药生物": 58.6, "创新药": 39.6, "CRO": 26.2},
+    "main_sector_outflow_yi": {"电子": -133.4, "国产芯片": -108.1, "半导体": -89.7},
+    "qualified_picks": [],
+    "stock_scan_count": 6,
+    "reflow_quote_coverage": "0/143",
+    "historical_flow_last_record": "2026-09-28",
+    "historical_flow_warning": "不是截至今日的连续五交易日，且含09-25休市日记录；不据此证明资金连续性。",
+    "next_trading_day": "2026-10-08"
+  },
+  "draft_path": "/Users/zxl/WorkBuddy/狸猫猎手/cache/ambush_ai_09-30.json",
+  "source_code_modified": false,
+  "next_action": "核验机械层涨停排除是否覆盖limit_up_stocks全量数据，并验证成品不再出现已启动题材后再考虑发送；本轮未修复。"
+}

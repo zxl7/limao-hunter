@@ -32,6 +32,38 @@ ZT_HISTORY = ROOT / "cache" / "zt_history"
 YESTERDAY_ZT = ROOT / "cache" / "yesterday_zt.json"
 LATEST = ROOT / "cache" / "pulse_snapshots" / "latest.json"
 
+# 规范时间戳（2026-10-14 审计 P1-⑦）：generated_ts 统一 ISO8601 带 +08:00。
+# 防御性导入（与本文件 trading_calendar 同风格），失败退化为本地 aware 形态。
+try:
+    from common.market_time import iso_bj
+except ImportError:  # pragma: no cover - 包根不在 sys.path 时的兜底
+    import sys as _sys
+    if str(ROOT) not in _sys.path:
+        _sys.path.insert(0, str(ROOT))
+    try:
+        from common.market_time import iso_bj
+    except Exception:
+        def iso_bj(_dt=None) -> str:  # type: ignore[misc]
+            return (_dt or datetime.datetime.now()).astimezone().isoformat(timespec="seconds")
+
+
+def _is_trading_day(d: str) -> bool:
+    """A股交易日 —— **唯一真源 = common.trading_calendar**（2026-10-09 唯一化）。
+
+    长假幽灵源：`record_intraday_point` 原先只做「时段 + 日期==今日」双重判断，
+    休市日若 `latest.json` 被打上当日时间戳，就会给休市日造出 `intraday_only` 空壳
+    （实测 `zt_2026-10-01/02/05` 各一份，`intraday_points` 10~11 条、`zt_list` 为空），
+    按「文件个数」取窗时占满 5 日窗名额。写入端必须按交易日拦截。
+    """
+    try:
+        from common.trading_calendar import is_a_share_trading_day
+        return is_a_share_trading_day(d)
+    except Exception:  # pragma: no cover - 极端环境兜底
+        try:
+            return datetime.datetime.strptime(d, "%Y-%m-%d").weekday() < 5  # trading-day-fallback
+        except Exception:
+            return True
+
 
 # ===== 题材映射（单一事实源） =====
 # 把东财细分 sector 与聚合板块名统一到核心题材标签，做跨日对齐对比。
@@ -189,7 +221,8 @@ def record_intraday_point():
     intraday_points 字段（复用现有按日归档体系，capture_daily 5 天滚动清理自动覆盖）。
 
     同窗只保留最新一条（ts 保留真实时刻，展示时用 HH:MM）。
-    非交易时段（09:15~15:05 之外）或无题材数据时自动跳过。
+    **非A股交易日**（唯一真源判定）、非交易时段（09:15~15:05 之外）、或快照日期非今日、
+    或无题材数据时，一律自动跳过。
     返回 (时刻, 当天点数) 或 None。
     """
     t = load_today_intraday()
@@ -209,6 +242,10 @@ def record_intraday_point():
     # 于是给周五造出一个 intraday_only 的 zt_2026-09-11.json；该文件当日盘后链早已跑完，
     # 永远补不上 zt_list → 形态/N字/回流检测永久少一天料（09-11 实证）。
     if date != datetime.date.today().strftime("%Y-%m-%d"):
+        return None
+    # ⛔ 2026-10-09 唯一化：非A股交易日一律不沉淀 —— 防长假空壳 `zt_<休市日>.json`
+    # （实测 2026-10-01/02/05 各一份；空壳会按「文件个数」占满 5 日窗名额）。
+    if not _is_trading_day(date):
         return None
     window = f"{hh:02d}:{'30' if mm >= 30 else '00'}"
     ZT_HISTORY.mkdir(parents=True, exist_ok=True)
@@ -400,7 +437,7 @@ def export_series_json(max_days=5, out_path=None):
     table_rows.sort(key=_strength, reverse=True)
 
     out = {
-        "generated_ts": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_ts": iso_bj(),
         "dates": dates,
         "daily_totals": daily_totals,
         "max_boards": max_boards,

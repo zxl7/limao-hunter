@@ -67,6 +67,9 @@ if str(ROOT) not in sys.path:
 
 from core import ai_caliber as _ac                      # noqa: E402
 from core import defense_gate as _dg                    # noqa: E402
+# 早盘接力·动态仓位（2026-10-13 用户需求）：名额的最终向下裁断唯一判据源。
+# ⛔ 不在此处另写一套强弱/仓位逻辑——只消费 relay_position 的方案（与卡面/决策层同源）。
+from core import relay_position as _rp                   # noqa: E402
 
 # ── 开关（架构改动必留可逆开关）─────────────────────────────────────────────
 # True  = 9:25 池内裁决（本模块接管「买哪只」）
@@ -387,9 +390,10 @@ def call_pool(candidates: dict[str, Any] | None,
               line_cores: dict[str, dict[str, Any]] | None = None,
               market_open: dict[str, Any] | None = None,
               sector_flow: dict[str, dict[str, Any]] | None = None,
-              zt_series: dict[str, list[tuple[str, int]]] | None = None,
-              zt_days: list[str] | None = None,
-              enabled: bool | None = None) -> dict[str, Any]:
+             zt_series: dict[str, list[tuple[str, int]]] | None = None,
+             zt_days: list[str] | None = None,
+             relay_plan: dict | None = None,
+             enabled: bool | None = None) -> dict[str, Any]:
     """9:25 池内裁决 → 今天买哪只（**唯一判据源**）。
 
     入参：
@@ -446,6 +450,15 @@ def call_pool(candidates: dict[str, Any] | None,
             effective_quota = 0
         elif env_read.get("level") == "defensive":
             effective_quota = min(effective_quota, _dg.DEFENSIVE_QUOTA_CAP)
+
+    # ── 🎯 早盘接力·动态仓位（2026-10-13 用户需求·relay_position 唯一判据源）──────
+    # 在 stance 名额 + 环境防守闸之后，用「昨日强势 + 今晨竞价 + 题材沉淀 + 净值回撤」
+    # 合成的动态方案**最终向下裁断名额**（行情转弱→名额收紧；回撤破硬线→禁买）。
+    # ⛔ 只在允许买时收紧（取 min），绝不放大名额（不越权覆盖 stance / 防守闸）。
+    # ⛔ 本函数不读盘：relay_plan 由调用方（pipeline_verify 真实 09:25 读数）注入——
+    #    与 market_open / sector_flow / zt_series 同一约定，保证裁决纯函数、可离线复现。
+    if relay_plan is not None:
+        effective_quota = _rp.refine_effective_quota(effective_quota, relay_plan)
 
     cands: list[dict[str, Any]] = []
     for k in ("relay", "watch"):
@@ -664,7 +677,11 @@ def call_pool(candidates: dict[str, Any] | None,
         if dist.get("note") and dist.get("level") == "warn":
             base["defense_warn"] = dist["note"]        # 只留痕（卡面可用·不否决）
         if dist.get("level") == "block":
-            marks[code] = {**base, "view": "watch", "defense_gate": "distribution",
+            # ③a 三条全中 → distribution；③b「封单薄+封得晚+位置已很高」→ distribution_thin_late
+            #   （两种脏法话术不同，卡面标签分开；见 defense_gate.distribution_verdict 的 kind）
+            _dcode = ("distribution_thin_late" if dist.get("kind") == "thin_late_high"
+                      else "distribution")
+            marks[code] = {**base, "view": "watch", "defense_gate": _dcode,
                            "defense_detail": dist,
                            "reason": (f"开在 {gap:+.2f}% 达标了，但{dist['note']} "
                                       f"→ 今天先看，不买")}
@@ -750,6 +767,9 @@ def call_pool(candidates: dict[str, Any] | None,
             "env": env_read,
             "distribution_blocked": [c for c, v in marks.items()
                                      if v.get("defense_gate") == "distribution"],
+            "distribution_thin_late_blocked": [c for c, v in marks.items()
+                                               if v.get("defense_gate")
+                                               == "distribution_thin_late"],
             "sector_drain_blocked": [c for c, v in marks.items()
                                      if v.get("defense_gate") == "sector_drain"],
             "position_blocked": [c for c, v in marks.items()
@@ -759,6 +779,19 @@ def call_pool(candidates: dict[str, Any] | None,
             "sector_flow_boards": len(sector_flow),
             "zt_history_days": len(zt_days),
         },
+        # 🎯 早盘接力·动态仓位（2026-10-13 用户需求）留痕：名额被动态方案裁断的结果
+        "relay_position": (None if relay_plan is None else {
+            "enabled": bool(relay_plan.get("enabled", True)),
+            "tier": relay_plan.get("tier"),
+            "strength": relay_plan.get("strength"),
+            "quota": relay_plan.get("quota"),
+            "per_pick_cap": relay_plan.get("per_pick_cap"),
+            "total_cap": relay_plan.get("total_cap"),
+            "can_buy": relay_plan.get("can_buy"),
+            "drawdown_pct": relay_plan.get("drawdown_pct"),
+            "drawdown_level": relay_plan.get("drawdown_level"),
+            "theme_confidence": relay_plan.get("theme_confidence"),
+        }),
         "call_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     return {"enabled": True, "stance": _stance, "quota": quota, "views": marks, "meta": meta}
@@ -787,7 +820,7 @@ def apply_to_views(pool_result: dict[str, Any], views: dict[str, Any] | None) ->
         cur["line_is_core"] = m.get("line_is_core")
         cur["line_core"] = m.get("line_core")
         cur["follower_gate"] = bool(m.get("follower_gate"))
-        cur["defense_gate"] = m.get("defense_gate")   # distribution / sector_drain / high_position
+        cur["defense_gate"] = m.get("defense_gate")   # distribution / distribution_thin_late / sector_drain / high_position / old_dragon_rebound
         cur["defense_reason"] = (m.get("defense_detail") or {}).get("note") or None
         cur["defense_warn"] = m.get("defense_warn")
         cur["position_warn"] = m.get("position_warn")

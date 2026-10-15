@@ -243,7 +243,7 @@ def _star(frac: float) -> int:
     return max(1, min(5, round(max(0.0, min(1.0, frac)) * 5)))
 
 
-def dragon_three_diagnosis(cand: dict[str, Any]) -> dict[str, Any]:
+def dragon_three_diagnosis(cand: dict[str, Any], *, use_relay_rank: bool = True) -> dict[str, Any]:
     """
     对单只候选做龙头三要素打分（确定性，来自候选已有因子 + 连板高度）。
 
@@ -286,7 +286,7 @@ def dragon_three_diagnosis(cand: dict[str, Any]) -> dict[str, Any]:
     uniq_frac = 0.5
     if theme_tier == 1:
         uniq_frac += 0.25          # 一级题材卡位
-    if relay_rank == 1:
+    if use_relay_rank and relay_rank == 1:
         uniq_frac += 0.15          # 接力池头名
     if ("一级题材" in tags) or ("带动板块" in tags):
         uniq_frac += 0.1
@@ -578,6 +578,9 @@ def build_ai_expectation(
                  "炸板回封": 0.45, "放量烂板": 0.35}.get(form_info.get("form"), 0.5)
     sec_conf = {"strong": 0.8, "mid": 0.6, "weak": 0.4}.get(sec["sentiment"], 0.5)
     confidence = round(phase_score * 0.3 + dragon_score * 0.3 + form_conf * 0.2 + sec_conf * 0.2 + conf_d, 2)
+    mood = str(cand.get("relay_mood") or "insufficient")
+    # 路径情绪只改变预判把握度和竞价确认要求，不凭昨日均值改写个股高开价区间。
+    confidence += {"supportive": 0.05, "pressured": -0.05}.get(mood, 0.0)
     confidence = round(max(0.05, min(0.98, confidence)), 2)
 
     # —— 文案 ——
@@ -599,11 +602,21 @@ def build_ai_expectation(
     blow_warn = ""
     if form_info.get("form") in ("炸板回封", "放量烂板") or (form_info.get("zbc") or 0) >= 1:
         blow_warn = "｜次日红开即超预期·辨真假高开(看进价与量能是否跟上)"
+    stage_name = {"one_to_two": "1进2", "two_to_three": "2进3",
+                  "high_relay": "高位接力", "n_plus_n": "断板后二波"}.get(cand.get("relay_stage"), "接力")
+    leg = cand.get("n_plus_n") or {}
+    if leg:
+        stage_name = f"前段{leg['prior_boards']}板、断板后再走{leg['second_boards']}板"
+    buy_preview = {"supportive": f"{stage_name}反馈转好，仍等次日竞价确认",
+                   "pressured": f"{stage_name}反馈偏弱，次日须达到计划量能才考虑",
+                   "mixed": f"{stage_name}反馈分化，次日看竞价量价"}.get(
+                       mood, f"{stage_name}样本或竞价不足，按原计划观察")
     expected_text = (
         f"{form_tag}{sec['tier_hint']}·{sec['sent_hint']} {gap_strength_hint} | "
-        f"竞价涨幅 {lo}%~{hi}% 且量能≥{amount_min:.2f}亿(昨量{amt_lo_pct:.0f}%~{amt_hi_pct:.0f}%)，按计划买入"
+        f"竞价涨幅 {lo}%~{hi}% 且量能≥{amount_min:.2f}亿(昨量{amt_lo_pct:.0f}%~{amt_hi_pct:.0f}%)，再按计划判断"
         + (f"；{cm}" if cm else "")
         + blow_warn
+        + f"｜{buy_preview}"
     )
     super_text = (
         f"竞价涨幅≥{super_gap_min:.0f}% 且量能≥{amount_super:.2f}亿(昨量{amt_hi_pct:.0f}%+)，超预期直接买"
@@ -634,6 +647,8 @@ def build_ai_expectation(
         # —— 高开强度标签（新增）——
         "gap_strength": gap_strength,
         "gap_strength_hint": gap_strength_hint,
+        "relay_mood": mood,
+        "buy_preview": buy_preview,
         # —— 形态 / 板块诊断（新增）——
         "seal_form": form_info.get("form", ""),
         "seal_zbc": form_info.get("zbc", 0),

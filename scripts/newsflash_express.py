@@ -32,6 +32,18 @@ ROOT = Path(__file__).resolve().parent.parent
 BJ = timezone(timedelta(hours=8))
 NEWS_URL = ("https://baoer-api.xuangubao.cn/api/v6/message/newsflash"
             "?subj_ids=9,10,723,35,469,821&platform=pcweb&_ts={ts}")
+# ⚠️ 2026-10-13：baoer-api 快讯对简化 UA 一律 `Connection reset by peer`
+#    （express.log 实证自 09-17 起 227/227 全失败）→ 精选快讯长期为空。
+#    改用完整浏览器头。⛔ 与 scripts/intraday_pulse.py::NEWS_HEADERS 必须同值（同一接口契约）。
+NEWS_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Referer": "https://xuangubao.cn/",
+    "Origin": "https://xuangubao.cn",
+    "Connection": "keep-alive",
+}
 PUSHED = ROOT / "cache" / "newsflash_express_pushed.json"
 MAX_PER_ROUND = 2  # 每轮最多播 2 条（防 30 条全量涌出）
 # ⛔ 快讯时效门（2026-09-07 用户「快讯也要实时·禁推过时」·核心铁律）：
@@ -78,17 +90,17 @@ def in_trading(dt: datetime | None = None) -> bool:
     in_window = (555 <= mins <= 690) or (780 <= mins <= 930)
     if not in_window:
         return False
-    # 节假日门禁：法定节假日（含国庆）不推送，调休补班开市日仍推送（is_a_share_trading_day 为唯一权威）
+    # 节假日门禁：法定节假日与周末（含调休补班日）一律不推送（is_a_share_trading_day 为唯一权威）
     try:
         from common.trading_calendar import is_a_share_trading_day
         return is_a_share_trading_day(dt)
     except Exception:
-        return dt.weekday() < 5  # 兜底：common 不可用，至少排除周末
+        return dt.weekday() < 5  # trading-day-fallback: 唯一真源不可用时的周末兜底
 
 
 def http_get(url: str, t: int = 10) -> dict | None:
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(url, headers=NEWS_HEADERS)
         with urllib.request.urlopen(req, timeout=t) as resp:
             return json.loads(resp.read().decode("utf-8", "ignore"))
     except Exception as e:

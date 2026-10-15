@@ -80,6 +80,13 @@ except Exception:                                     # 独立运行兜底（sys
 USER_ENTRY_MAX_GAP_PCT = getattr(_ai_caliber, "USER_ENTRY_MAX_GAP_PCT", 5.0)
 MAX_POSITION_PER_STOCK = getattr(_ai_caliber, "MAX_POSITION_PER_STOCK", 0.5)
 
+# 🎯 早盘接力·动态仓位（2026-10-13 用户需求）：落盘时把单票/总仓上限裁到动态方案以内，
+# 与 pool_call / 卡面共用同一套方案（relay_position 唯一判据源）。
+try:
+    from core import relay_position as _rp
+except Exception:                                     # 独立运行兜底
+    _rp = None
+
 # ── 🎯 9:25 池内裁决（2026-09-21 用户「接力池＝提前缩范围，不是提前拍板」）────────────
 # 盘后（T-1）只写**预案**（bias：focus/normal/avoid），**不再定"买哪只"**；
 # 次日 09:25 竞价落地后由 `core/pool_call` 在池内判命中 → 结论冻结在
@@ -397,6 +404,26 @@ def cmd_record(args) -> int:
     existing = {(r.get("decision_date"), r.get("code")) for r in _read_jsonl(DECISIONS)}
     view_map: dict[str, dict] = {}
     n = 0
+
+    # 🎯 早盘接力·动态仓位（2026-10-13 用户需求）——规划口径（T-1 盘后落盘）。
+    # ⛔ 边界：落盘时**只取行情强弱档位的基础仓位上限**（名额/单票/总仓），**不含净值回撤**
+    #    的软/硬线裁断（回撤线只在 09:25 执行时点才生效，由 pool_call / 卡面叠加）。
+    #    题材沉淀已积累 → 给档位（与 relay_position.build_plan_from_files 同源判定）。
+    _relay_plan = None
+    _relay_per_cap = None
+    _relay_total_cap = None
+    if _rp is not None and _rp.RELAY_POSITION_ENABLED:
+        try:
+            # 落盘时无「今晨竞价」→ S_m 诚实取中性 0.5；档位由 昨日强势 + 题材沉淀 决定。
+            _relay_plan = _rp.build_plan_from_files(candidates=picks, quotes=None)
+            _rq, _relay_per_cap, _relay_total_cap = _rp.tier_caps(_relay_plan.get("tier"))
+        except Exception as _e:                       # 诚实降级·不得阻断落盘
+            print(f"  ⚠️ 动态仓位方案跳过（落盘仍按原 50% 上限）：{_e}", file=sys.stderr)
+            _relay_plan = None
+
+    # 本批次落盘的逐票 position 收集（供总仓上限等比裁断）
+    _new_rows: list[dict] = []
+    _new_positions: list[float | None] = []
     for pk in picks:
         code = str(pk.get("code") or "").strip()
         if len(code) != 6:
@@ -443,9 +470,10 @@ def cmd_record(args) -> int:
             # 候选冻结时的排序评分（满分 100）：供 AI 台账按当日真实候选口径复盘，绝不在结算时重算。
             "ranking_score": _candidate.get("score"),
             "entry_max_gap": float(pk.get("entry_max_gap", DEFAULT_ENTRY_MAX_GAP)),
-            # 单票仓位上限 50%（2026-09-14 用户「买入仓位不超过 50%」）——AI 给超了就裁到这里
-            "position": (_ai_caliber.clamp_position(pk.get("position")) if _ai_caliber
-                         else pk.get("position")),
+            # 单票仓位上限：默认 50%（2026-09-14 用户「买入仓位不超过 50%」）；
+            # 🎯 若早盘接力动态方案启用 → 按行情强弱档位的基础单票上限裁（行情转弱自动收紧）。
+            "position": ((_ai_caliber.clamp_position(pk.get("position"), _relay_per_cap)
+                          if _ai_caliber else pk.get("position"))),
             # 盘后预案档（focus/normal/avoid·昨日唯一结论）；未给 → None（旧口径兼容）
             "bias": _bias or None,
             # ⛔ 越权兜底留痕（2026-09-22）：非空 = 该票的 bias 与机械证据冲突（或已被降级）
@@ -474,6 +502,8 @@ def cmd_record(args) -> int:
         if _cf:
             row.update(_cf)
         _append_jsonl(DECISIONS, row)
+        _new_rows.append(row)
+        _new_positions.append(row.get("position"))
         n += 1
         print(f"  ✓ 记录 AI 决策 {ddate} {row['name']}({code}) {row['reason'][:40]}")
         # 🤖 合并进竞价验证（2026-09-10 用户）：同步写 ai_view_{trade_date}.json
@@ -502,6 +532,38 @@ def cmd_record(args) -> int:
                 "hold_horizon": row.get("hold_horizon"),
                 "hold_horizon_warning": row.get("hold_horizon_warning"),
             })
+    # 🎯 早盘接力·总仓上限（规划口径·T-1 盘后）：本批次落盘的单票计划仓位之和裁到 ≤ total_cap。
+    # ⛔ 边界：此处于「规划」阶段，只按行情强弱档位的基础总仓上限等比缩放，不做回撤硬/软线拦截
+    #    （回撤拦截只在 09:25 执行层生效）。等比缩放保持各票相对权重，不偏袒某一只。
+    if _rp is not None and _relay_total_cap and _new_rows:
+        try:
+            _scaled = _rp.apply_total_cap(_new_positions, {
+                "enabled": True, "can_buy": True,
+                "per_pick_cap": _relay_per_cap, "total_cap": _relay_total_cap,
+            })
+            _changed = False
+            for _row, _p in zip(_new_rows, _scaled):
+                if isinstance(_p, (int, float)) and _p > 0:
+                    if abs(float(_row.get("position") or 0) - float(_p)) > 1e-6:
+                        _changed = True
+                    _row["position"] = round(float(_p), 4)
+            if _changed:
+                # 重写 DECISIONS 文件（只更新本批次落盘的 position 字段·其余行原样保留）
+                _all = _read_jsonl(DECISIONS)
+                _key2pos = {(r.get("decision_date"), r.get("code")): r.get("position")
+                            for r in _new_rows}
+                for _r in _all:
+                    _k = (_r.get("decision_date"), _r.get("code"))
+                    if _k in _key2pos:
+                        _r["position"] = _key2pos[_k]
+                        _r["relay_total_cap_applied"] = round(float(_relay_total_cap), 4)
+                DECISIONS.write_text(
+                    "\n".join(json.dumps(r, ensure_ascii=False) for r in _all) + "\n",
+                    encoding="utf-8")
+                print(f"  🎯 动态总仓上限已套用：本批计划仓位之和已裁到 ≤ {_relay_total_cap:.0%}")
+        except Exception as _e:                       # 诚实降级·不得阻断落盘
+            print(f"  ⚠️ 动态总仓上限跳过：{_e}", file=sys.stderr)
+
     if view_map:
         meta.setdefault("entry_max_gap", DEFAULT_ENTRY_MAX_GAP)
         p = _write_ai_view(trade_date, ddate, view_map, meta=meta)

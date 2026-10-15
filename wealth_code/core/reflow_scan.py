@@ -43,6 +43,10 @@ _PROJ_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJ_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJ_ROOT))
 
+# 规范时间戳（2026-10-14 审计 P1-⑦）：generated_ts 统一 ISO8601 带 +08:00
+# （原 `datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")` 虽 aware，但 strftime 把 +08:00 丢掉了）。
+from common.market_time import iso_bj  # noqa: E402
+
 BJ_TZ = timezone(timedelta(hours=8))
 
 # ── 可逆开关 / 参数（改口径只动这里；置 ENABLED=False 即整体回滚行为）──────────
@@ -269,7 +273,7 @@ def scan_reflow(cache_dir: Path,
     rows.sort(key=lambda r: -r["score"])
 
     return {
-        "generated_ts": datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_ts": iso_bj(),
         "trade_date": now,
         "params": {
             "lookback_days": n_lb, "max_gap": gap_cap,

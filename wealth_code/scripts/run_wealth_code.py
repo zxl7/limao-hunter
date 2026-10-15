@@ -168,6 +168,9 @@ def cmd_eod(args: argparse.Namespace) -> int:
             print(f"[EOD] 候选历史基因预生成跳过: {_e}")
     if args.push:
         if (payload.get("relay") or []) or (payload.get("watch") or []):
+            # 🤖 盘后卡「明日买入预案」：推卡前把次日 AI 预案视图注入 payload（2026-10-14）。
+            # 注入式（非渲染层隐式读盘）→ 卡面数据来源显式、可测、不会跨日误读。
+            build_cards.attach_eod_ai_plan(payload)
             ok, out = build_cards.push_card_file(
                 build_cards.build_eod_card(payload), webhook=args.webhook)
             print(f"[EOD] 推送盘后候选卡: {'✓' if ok else '✗'} {out}")
@@ -301,7 +304,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
         aq_path.write_text(json.dumps(quotes, ensure_ascii=False), encoding="utf-8")
         print(f"[VERIFY] 抓取竞价 {len(quotes)}/{len(codes)} 只（缺失 {len(codes)-len(quotes)}）")
         # 当日开盘信号（next_close 未知 → 收益 pending，净值次日结算）
-        res = pipeline_verify.run_verify(candidates=cand, quotes=quotes, sector_support_map=sector_support_map)
+        # 🎯 早盘接力·动态仓位（2026-10-13 用户需求）：真实 09:25 运行置 relay=True，
+        #    用真实竞价读数 + 昨日强势 + 题材沉淀 + 净值回撤合成方案 → 动态裁断名额。
+        res = pipeline_verify.run_verify(
+            candidates=cand, quotes=quotes,
+            sector_support_map=sector_support_map, relay=True)
         # 结算上一交易日的收益（用今日「昨收」= 其收盘）
         fin = _finalize_prev_batch()
         if fin:

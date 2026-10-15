@@ -22,12 +22,22 @@ def test_ice_wait_no_buy():
     assert any("≥4.5" in t for t in d["triggers"])
 
 
-def test_hard_block_when_drawdown_over10():
-    """净值回撤≥10% → hard_block（3日禁买）——最高优先级，无视情绪分。"""
+def test_deleverage_when_drawdown_over10():
+    """2026-10-13 口径 B：净值回撤≥10% → deleverage（**不禁买**·按回撤压单票上限）。
+
+    原 hard_block「3 日禁买」已按用户指令取消：风险改为用「仓位变小」控制。
+    """
     d = do.build_decision(regime="risk_on", sentiment=8.0, promote_rate=40.0,
                           nuke_count=2, nav_drawdown_pct=11.2)
-    assert d["verdict"] == "hard_block"
-    assert "禁买" in d["conclusion"]
+    assert d["verdict"] == "deleverage"
+    assert "禁" not in d["conclusion"].replace("不禁止", "")   # 不再出现"禁买"
+    assert d["rules"]["position"].startswith("≤")             # 给的是上限而非 0
+    # 回撤越深 → 上限越小（且恒 >0）
+    import re as _re
+    deep = do.build_decision(regime="risk_on", sentiment=8.0, nav_drawdown_pct=25.0)
+    assert deep["verdict"] == "deleverage"
+    _cap = lambda x: float(_re.search(r"≤([\d.]+)%", x["rules"]["position"]).group(1))
+    assert _cap(deep) < _cap(d) and _cap(deep) > 0
 
 
 def test_wait_on_defense_and_risk_off():

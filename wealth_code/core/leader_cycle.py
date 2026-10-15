@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+from copy import deepcopy
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -57,6 +58,8 @@ def status_key(row):
 
 
 def _family(row):
+    if "preselect_theme" in row:
+        return row["preselect_theme"]
     from core.pool_call import line_family
     return line_family(row)
 
@@ -72,13 +75,13 @@ def _complete(snapshot, day):
             and int(number(snapshot.get("zt_count"), -1)) == len(rows))
 
 
-def load_history(root, asof):
+def load_history(root, asof, *, before_only=False):
     """截止依据日读取；不补抓、不落盘。空壳仍保留为断链标记。"""
     root = Path(root)
     days = []
     for path in sorted((root / "cache/zt_history").glob("zt_*.json")):
         day = path.stem[3:]
-        if len(day) != 10 or day > asof:
+        if len(day) != 10 or day > asof or (before_only and day == asof):
             continue
         try:
             snapshot = json.loads(path.read_text())
@@ -88,20 +91,46 @@ def load_history(root, asof):
         candidates = {}
         try:
             cand = json.loads((root / "wealth_code/cache" / f"candidates-{day}.json").read_text())
-            if cand.get("date") == day:
+            stamp = str(cand.get("generated_at_bj") or "")
+            if cand.get("date") == day and (not before_only or (stamp[:10] == day and stamp[11:16] >= "15:00")):
                 candidates = {code_of(r): r for k in ("relay", "watch") for r in cand.get(k, [])}
+                if before_only:
+                    candidates = {c: {k: r[k] for k in ("core_theme", "leader_role", "carry_cnt") if k in r}
+                                  for c, r in candidates.items()}
         except (ValueError, OSError):
             pass
         days.append({"date": day, "complete": _complete(snapshot, day),
+                     "source_ts": snapshot.get("generated_ts") or snapshot.get("generated_at_bj"),
                      "rows": [{**r, **candidates.get(code_of(r), {})} for r in rows if isinstance(r, dict)]})
     return days[-HISTORY_DAYS:]
 
 
+def _is_trading(d: date) -> bool:
+    """A股交易日 —— **唯一真源 = common.trading_calendar**（2026-10-09 唯一化）。
+
+    ⛔ `_adjacent` 曾用 `weekday() < 5` 判中间日，把「工作日休市」（如中秋 2026-09-25）
+       错当交易日 → 隔着假期的两次涨停会被误判成「不连续」。
+    """
+    try:
+        import sys
+        from pathlib import Path as _Path
+        _root = str(_Path(__file__).resolve().parents[2])
+        if _root not in sys.path:
+            sys.path.insert(0, _root)
+        from common.trading_calendar import is_a_share_trading_day
+        return is_a_share_trading_day(d)
+    except Exception:  # pragma: no cover - 极端环境兜底
+        return d.weekday() < 5  # trading-day-fallback: 唯一真源不可用时的周末兜底
+
+
 def _adjacent(a, b):
-    # 不把缺失的工作日当休市。假期无法确认时宁可暂停推断。
+    """`a` 与 `b` 是否**紧邻**（两者之间不含任何交易日）。
+
+    不把缺失的交易日当休市。假期无法确认时宁可暂停推断。
+    """
     d, end = date.fromisoformat(a) + timedelta(days=1), date.fromisoformat(b)
     while d < end:
-        if d.weekday() < 5:
+        if _is_trading(d):
             return False
         d += timedelta(days=1)
     return d == end
@@ -279,7 +308,7 @@ def five_dimensions(row, history, asof, catalysts=()):
     return out
 
 
-def annotate(rows, history, asof, catalysts=()):
+def annotate(rows, history, asof, catalysts=(), *, continuity_by_boards=False):
     """原位补事实字段，但不改 expectation 数值、预案或准入。返回全量事件。"""
     days = sorted([d for d in history if d["date"] <= asof], key=lambda d: d["date"])
     events = analyse(days, asof)
@@ -296,6 +325,8 @@ def annotate(rows, history, asof, catalysts=()):
             continuous += 1
             last = day["date"]
         b, carry = boards_of(row), number(row.get("carry_cnt"))
+        if continuity_by_boards:
+            continuous = min(continuous, b)
         original = role_of(row)
         # 三板/五板不能直接封龙；已有三要素结论须有带动与跨日延续印证。
         role = original
@@ -364,6 +395,126 @@ def annotate(rows, history, asof, catalysts=()):
                                   "confirmation": "confirmed" if confirmed else "pending",
                                   "note": "；".join(notes)}
     return events
+
+
+ENABLE_PRESELECT_STATUS = True
+
+
+def build_preselect_context(scored, pool, history, *, asof, cutoff, themes):
+    """显式冻结输入的纯比较；历史题材只认当时记录，不反填今日题材。"""
+    from core.expectation_ai import dragon_three_diagnosis
+    if (not pool or cutoff[:10] != asof or cutoff[11:16] < "15:00"
+            or not any(v.get("theme") not in (None, "", "—", "其他") for v in themes.values())):
+        return None
+    themes = {c: v for c, v in themes.items()
+              if not v.get("source_ts") or (str(v["source_ts"])[:10] == asof and str(v["source_ts"]) <= cutoff)}
+    if not themes:
+        return None
+    rows = deepcopy(scored)
+    today = deepcopy(pool)
+    codes = {code_of(r) for r in today}
+    if not rows or any(code_of(r) not in codes for r in rows):
+        return None
+
+    def family(r):
+        theme = str(r.get("core_theme") or "").strip()
+        # 线族用于检索，精确题材才允许合并；例如创新药与中药不因同属医药强并。
+        return theme if theme not in ("", "—", "其他") else None
+
+    clean, seen, quality = [], set(), []
+    for day in sorted(history, key=lambda d: d["date"]):
+        if day["date"] >= asof:
+            continue
+        d = deepcopy(day)
+        stamp = str(d.get("source_ts") or "")
+        valid_time = stamp[:10] == d["date"] and "15:00" <= stamp[11:16] and stamp <= cutoff
+        # 不以候选补充字段掩盖原始行情重复；两份相同池均不用于连续性。
+        signature = json.dumps(sorted((code_of(r), boards_of(r), str(r.get("fbt") or ""),
+                                       number(r.get("cje", r.get("cje_yi"))), number(r.get("amount")))
+                                      for r in d["rows"]), ensure_ascii=False)
+        duplicate = signature in seen
+        if duplicate:
+            for prior in clean:
+                if prior.get("signature") == signature:
+                    prior["complete"] = False
+        seen.add(signature)
+        d["signature"] = signature
+        d["complete"] = bool(d.get("complete") and valid_time and not duplicate)
+        if not d["complete"]:
+            quality.append({"date": d["date"], "reason": "重复或不完整/来源时间无效"})
+        if duplicate:
+            quality.extend({"date": p["date"], "reason": "与后日快照重复，原日一并降级"}
+                           for p in clean if p.get("signature") == signature)
+        for r in d["rows"]:
+            r["core_theme"] = r.get("core_theme") or ""
+            r["preselect_theme"] = family(r) or ""
+            # 不让宽行业兜底参与关系与连续带动确认。
+            for key in ("theme_name", "sector", "theme", "hy"):
+                r.pop(key, None)
+        clean.append(d)
+    for r in today + rows:
+        r["core_theme"] = str(themes.get(code_of(r), {}).get("theme") or "")
+        if not family(r):
+            r["carry_cnt"] = 0
+        for key in ("theme_name", "sector", "theme", "hy"):
+            r.pop(key, None)
+    from core.sector_support import annotate_carry
+    # 仅在冻结的精确题材桶中重新算带动，禁止继承宽行业兜底带动。
+    for r in today + rows:
+        r["preselect_theme"] = family(r) or ""
+    for fam in {family(r) for r in rows} - {None}:
+        annotate_carry([r for r in rows if family(r) == fam],
+                       pool=[r for r in today if family(r) == fam])
+    current = {code_of(r): r for r in rows}
+    today = [{**r, **current.get(code_of(r), {})} for r in today]
+    clean.append({"date": asof, "complete": True, "rows": today})
+    for r in rows:
+        r.pop("leader_role", None)
+        r.pop("leader_evidence", None)
+        r["expectation"] = {"dragon_diagnosis": dragon_three_diagnosis(r, use_relay_rank=False)}
+    events = annotate(rows, clean, asof, continuity_by_boards=True)
+    facts = {}
+    for d in clean[:-1]:
+        if not d["complete"]:
+            continue
+        for r in d["rows"]:
+            facts.setdefault(code_of(r), []).append({"date": d["date"], "source_ts": d["source_ts"],
+                "boards": boards_of(r), "role": role_of(r), "family": family(r)})
+    entries = {}
+    for r in rows:
+        code, fam = code_of(r), family(r)
+        own = facts.get(code, [])
+        matching = [f for f in own if fam and f["family"] == fam]
+        peers = [{"code": c, "facts": fs} for c, fs in facts.items() if c != code
+                 and fam and any(f["family"] == fam for f in fs)]
+        historical = max((f["boards"] for f in matching), default=0)
+        own_days = {f["date"] for f in matching}
+        linked_days = sorted({f["date"] for p in peers for f in p["facts"]
+                              if f["family"] == fam and f["date"] in own_days and f["boards"] >= HIGH_BOARD_MIN})
+        line_rank = 1 + sum(family(p) == fam and boards_of(p) > boards_of(r) for p in today) if fam else 0
+        ev = r["leader_evidence"]
+        # 历史只影响同角色辨识度，不恢复历史角色，不重复加 raw 分。
+        key = (ROLE_ORDER.get(role_of(r), 0), number(r.get("carry_cnt")),
+               number(ev["continuous_days"]), historical, len(linked_days),
+               int(ev["dimensions"]["competition"]["status"] in ("market_only", "theme_winner")),
+               -line_rank if line_rank else -999)
+        entries[code] = {"key": key, "leader_role": r["leader_role"], "leader_evidence": ev,
+                         "core_theme": r["core_theme"], "line_family": _family({"core_theme": r["core_theme"]}),
+                         "history": own, "same_line": peers,
+                         "current_peers": [{"code": code_of(p), "boards": boards_of(p)} for p in today
+                                           if fam and family(p) == fam and code_of(p) != code],
+                         "relation_window": [{"date": d["date"], "complete": d["complete"],
+                                              "self_present": any(code_of(p) == code for p in d["rows"]),
+                                              "peer_codes": [code_of(p) for p in d["rows"]
+                                                             if fam and family(p) == fam and code_of(p) != code]}
+                                             for d in clean],
+                         "historical_boards": historical, "linked_days": linked_days,
+                         "line_rank": line_rank, "relation_note": "同日同题材在板仅是联动代理，不证明因果带动",
+                         "theme_source": {"source": themes.get(code, {}).get("source", "冻结题材输入"),
+                                          "observed_at": cutoff, "source_ts": themes.get(code, {}).get("source_ts")},
+                         "unknown": ([] if fam else ["可靠题材缺失"]) + ([] if own else ["有效历史缺失"])
+                                    + ([] if themes.get(code, {}).get("source_ts") else ["题材源时间未提供；观察时间非源时间"])}
+    return {"asof": asof, "cutoff": cutoff, "entries": entries, "quality": quality, "events": events}
 
 
 def enrich_payload(payload, root):
