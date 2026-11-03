@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Alpha派 research skill 全量采样报告</title>
+<style>
+:root {
+  --bg:#f6f7f9; --card:#fff; --ink:#1a1d21; --sub:#5b636e; --line:#e3e6ea;
+  --red:#c62828; --green:#2e7d32; --blue:#1565c0; --amber:#b26a00;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink);
+  font:14px/1.62 -apple-system,"PingFang SC","Helvetica Neue",Arial,sans-serif; }
+.wrap { max-width:1440px; margin:0 auto; padding:28px 32px 64px; }
+header { border-bottom:2px solid var(--ink); padding-bottom:14px; margin-bottom:22px; }
+h1 { font-size:24px; margin:0 0 6px; letter-spacing:.3px; }
+.meta { color:var(--sub); font-size:12.5px; }
+.meta code { background:#eceff3; padding:1px 5px; border-radius:3px; }
+h2 { font-size:17px; margin:34px 0 12px; padding-left:9px; border-left:4px solid var(--ink); }
+h3 { font-size:14.5px; margin:22px 0 8px; color:#2b3138; }
+h4 { font-size:13px; margin:0 0 6px; color:var(--sub); font-weight:600; }
+p { margin:7px 0; }
+.muted { color:var(--sub); font-size:12.5px; }
+.lead { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px 16px; }
+.kpis { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; margin:14px 0 6px; }
+.kpi { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+.kpi-n { font-size:21px; font-weight:700; font-variant-numeric:tabular-nums; }
+.kpi-l { font-size:12px; color:var(--sub); margin-top:2px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px 18px; margin:12px 0; }
+table.tbl { width:100%; border-collapse:collapse; margin:8px 0 4px; font-size:13px; }
+table.tbl th { text-align:left; font-weight:600; color:var(--sub); border-bottom:1px solid var(--line);
+  padding:7px 8px; white-space:nowrap; background:#fafbfc; }
+table.tbl td { border-bottom:1px solid #f0f2f4; padding:7px 8px; vertical-align:top; }
+table.tbl.sm { font-size:12.5px; }
+table.tbl.sm td { padding:6px 8px; }
+code { font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; background:#eef1f5;
+  padding:1px 4px; border-radius:3px; }
+.ok { color:var(--green); font-weight:600; }
+.bad { color:var(--red); font-weight:600; }
+.grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+.col { min-width:0; }
+.topic { border-left:3px solid #c9ced6; padding:8px 0 8px 12px; margin:10px 0; }
+.topic-h { display:flex; justify-content:space-between; gap:12px; align-items:baseline; }
+.heat { font-size:11.5px; color:var(--amber); background:#fff4e0; padding:1px 7px; border-radius:10px; white-space:nowrap; }
+.stocks { font-size:12px; color:var(--blue); margin:3px 0; }
+.sum { font-size:13px; color:#333; }
+.qa { background:#fbfcfd; border:1px solid var(--line); border-radius:6px; padding:6px 16px; }
+.qa h3, .qa h4, .qa h5 { margin:14px 0 6px; }
+.qa ul { margin:6px 0 6px 18px; padding:0; }
+.qa li { margin:3px 0; }
+.cite { color:var(--blue); font-size:9.5px; }
+.note { border-left:3px solid var(--amber); background:#fffaf2; padding:10px 14px; border-radius:0 6px 6px 0; }
+.note.bad { border-left-color:var(--red); background:#fdf4f4; }
+footer { margin-top:36px; padding-top:14px; border-top:1px solid var(--line);
+  color:var(--sub); font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Alpha派 research skill · 全量接口采样报告</h1>
+  <div class="meta">
+    技能 <code>alphapai-research</code> v2.0.9　·　采样时间 2026-10-28 21:50　·　接口基数 22 个
+　·　原始 JSON 目录 <code>cache/alphapai_probe_20261028/</code>
+  </div>
+</header>
+
+<div class="lead">
+  <p><strong>结论</strong>：22 个接口全部返回 <code>200000</code>，无鉴权或权限报错。这套接口不是"新闻聚合"，而是
+  公告 / 研报 / 纪要 / 点评 / 社媒 / 指数指标六类一手或准一手文本库，加上榜单和 AI 生成层。
+  下面所有表格都是本次真实返回，未做任何改写或补全。</p>
+  <div class="kpis"><div class="kpi"><div class="kpi-n">24,765</div><div class="kpi-l">公告 · 10/20-10/28</div></div><div class="kpi"><div class="kpi-n">6,445</div><div class="kpi-l">内资研报 · 10/20-10/28</div></div><div class="kpi"><div class="kpi-n">860</div><div class="kpi-l">A股纪要 · 10/20-10/28</div></div><div class="kpi"><div class="kpi-n">4,925</div><div class="kpi-l">券商点评 · 10/20-10/28</div></div><div class="kpi"><div class="kpi-n">44</div><div class="kpi-l">蓝宝书话题 · 10/27-10/28</div></div><div class="kpi"><div class="kpi-n">9,362,129</div><div class="kpi-l">社媒文章 · 未筛日期</div></div></div>
+  <p class="muted">⚠️ 上排是<strong>各查询窗口内</strong>的分页总量（<code>totalSize</code>），不是全库、也不是本次取样条数。
+  公告/研报/纪要/点评窗口为 2026-10-20~10-28；蓝宝书为 10-27~10-28 早报；社媒未加日期过滤，936 万是全库文本量。
+  把窗口放大，前四个数字都会变大。</p>
+</div>
+
+<h2>一、22 个接口实测状态</h2>
+<div class="card">
+<table class="tbl"><thead><tr><th>接口</th><th>含义</th><th>状态码</th><th>返回</th><th>说明</th></tr></thead><tbody><tr><td><code>hello</code></td><td>健康检查</td><td><span class="ok">200000</span></td><td>—</td><td>success</td></tr><tr><td><code>hot-topics board-list</code></td><td>机构热议榜</td><td><span class="ok">200000</span></td><td><b>28</b></td><td>数组长度（无分页总量字段）</td></tr><tr><td><code>watchlist list</code></td><td>自选股列表</td><td><span class="ok">200000</span></td><td><b>6</b></td><td>数组长度（无分页总量字段）</td></tr><tr><td><code>watchlist num</code></td><td>自选股数量</td><td><span class="ok">200000</span></td><td>—</td><td>6</td></tr><tr><td><code>watchlist group-list</code></td><td>自选分组</td><td><span class="ok">200000</span></td><td><b>0</b></td><td>数组长度（无分页总量字段）</td></tr><tr><td><code>announcement list</code></td><td>公告检索</td><td><span class="ok">200000</span></td><td><b>24,765</b></td><td>本页 5 条 / 共 4,953 页</td></tr><tr><td><code>research-report list (domestic)</code></td><td>内资研报</td><td><span class="ok">200000</span></td><td><b>6,445</b></td><td>本页 5 条 / 共 1,289 页</td></tr><tr><td><code>research-report list (foreign)</code></td><td>外资研报</td><td><span class="ok">200000</span></td><td><b>4,709</b></td><td>本页 3 条 / 共 1,570 页</td></tr><tr><td><code>meeting-minutes list (A)</code></td><td>会议纪要</td><td><span class="ok">200000</span></td><td><b>860</b></td><td>本页 5 条 / 共 172 页</td></tr><tr><td><code>brokerage-commentary list</code></td><td>券商点评</td><td><span class="ok">200000</span></td><td><b>4,925</b></td><td>本页 5 条 / 共 985 页</td></tr><tr><td><code>brokerage-commentary event-list</code></td><td>业绩点评</td><td><span class="ok">200000</span></td><td><b>3,645</b></td><td>本页 3 条 / 共 1,215 页</td></tr><tr><td><code>bluebook batch-list</code></td><td>蓝宝书批次</td><td><span class="ok">200000</span></td><td><b>2</b></td><td>本页 2 条 / 共 1 页</td></tr><tr><td><code>bluebook topic-list</code></td><td>蓝宝书话题</td><td><span class="ok">200000</span></td><td><b>44</b></td><td>本页 5 条 / 共 9 页</td></tr><tr><td><code>image</code></td><td>搜图表</td><td><span class="ok">200000</span></td><td><b>3</b></td><td>数组长度（无分页总量字段）</td></tr><tr><td><code>report</code></td><td>个股公告期</td><td><span class="ok">200000</span></td><td><b>33</b></td><td>数组长度（无分页总量字段）</td></tr><tr><td><code>social article-list</code></td><td>社媒文章</td><td><span class="ok">200000</span></td><td><b>9,362,129</b></td><td>本页 3 条 / 共 3,120,710 页</td></tr><tr><td><code>social account-search</code></td><td>公众号搜索</td><td><span class="ok">200000</span></td><td><b>3</b></td><td>数组长度（无分页总量字段）</td></tr><tr><td><code>meeting-booking list</code></td><td>预约会议</td><td><span class="ok">200000</span></td><td><b>1</b></td><td>本页 1 条 / 共 1 页</td></tr><tr><td><code>recording query</code></td><td>录音转记</td><td><span class="ok">200000</span></td><td><b>0</b></td><td>本页 0 条 / 共 0 页</td></tr><tr><td><code>recall</code></td><td>投研知识检索</td><td><span class="ok">200000</span></td><td><b>21</b></td><td>数组长度（无分页总量字段）</td></tr><tr><td><code>da-query</code></td><td>金融数据NL查询</td><td><span class="ok">200000</span></td><td>1</td><td>单对象：taskId、sessionId、artifacts、answer、elapsedMs</td></tr><tr><td><code>qa (Flash)</code></td><td>PaiPai 问答</td><td><span class="ok">200000</span></td><td>—</td><td>根层对象：code、message、questionId、answer、references</td></tr></tbody></table>
+<p class="muted">"返回"列：分页接口显示声明总量，数组接口显示本次数组长度。状态码 200000 才是业务成功，HTTP 200 不算。</p>
+</div>
+
+<h2>二、机构热议榜（Alpha派特色数据）</h2>
+<div class="card">
+<p class="muted">交易日 2026-10-27　共 28 个交易日可选（2026-09-28 起）</p><div class="grid3"><div class="col"><h4>公募榜</h4><table class="tbl sm"><thead><tr><th>#</th><th>名称</th><th>代码</th><th>热度</th></tr></thead><tbody><tr><td>1</td><td><strong>普源精电</strong></td><td><code>688337.SH</code></td><td>18</td></tr><tr><td>2</td><td><strong>中国电信</strong></td><td><code>601728.SH</code></td><td>18</td></tr><tr><td>3</td><td><strong>罗博特科</strong></td><td><code>300757.SZ</code></td><td>15</td></tr><tr><td>4</td><td><strong>中国移动</strong></td><td><code>600941.SH</code></td><td>14</td></tr><tr><td>5</td><td><strong>网宿科技</strong></td><td><code>300017.SZ</code></td><td>12</td></tr><tr><td>6</td><td><strong>恒瑞医药</strong></td><td><code>600276.SH</code></td><td>12</td></tr><tr><td>7</td><td><strong>怡合达</strong></td><td><code>301029.SZ</code></td><td>11</td></tr><tr><td>8</td><td><strong>光迅科技</strong></td><td><code>002281.SZ</code></td><td>11</td></tr><tr><td>9</td><td><strong>中兴通讯</strong></td><td><code>000063.SZ</code></td><td>10</td></tr><tr><td>10</td><td><strong>映恩生物-B</strong></td><td><code>09606.HK</code></td><td>10</td></tr></tbody></table></div><div class="col"><h4>私募榜</h4><table class="tbl sm"><thead><tr><th>#</th><th>名称</th><th>代码</th><th>热度</th></tr></thead><tbody><tr><td>1</td><td><strong>宁德时代</strong></td><td><code>300750.SZ</code></td><td>16</td></tr><tr><td>2</td><td><strong>均胜电子</strong></td><td><code>600699.SH</code></td><td>15</td></tr><tr><td>3</td><td><strong>均胜电子</strong></td><td><code>00699.HK</code></td><td>15</td></tr><tr><td>4</td><td><strong>比亚迪</strong></td><td><code>002594.SZ</code></td><td>14</td></tr><tr><td>5</td><td><strong>瑞芯微</strong></td><td><code>603893.SH</code></td><td>13</td></tr><tr><td>6</td><td><strong>华勤技术</strong></td><td><code>603296.SH</code></td><td>12</td></tr><tr><td>7</td><td><strong>乐鑫科技</strong></td><td><code>688018.SH</code></td><td>11</td></tr><tr><td>8</td><td><strong>中海油服</strong></td><td><code>601808.SH</code></td><td>10</td></tr><tr><td>9</td><td><strong>君正股份</strong></td><td><code>300223.SZ</code></td><td>10</td></tr><tr><td>10</td><td><strong>蓝思科技</strong></td><td><code>300433.SZ</code></td><td>10</td></tr></tbody></table></div><div class="col"><h4>保险榜</h4><table class="tbl sm"><thead><tr><th>#</th><th>名称</th><th>代码</th><th>热度</th></tr></thead><tbody><tr><td>1</td><td><strong>紫金矿业</strong></td><td><code>601899.SH</code></td><td>11</td></tr><tr><td>2</td><td><strong>药明康德</strong></td><td><code>603259.SH</code></td><td>10</td></tr><tr><td>3</td><td><strong>药明康德</strong></td><td><code>02359.HK</code></td><td>8</td></tr><tr><td>4</td><td><strong>周大福创建</strong></td><td><code>00659.HK</code></td><td>8</td></tr><tr><td>5</td><td><strong>中国海油</strong></td><td><code>600938.SH</code></td><td>6</td></tr><tr><td>6</td><td><strong>大族数控</strong></td><td><code>301200.SZ</code></td><td>6</td></tr><tr><td>7</td><td><strong>天润工业</strong></td><td><code>002283.SZ</code></td><td>5</td></tr><tr><td>8</td><td><strong>中芯国际</strong></td><td><code>688981.SH</code></td><td>4</td></tr><tr><td>9</td><td><strong>福赛科技</strong></td><td><code>301529.SZ</code></td><td>4</td></tr><tr><td>10</td><td><strong>宁德时代</strong></td><td><code>300750.SZ</code></td><td>4</td></tr></tbody></table></div></div>
+<p class="muted">每天三张榜（公募/私募/保险），各 10 只，带 <code>hotCount</code> 热度计数。
+只有排名和热度，<strong>不给逻辑</strong>——要解释得另接点评或检索。</p>
+</div>
+
+<h2>三、蓝宝书（题材 + 关联标的 + 官方解读）</h2>
+<div class="card">
+<p class="muted">批次数 2（就近两日早报），话题总量 44。</p>
+<table class="tbl sm"><thead><tr><th>批次</th><th>日期</th><th>类型</th><th>话题数</th></tr></thead><tbody><tr><td>特斯拉数采岗49条、南亚新材净利增13倍、沪电净利增161%</td><td>2026-10-28</td><td>晨报</td><td>22</td></tr><tr><td>Anthropic递交S-1、物理AI订单放量、富临精工盈利创新高</td><td>2026-10-27</td><td>晨报</td><td>22</td></tr></tbody></table>
+<h3>话题样本（含摘要与关联标的）</h3>
+<div class="topic"><div class="topic-h"><strong>特斯拉近月Optimus数采岗49条</strong><span class="heat">热度 10</span></div><div class="stocks">关联：特斯拉 · 海天瑞声 · 世运电路 · 达瑞电子 · 汉威科技 · 福莱新材 +4</div><div class="sum">截至2026年10月27日，近一个月特斯拉发布Optimus数采及配套职位49条，覆盖美国15城，集中Palo Alto、Fremont、Austin。真机数采补强被视作加速信号，叠加OpenAI自研人形与具身模型进展，T链、触觉灵巧手、数采手套与垂类本体成为机构配置焦点。</div></div><div class="topic"><div class="topic-h"><strong>南亚新材Q3净利同比增近13倍</strong><span class="heat">热度 9</span></div><div class="stocks">关联：超声电子 · 广合科技 · 方正科技 · 景旺电子 · 胜宏科技 · 深南电路 +13</div><div class="sum">2026Q3南亚新材营收35.40亿元同比+161%、归母净利9.90亿元同比+1296%，毛利率环比大幅提升。玻璃布与高端铜箔紧缺支撑CCL涨价，M6/M7/M8等高端高速产品验证导入加速，扩产节奏受关注。</div></div><div class="topic"><div class="topic-h"><strong>沪电股份Q3净利同比增161%</strong><span class="heat">热度 9</span></div><div class="stocks">关联：方正科技 · 广合科技 · 景旺电子 · 沪电股份 · 容大感光 · 大族数控 +4</div><div class="sum">2026Q3沪电股份营收95.36亿元同比+90%、归母净利26.99亿元同比+161%创历史新高，产能释放与Rubin/1.6T结构升级共振。全球数通PCB龙头在手订单饱满，扩产项目持续推进，业绩高增动能获持续跟踪。</div></div><div class="topic"><div class="topic-h"><strong>杰普特Q3营收同比增82%</strong><span class="heat">热度 8</span></div><div class="stocks">关联：英诺激光 · 大族数控 · 光库科技 · 仕佳光子 · 致尚科技 · 杰普特 +1</div><div class="sum">2026Q3杰普特营收11.43亿元同比+82%、归母净利2.33亿元同比+114%，光通信与激光需求旺盛。北美V客户光纤连接订单累计约11亿元，定增加码高密度光互联，ShuffleBox等新品起量。</div></div><div class="topic"><div class="topic-h"><strong>Anthropic公开递交S-1招股书</strong><span class="heat">热度 8</span></div><div class="stocks">关联：百时美施贵宝 · 礼来 · 新思科技 · Cadence · Anthropic · Lambda +8</div><div class="sum">10月26日Anthropic递交S-1，上半年收入162.86亿美元，Q2实现GAAP经营盈利，生命科学形成模型到湿实验闭环。算力承诺规模大、企业Agent驱动增长，机构聚焦上市节奏与算力资本开支持续性。</div></div>
+<p class="muted">这一层信息密度最高：一条话题自带 <code>summary</code>、<code>stockTag</code> 标的清单、
+<code>heatLevel</code> 热度，以及 <code>paipaiInterpretationAnswer</code> 官方解读。</p>
+</div>
+
+<h2>四、文档类样本（各取首页前几条）</h2>
+
+<h3>公告 · 总量 24,765</h3>
+<div class="card"><table class="tbl sm"><thead><tr><th>标题</th><th>标的</th><th>类型</th><th>行业</th><th>挂网时间</th></tr></thead><tbody><tr><td>[临时公告]悦龙科技(920188.BJ):第一届董事会第十九次会议决议公告</td><td>悦龙科技</td><td>董事会决议</td><td>基础化工</td><td>2026-10-28 21:30:56</td></tr><tr><td>[定期报告]悦龙科技(920188.BJ):2026年三季度报告</td><td>悦龙科技</td><td>季报</td><td>基础化工</td><td>2026-10-28 21:30:56</td></tr><tr><td>[临时公告]瑞尔竞达(920191.BJ):证券事务代表任命公告</td><td>瑞尔竞达</td><td>人事变动</td><td>—</td><td>2026-10-28 21:29:04</td></tr><tr><td>[定期报告]瑞尔竞达(920191.BJ):2026年三季度报告</td><td>瑞尔竞达</td><td>季报</td><td>—</td><td>2026-10-28 21:28:38</td></tr><tr><td>[定期报告]永励精密(920136.BJ):2026年三季度报告</td><td>永励精密</td><td>季报</td><td>汽车</td><td>2026-10-28 21:28:38</td></tr></tbody></table></div>
+
+<h3>内资研报 · 总量 6,445</h3>
+<div class="card"><table class="tbl sm"><thead><tr><th>标题</th><th>机构</th><th>类型</th><th>日期</th><th>页数</th></tr></thead><tbody><tr><td>国投期货｜能源日报</td><td>国投期货</td><td>15</td><td>2026-10-28</td><td>2</td></tr><tr><td>国投期货｜战略新题材日报</td><td>国投期货</td><td>15</td><td>2026-10-28</td><td>2</td></tr><tr><td>金融工程专题：从三季报锚点测算当下公募行业持仓-医药生物会不会成为下一个共识的方向？</td><td>浙商证券</td><td>金融工程</td><td>2026-10-28</td><td>10</td></tr><tr><td>债市基本面高频数据跟踪2026年10月第4周：水泥反弹延续强势</td><td>国金证券</td><td>固收研究</td><td>2026-10-28</td><td>12</td></tr><tr><td>基金研究：高波动行情下的机构分化——2026Q3季报分析</td><td>天风证券</td><td>基金研究</td><td>2026-10-28</td><td>23</td></tr></tbody></table>
+<p class="muted"><code>reportType="15"</code> 在本次返回里 <code>reportTypeLabel</code> 也是 "15"，未映射成中文——
+遇到非中文 label 就按代码显示，不臆造类目名。</p>
+</div>
+
+<h3>外资研报 · 总量 4,709</h3>
+<div class="card"><table class="tbl sm"><thead><tr><th>标题</th><th>机构</th><th>类型</th><th>日期</th><th>页数</th></tr></thead><tbody><tr><td>Dynatrace F2Q27财报前瞻：日志业务增长、DPS续约与Arize支撑ARR增速加快，但1Q强劲超预期后2Q业</td><td>摩根大通</td><td>公司研究</td><td>2026-10-28</td><td>8</td></tr><tr><td>Kiniksa：2026年第三季度财报发布后线上小组会议核心要点</td><td>摩根大通</td><td>公司研究</td><td>2026-10-28</td><td>7</td></tr><tr><td>瑞银：三季度财报电话会核心要点</td><td>摩根大通</td><td>公司研究</td><td>2026-10-28</td><td>9</td></tr></tbody></table></div>
+
+<h3>A股会议纪要 · 总量 860</h3>
+<div class="card"><table class="tbl sm"><thead><tr><th>会议标题</th><th>内容类型</th><th>标的</th><th>时间</th><th>可读</th></tr></thead><tbody><tr><td>长江固收 | 央行提示债市风险后的下一步，债市怎么看？</td><td>行业分析</td><td>—</td><td>2026-10-28 21:00</td><td>ai_note · asr_note</td></tr><tr><td>长江宏观 | 筱谈宏观系列41：推演：中期选举的历史规律与基准情景——美国中期选举系列3</td><td>行业分析</td><td>—</td><td>2026-10-28 21:00</td><td>ai_note · asr_note</td></tr><tr><td>国泰海通计算机 | 征和工业：2026年三季报业绩交流</td><td>公司交流 · 业绩会</td><td>征和工业</td><td>2026-10-28 21:00</td><td>ai_note · asr_note</td></tr><tr><td>国泰海通计算机 | 汉朔科技2026年三季报业绩交流会</td><td>公司交流 · 业绩会</td><td>汉朔科技</td><td>2026-10-28 20:00</td><td>ai_note · asr_note</td></tr><tr><td>国泰海通计算机 | 能科科技(603859) 2026年第三季度 业绩交流会</td><td>公司交流 · 业绩会</td><td>能科科技</td><td>2026-10-28 20:00</td><td>ai_note · asr_note</td></tr></tbody></table>
+<p class="muted"><code>availableNoteTypes</code> 决定这条能否读 <code>ai_note</code>（AI 纪要）或 <code>asr_note</code>（逐字稿）。</p>
+</div>
+
+<h3>券商点评 · 总量 4,925</h3>
+<div class="card"><table class="tbl sm"><thead><tr><th>标题</th><th>摘要（列表仅前 100 字）</th><th>标的</th><th>时间</th></tr></thead><tbody><tr><td>【能科科技】物理AI交流KeyUpdates20261028</td><td>【能科科技】物理AI交流KeyUpdates20261028： 收入拆分：2026Q1-Q3，AI产品6.5亿，同比+94%，占比首次突破50%；云产品与服</td><td>—</td><td>2026-10-28 21:25</td></tr><tr><td>东方电缆2026年三季报点评</td><td>东方电缆2026年三季报点评：业绩好于预期，Q3海缆及海工交付放量，毛利率提升，在手订单有所下降 事件 公司发布2026年三季报，前三季度实现营业收入101</td><td>—</td><td>2026-10-28 21:25</td></tr><tr><td>【国联】浪潮信息三季报速评</td><td>【国联】浪潮信息三季报速评：合同负债770.9亿、存货1187亿，双双创历史新高且环比大幅提升 利润：前三季度归母净利润39.32亿，同比+165.32% </td><td>—</td><td>2026-10-28 21:25</td></tr><tr><td>【国盛环保杨心成】日报-2026.10.28</td><td>公司公告 【中国天楹-定期报告】公司2026年前三季度实现营业收入39.7亿元，同比增长0.2%；实现归母净利润2.8亿元，同比降低7.0%；实现扣非归母净</td><td>—</td><td>2026-10-28 21:23</td></tr><tr><td>【青岛银行26Q3点评】营收超预期两位数增长，拨备大幅提升至356%</td><td>前三季度营收、归母净利润同比增速（累计口径，下同）分别为15.0%、15.7%，分别较26H1增速+5.8pct、-2.4pct，年化ROE达13.89%，</td><td>—</td><td>2026-10-28 21:22</td></tr></tbody></table>
+<p class="muted">接口签名里有 <code>--subject-name</code>（题材过滤），但本次 5 条样本的 <code>subjectTag</code>
+<strong>全部为空</strong>——题材维度能否真正筛到东西，需要更大样本再确认，别先当成已可用。
+列表返回的 <code>content</code> 只截到前 100 字，全文必须走 <code>detail</code>。</p>
+</div>
+
+<h3>业绩点评（event-list）· 总量 3,645</h3>
+<div class="card"><table class="tbl sm"><thead><tr><th>标题</th><th>标的</th><th>时间</th></tr></thead><tbody><tr><td>宁德时代·发布2026年三季报业绩公告</td><td>—</td><td></td></tr><tr><td>药明康德·发布2026年三季报业绩公告</td><td>—</td><td></td></tr><tr><td>杰瑞股份·发布2026年三季报业绩公告</td><td>—</td><td></td></tr></tbody></table></div>
+
+<h3>社媒文章 · 总量 9,362,129</h3>
+<div class="card"><table class="tbl sm"><thead><tr><th>标题</th><th>公众号</th><th>日期</th></tr></thead><tbody><tr><td>药企涉行贿案被罚，申请复议后药代被罚</td><td>易药人</td><td>2026-10-28</td></tr><tr><td>要有信心！</td><td>攻城狮财富自由之路</td><td>2026-10-28</td></tr><tr><td>摩尔线程第三季度扭亏，季度末存货超过前三季度营收</td><td>第一财经</td><td>2026-10-28</td></tr></tbody></table>
+<p class="muted">支持按股票、行业、机构、公众号名过滤，也可按 <code>--psn-write</code> 筛文风。</p>
+</div>
+
+<h2>五、自选股与工具</h2>
+<div class="card">
+<h4>当前关注 6 只</h4>
+<table class="tbl sm"><thead><tr><th>名称</th><th>代码</th><th>分组</th></tr></thead><tbody><tr><td>腾讯控股.HK</td><td><code>00700.HK</code></td><td>default</td></tr><tr><td>新易盛</td><td><code>300502.SZ</code></td><td>default</td></tr><tr><td>中际旭创</td><td><code>300308.SZ</code></td><td>default</td></tr><tr><td>宁德时代</td><td><code>300750.SZ</code></td><td>default</td></tr><tr><td>贵州茅台</td><td><code>600519.SH</code></td><td>default</td></tr><tr><td>阿里巴巴.HK</td><td><code>09988.HK</code></td><td>default</td></tr></tbody></table>
+</div>
+
+<div class="card">
+<h4>搜图表（研报/公告内嵌图表，query=「AI算力 光模块」）</h4>
+<table class="tbl sm"><thead><tr><th>图注</th><th>来源文章</th><th>机构</th><th>日期</th></tr></thead><tbody><tr><td>全栈 AI技术架构</td><td>协创数据(300857.SZ):2026年半年度报告</td><td>—</td><td>2026-08-28</td></tr><tr><td>公司就 AI 算力业务具体提供的产品及服务包括 AI 算力云服务、AI 算力云产品：</td><td>青云科技(688316.SH):中国国际金融股份有限公司关于北京青云科技集团股份</td><td>—</td><td>2025-06-27</td></tr><tr><td>（1）高速光模块</td><td>光迅科技(002281.SZ):关于武汉光迅科技股份有限公司申请向特定对象发行股</td><td>—</td><td>2025-12-25</td></tr></tbody></table>
+<p class="muted">返回带 <code>imageUrl</code>、<code>pageIndex</code>、<code>bbox</code> 坐标与 <code>llmScore</code> 重排分。</p>
+</div>
+
+<div class="card">
+<h4>个股公告期列表（300308.SZ 中际旭创，共 33 期）</h4>
+<table class="tbl sm"><thead><tr><th>报告期</th><th>类型</th><th>标题</th></tr></thead><tbody><tr><td>2026年中报</td><td>中报</td><td>中际旭创(300308.SZ):2026年半年度报告</td></tr><tr><td>2026年一季报</td><td>季报</td><td>中际旭创(300308.SZ):2026年一季度报告</td></tr><tr><td>2025年年报</td><td>年报</td><td>中际旭创(300308.SZ):2025年年度报告</td></tr><tr><td>2025年年报快报</td><td>业绩快报</td><td>中际旭创(300308.SZ):2025年度业绩快报</td></tr><tr><td>2025年年报预告</td><td>业绩预告</td><td>中际旭创(300308.SZ):2025年度业绩预告</td></tr><tr><td>2025年三季报</td><td>季报</td><td>中际旭创(300308.SZ):2025年三季度报告</td></tr><tr><td>2025年中报</td><td>中报</td><td>中际旭创(300308.SZ):2025年半年度报告</td></tr><tr><td>2025年中报预告</td><td>业绩预告</td><td>中际旭创(300308.SZ):2025年半年度业绩预告</td></tr><tr><td>2025年一季报</td><td>季报</td><td>中际旭创(300308.SZ):2025年一季度报告</td></tr><tr><td>2025年一季报预告</td><td>业绩预告</td><td>中际旭创(300308.SZ):2025年第一季度业绩预告</td></tr><tr><td>2024年年报</td><td>年报</td><td>中际旭创(300308.SZ):2024年年度报告</td></tr><tr><td>2024年年报预告</td><td>业绩预告</td><td>中际旭创(300308.SZ):2024年度业绩预告</td></tr></tbody></table>
+<p class="muted">专供 <code>agent --mode 1</code>（业绩点评）取 <code>report-id</code> 用。</p>
+</div>
+
+<h2>六、AI 层</h2>
+
+<h3>投研知识检索 recall（21 条召回，类型分布见下）</h3>
+<div class="card">
+<p class="muted">类型分布：comment×6、report×15</p>
+<table class="tbl sm"><thead><tr><th>类型</th><th>标题</th><th>机构</th><th>时间</th></tr></thead><tbody><tr><td>comment</td><td>【开源通信】仕佳光子Q3业绩超预期，光器件+光芯片深度赋能公司成长</td><td>开源证券</td><td>2026-10-21</td></tr><tr><td>comment</td><td>【DCTX】市场对光模块短期过度悲观，重视龙头公司的中长期配置机会</td><td></td><td>2026-10-22</td></tr><tr><td>comment</td><td>光通信板块我们看好光模块后续增长</td><td></td><td>2026-10-20</td></tr><tr><td>comment</td><td>周观点更新（20261025）</td><td></td><td>2026-10-25</td></tr><tr><td>comment</td><td>【伯恩斯坦】Lumentum（LITE）与Coherent（...</td><td></td><td>2026-10-22</td></tr><tr><td>report</td><td>华源证券｜晨会精粹</td><td>华源证券</td><td>2026-10-21</td></tr><tr><td>report</td><td>通信行业周报(第四十三周)：当前时点如何看算力与光</td><td>华泰证券</td><td>2026-10-26</td></tr><tr><td>report</td><td>蘅东光(920045 CH): 首次覆盖：光无源器件小巨人，积极卡位蓄力成长(East Point Communication </td><td>海通国际</td><td>2026-10-28</td></tr><tr><td>report</td><td>TMT行业周报：短期事件扰动不改产业链景气，高端算力定价权向头部集中</td><td>中银证券</td><td>2026-10-27</td></tr><tr><td>report</td><td>通信行业研究：DeepSeek开源推理框架加速国产芯片适配，光模块龙头集中回购</td><td>国金证券</td><td>2026-10-25</td></tr><tr><td>report</td><td>仕佳光子(688313)公司信息更新报告：Q3业绩超预期，光芯片+光器件协同助力仕佳成长</td><td>开源证券</td><td>2026-10-22</td></tr><tr><td>report</td><td>开源证券｜晨会纪要</td><td>开源证券</td><td>2026-10-23</td></tr><tr><td>report</td><td>AI产业景气度追踪：AI资产走势分化，应用端相对占优</td><td>湘财证券</td><td>2026-10-25</td></tr><tr><td>report</td><td>通信行业周报：英伟达扩张CPO产能，光模块龙头股价大幅调整</td><td>金元证券</td><td>2026-10-25</td></tr></tbody></table>
+</div>
+
+<h3>PaiPai 问答（Flash 模式，问「2026年10月28日A股市场主线板块是什么」）</h3>
+<div class="card">
+<div class="qa"><h3>2026年10月28日A股市场主线板块解读</h3>
+<h4>板块表现与主线综述</h4>
+<p>1. <strong>市场整体反弹，突出主线切换</strong></p>
+<ul>
+<li>2026年10月28日A股全天高开高走，沪指收涨0.91%，深成指涨2.02%，创业板指大涨3.40%，科创50涨2.45%，全市场成交放大至1.64万亿元，超4100只个股飘红。“结构显著切换，机器人概念股集体爆发，半导体与算力硬件强势反弹”<sup class="cite">1</sup><sup class="cite">2</sup>。</li>
+</ul>
+<p>2. <strong>板块资金流与涨幅突出</strong></p>
+<ul>
+<li>主力资金净流入居前的板块：通信设备（+65.26亿）、半导体（+64.35亿）、自动化设备（+44.30亿）、元件（+43.01亿）、电子化学品（+36.32亿）<sup class="cite">3</sup><sup class="cite">4</sup>。</li>
+<li>板块涨幅方面：半导体板块涨幅+4.85%，自动化设备涨幅+4.66%，电子化学品涨幅+4.10%，元件板块涨幅+4.05%，通信设备涨幅+2.93%<sup class="cite">3</sup><sup class="cite">4</sup>。</li>
+<li>光刻机、减速器、人形机器人板块涨幅居前，多只相关股票涨停或涨超10%<sup class="cite">5</sup><sup class="cite">6</sup>。</li>
+</ul>
+<p>3. <strong>主题板块细分</strong></p>
+<ul>
+<li>机器人与物理AI为主线：本日机器人板块全天强势，宁波东力、五洲新春、恒工精密等多只股票涨停，市场资金关注具身模型和物理ai部署，标的集中在高精度多模态传感、物理交互数据采集、真机部署等分支，包括触觉、力觉传感类本体硬件及场景化数据采集设备<sup class="cite">7</sup><sup class="cite">8</sup><sup class="cite">9</sup><sup class="cite">6</sup>。</li>
+<li>半导体与算力硬件板块：存储与先进封装成为业绩弹性最确定方向，今日放量反弹有基本面背书，特别是半导体国产替代、算力需求提振，主力资金明显流入，富瀚微、必易微、金海通等股票涨停<sup class="cite">1</sup><sup class="cite">2</sup><sup class="cite">5</sup><sup class="cite">10</sup>。</li>
+<li>通信设备、电子化学品、元件板块：同时获得机构资金净流入，表现活跃，涨幅突出<sup class="cite">3</sup><sup class="cite">4</sup><sup class="cite">10</sup>。</li>
+</ul>
+<p>4. <strong>其他表现及分化板块</strong></p>
+<ul>
+<li>航天装备Ⅱ、非金属材料Ⅱ、医疗服务等板块当天涨幅居前，商业航天订单预期向好、高端非金属材料需求回暖对行情有支撑<sup class="cite">11</sup><sup class="cite">12</sup><sup class="cite">13</sup><sup class="cite">10</sup>。</li>
+<li>下跌板块包括白酒、农业综合、调味发酵品，以及证券、软件开发等，基金经理调仓迹象明显，资金从部分设备元器件转向存储、AI硬件和医药<sup class="cite">5</sup><sup class="cite">10</sup>。</li>
+<li>新能源、化工等板块虽有结构性机会，但非市场短线主线，主要观点集中在双碳与行业供需改善方向，对比电子、新材料板块略次<sup class="cite">14</sup><sup class="cite">15</sup><sup class="cite">16</sup><sup class="cite">17</sup><sup class="cite">18</sup>。</li>
+</ul>
+<h4>板块主线结论</h4>
+<ul>
+<li><strong>2026年10月28日A股市场主线板块为：</strong></li>
+</ul>
+<p>  1. <strong>机器人（具身模型/物理AI相关）</strong></p>
+<p>  2. <strong>半导体（存储、先进封装、算力硬件）</strong></p>
+<p>  3. <strong>通信设备</strong></p>
+<p>  4. <strong>电子化学品及元件</strong></p>
+<p>  5. <strong>自动化设备</strong></p>
+<ul>
+<li>市场资金集中布局上述“硬科技”方向，短期风险偏好修复，量价齐升提振信心，板块分化仍存，但主线合力与成交持续性有待验证<sup class="cite">1</sup><sup class="cite">2</sup><sup class="cite">3</sup><sup class="cite">4</sup><sup class="cite">5</sup><sup class="cite">10</sup><sup class="cite">11</sup><sup class="cite">7</sup><sup class="cite">9</sup><sup class="cite">8</sup><sup class="cite">6</sup><sup class="cite">12</sup><sup class="cite">13</sup>。</li>
+</ul></div>
+<p class="muted">回答 1265 字，带 18 条引用。正文里的角标 <sup class="cite">1</sup> 对应 references 序号。</p>
+</div>
+
+<h3>金融数据自然语言查询 da-query（问「中际旭创2026年三季报营收和净利润」）</h3>
+<div class="card">
+<div class="qa"><p>中际旭创（300308.SZ）<strong>2026年三季报（报告期2026-09-30）目前库中尚无正式利润表与业绩快报数据</strong>，无法给出该期营收、净利润。[来源:1]</p>
+<p>当前财报日历下，A股2026Q3仍处披露中（披露截止约2026-10-31），部分公司已披露；该公司截至查询时点<strong>最新已披露完整报告期为2026年中报（2026-06-30）</strong>，主要累计口径如下（单位：元）[来源:1]：</p>
+<p>| 报告期 | 披露日 | 营业收入 | 营业总收入 | 净利润 | 归母净利润 |</p>
+<p>|--------|--------|----------|------------|--------|------------|</p>
+<p>| 2026-06-30 | 2026-08-22 | 约417.78亿 | 约417.78亿 | 约147.33亿 | 约136.51亿 |</p>
+<p>| 2026-03-31 | 2026-04-17 | 约194.96亿 | 约194.96亿 | 约63.17亿 | 约57.35亿 |</p>
+<p>结论：用户所需的<strong>2026年三季报营收与净利润暂不可得</strong>；若需可先参考上表中报累计数，待三季报入库后再查。</p>
+<h3>[来源:1]完整数据共 4 行</h3>
+<h3>表格内容简介: 中际旭创近几期利润表覆盖</h3>
+<p>| 证券简称   |   证券代码 | 报告期                 | 披露日期                |        营业收入 |       营业总收入 |         净利润 |       归母净利润 |</p>
+<p>|:-------|-------:|:--------------------|:--------------------|------------:|------------:|------------:|------------:|</p>
+<p>| 中际旭创   | 300308 | 2026-06-30 00:00:00 | 2026-08-22 00:00:00 | 4.17779e+10 | 4.17779e+10 | 1.47334e+10 | 1.36511e+10 |</p>
+<p>| 中际旭创   | 300308 | 2026-03-31 00:00:00 | 2026-04-17 00:00:00 | 1.94964e+10 | 1.94964e+10 | 6.31679e+09 | 5.7345e+09  |</p>
+<p>| 中际旭创   | 300308 | 2025-12-31 00:00:00 | 2026-03-31 00:00:00 | 3.82399e+10 | 3.82399e+10 | 1.15798e+10 | 1.07973e+10 |</p>
+<p>| 中际旭创   | 300308 | 2025-09-30 00:00:00 | 2025-10-31 00:00:00 | 2.50048e+10 | 2.50048e+10 | 7.56973e+09 | 7.13193e+09 |</p></div>
+</div>
+
+<h2>七、边界与限制（实测或源码确认）</h2>
+<div class="card">
+<div class="note">
+<strong>额度不可查</strong>：整个 CLI 没有剩余额度命令。要查额度只能走 <code>alphapai-lite-mcp</code> 连接器。
+<code>qa</code> / <code>agent</code> / <code>recall</code> / <code>da-query</code> 是计费层，列表接口未见计费提示但未经官方确认。
+</div>
+<div class="note">
+<strong>recall 的 --no-cutoff 是空参数</strong>：文档自述 <code>isCutOff=true/false 返回内容无差异</code>。别指望拿更长原文。
+</div>
+<div class="note">
+<strong>三类纪要互不通用</strong>：<code>meeting-minutes</code>（平台聚合公开会议）、<code>recording</code>（自己上传）、
+<code>meeting-booking</code>（会议机器人录制），<code>roadshowId</code> / <code>taskId</code> / <code>msgId</code> 不可混用。
+</div>
+<div class="note">
+<strong>agent 模式号有缺口</strong>：1,2,3,5,7,8,9,11,12,13,15 可用，4/6/10/14 未开放，不要猜用途。
+</div>
+<div class="note bad">
+<strong>加密 ID 会过期</strong>：公告、研报、点评的 <code>announcementId</code> / <code>reportId</code> / <code>commentId</code>
+不可长期复用，每次都要先 list 再 detail。
+</div>
+</div>
+
+<h2>八、这套东西对现有链路的可用点</h2>
+<div class="card">
+<table class="tbl">
+<thead><tr><th>现有短板</th><th>可接的接口</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>板块只有涨停家数与资金，缺"机构怎么说"</td><td><code>hot-topics</code> + <code>brokerage-commentary --subject-name</code></td>
+<td>榜单给热度，点评给题材口径观点，两者交叉才算证据，单用任何一个都是半条腿。</td></tr>
+<tr><td>题材映射靠选股宝，缺公告级硬催化核验</td><td><code>announcement list --stock-code</code> → <code>parsing-download</code></td>
+<td>拿 Markdown 解析版喂模型，比 PDF 稳定。</td></tr>
+<tr><td>纪要类信息靠盘中快讯，事后无法回溯原文</td><td><code>meeting-minutes</code></td>
+<td>860 条 A 股纪要，支持按 content-type（业绩会/专家交流/行业分析）分。</td></tr>
+<tr><td>缺少"业绩兑现"这一维</td><td><code>brokerage-commentary event-list</code> + <code>da-query</code></td>
+<td>预告/快报/正式报告三档事件，配合指标查询。</td></tr>
+<tr><td>没时间逐篇读研报</td><td><code>recall --type report,comment</code></td>
+<td>一次召回跨源，返回 chunks 可直接进 prompt。</td></tr>
+</tbody>
+</table>
+</div>
+
+<footer>
+数据来源：Alpha派 OpenPai API（<code>open-api.rabyte.cn</code>），本地采样 2026-10-28 21:50。
+所有样本为接口真实返回，未经修改；未做跨源交叉核验的条目不应直接作为交易依据。
+</footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>狸猫系列迁移 · 变更与现状（2026-10-30）</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --line:#e4e7ec; --line-soft:#eef1f4;
+    --txt:#1c2126; --sub:#66707a; --faint:#8b959e;
+    --ok:#1f8a51; --ok-bg:#eaf6ef;
+    --warn:#b7791f; --warn-bg:#fdf6e6;
+    --risk:#c0392b; --risk-bg:#fdeeec;
+    --accent:#2c5f8a; --accent-bg:#eef4fa;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:14px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    padding:28px 20px 60px}
+  .wrap{max-width:1180px;margin:0 auto}
+  header{margin-bottom:22px}
+  h1{font-size:22px;margin:0 0 6px;letter-spacing:.3px}
+  .meta{color:var(--sub);font-size:12.5px}
+  .meta code{background:#eceff3;padding:1px 5px;border-radius:3px;font-size:12px}
+  h2{font-size:16px;margin:30px 0 12px;padding-left:9px;border-left:3px solid var(--accent);line-height:1.2}
+  h3{font-size:13.5px;margin:18px 0 8px;color:var(--sub);font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:16px 18px;margin-bottom:14px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  th{color:var(--sub);font-weight:600;font-size:12px;background:#fafbfc;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+  .tag{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11.5px;line-height:1.6;white-space:nowrap}
+  .t-ok{background:var(--ok-bg);color:var(--ok)}
+  .t-warn{background:var(--warn-bg);color:var(--warn)}
+  .t-risk{background:var(--risk-bg);color:var(--risk)}
+  .t-accent{background:var(--accent-bg);color:var(--accent)}
+  .t-mute{background:#f0f2f5;color:var(--sub)}
+  .kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+  .kpi div{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:12px 14px}
+  .kpi b{display:block;font-size:20px;font-variant-numeric:tabular-nums;margin-bottom:2px}
+  .kpi span{font-size:11.5px;color:var(--sub)}
+  /* 链路图 */
+  .flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:10px 0 4px}
+  .node{flex:1 1 0;min-width:150px;background:#fbfcfd;border:1px solid var(--line);border-radius:5px;padding:10px 12px}
+  .node h4{margin:0 0 4px;font-size:12.5px}
+  .node p{margin:0;font-size:11.5px;color:var(--sub);line-height:1.5}
+  .arrow{display:flex;align-items:center;padding:0 8px;color:var(--faint);font-size:16px}
+  .note{background:var(--accent-bg);border-left:3px solid var(--accent);padding:10px 13px;border-radius:0 4px 4px 0;font-size:12.5px;color:#2b3d4f;margin:10px 0}
+  .warnbox{background:var(--warn-bg);border-left:3px solid var(--warn);padding:10px 13px;border-radius:0 4px 4px 0;font-size:12.5px;margin:10px 0}
+  ul{margin:6px 0 0;padding-left:18px}
+  li{margin:3px 0;font-size:13px}
+  .dim{color:var(--faint)}
+  footer{margin-top:28px;color:var(--faint);font-size:11.5px;border-top:1px solid var(--line);padding-top:12px}
+  @media (max-width:900px){.kpi{grid-template-columns:repeat(2,1fr)}.flow{flex-direction:column}.arrow{transform:rotate(90deg);padding:4px 0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>狸猫系列 · 服务器迁移变更与现状</h1>
+  <div class="meta">
+    生成时间 <code>2026-10-30 16:40</code> ｜ 目标机 <code>ubuntu@43.136.183.186</code> ｜
+    数据来源：本机 launchd / 服务器 systemd / nginx / 实际 HTTP 探测
+  </div>
+</header>
+
+<div class="kpi">
+  <div><b>18</b><span>新增迁移脚本/模板</span></div>
+  <div><b>3</b><span>服务器在跑的服务</span></div>
+  <div><b>8.3 MB</b><span>发版包（原 52MB → 已瘦身）</span></div>
+  <div><b>0 s</b><span>当前本地↔服务器数据延迟</span></div>
+</div>
+
+<!-- 1 -->
+<h2>1. 这次总共改了什么</h2>
+
+<h3>1.1 迁移工具链（新增，<code>scripts/migrate/</code>）</h3>
+<div class="card">
+<table>
+  <tr><th>文件</th><th>职责</th><th>关键设计</th></tr>
+  <tr><td class="mono">migrate.conf</td><td>唯一配置源</td><td>换服务器只改 3 行，脚本零改动</td></tr>
+  <tr><td class="mono">common.sh</td><td>公共底座</td><td>ssh/scp 封装；<b>只对退出码 255 重试</b>，业务失败不重试</td></tr>
+  <tr><td class="mono">pack.sh</td><td>打包</td><td>8.3MB / 2 268 条目 + MANIFEST + sha256（按路由清单打包）</td></tr>
+  <tr><td class="mono">push.sh</td><td>上传发版</td><td>远端校验 → <code>releases/&lt;stamp&gt;</code> → <code>current</code> 软链（留 3 版）</td></tr>
+  <tr><td class="mono">bootstrap_remote.sh</td><td>远端初始化</td><td>目录/env/systemd/nginx 片段，<b>只装不启</b>，可重复跑</td></tr>
+  <tr><td class="mono">cutover.sh</td><td>切换</td><td><b>默认 dry-run</b>；pipeline 模式需 <code>CONFIRM_PIPELINE=1</code></td></tr>
+  <tr><td class="mono">rollback.sh</td><td>回滚</td><td>先恢复 Mac 生产，再停服务器（避免双停空窗）</td></tr>
+  <tr><td class="mono">manifest.py</td><td>同步清单生成</td><td>从 <code>serve.py</code> 的 <code>PUBLIC_ROUTES</code> 反推，新增接口自动纳入</td></tr>
+  <tr><td class="mono">sync_hot.sh</td><td>分层同步</td><td><code>TIER=R|0|1|2|all</code>；<code>--delay-updates</code> 防读半截 JSON</td></tr>
+  <tr><td class="mono">sync_tick.sh</td><td>调度分派</td><td>每拍判断该推哪层；mkdir 锁 + 日志轮转</td></tr>
+  <tr><td class="mono">status.sh</td><td>链路诊断</td><td>三断言：定时在不在 / 各层多久前 / 快照延迟</td></tr>
+  <tr><td class="mono">verify.sh</td><td>事实校验</td><td>10 项对照，含 T0/T1 远端文件齐全性</td></tr>
+  <tr><td class="mono">compare_shadow.sh</td><td>影子对比</td><td>服务器自产 vs Mac 产出，7 项关键字段 diff</td></tr>
+  <tr><td class="mono">remote_pipeline.sh</td><td>服务端数据入口</td><td><code>SHADOW=1</code> 只产数据不推送</td></tr>
+  <tr><td class="mono">mirror_back.sh</td><td>反向镜像</td><td>服务器→本机，AI 脚本读本地路径零改造</td></tr>
+  <tr><td class="mono">setup_ssh_key.sh</td><td>免密</td><td>ed25519 + <code>~/.ssh/config</code> 别名 <code>limao-server</code></td></tr>
+  <tr><td class="mono">install_migrate_sync.sh</td><td>装本机定时</td><td>launchd 优先，失败自动退 cron</td></tr>
+  <tr><td class="mono">systemd/ ×7<br>nginx/ ×2</td><td>远端单元与反代</td><td>serve / pulse / pipeline / shadow + IP·子域两套 nginx 模板</td></tr>
+</table>
+</div>
+
+<h3>1.2 对既有生产脚本的改动（仅 1 个文件）</h3>
+<div class="card">
+<table>
+  <tr><th>位置</th><th>原写法</th><th>Linux 上的后果</th><th>改法</th></tr>
+  <tr><td class="mono">pulse_fetcher.sh</td><td><code>cd /Users/zxl/…</code></td><td>cd 失败仍继续跑，写错目录</td><td><code>${LIMAO_ROOT:-原默认}</code></td></tr>
+  <tr><td class="mono">pulse_fetcher.sh</td><td>硬编码 python 3.13 路径</td><td>解释器不存在</td><td><code>${LIMAO_PY:-原默认}</code></td></tr>
+  <tr><td class="mono">pulse_fetcher.sh</td><td><code>stat -f%m</code> / <code>-f%z</code></td><td>BSD 语法，GNU 报错 → 单实例锁与日志轮转静默失效</td><td>加 <code>|| stat -c …</code> 兜底</td></tr>
+</table>
+<div class="note">
+  三处都用「可选覆盖 + 保留原默认值」：<b>Mac 侧行为一字未变</b>，只在服务器上由 <code>remote_env.sh</code> 注入不同值。
+  这是「不影响现有功能」的实现方式——不是改写，是开一个可覆盖的口。
+</div>
+</div>
+
+<h3>1.3 文档</h3>
+<p><code>MIGRATION.md</code> 220+ 行，含可行性分层、两套模式（site / pipeline）、命令速查、风险清单、数据联动、再迁移步骤。</p>
+
+<h3>1.4 更早一轮的前端改动（10-26 ~ 10-28，与本次迁移无关，列出以免混淆）</h3>
+<div class="card">
+<table>
+  <tr><th>页</th><th>改动</th></tr>
+  <tr><td>主线题材 <code>/mainline</code></td><td>题材行内嵌「核心辨识度个股 + 资金流」：按连板高度→龙头身份→涨幅排序，叠加股性（年涨停/晋级率），严格连板龙打「严龙」标</td></tr>
+  <tr><td>龙虎榜 <code>/lhb</code></td><td>补「上榜个股·全量」tab（72 行 → 剔除科创 69 行），修 <code>institution</code> 缺失崩页</td></tr>
+  <tr><td>取数层</td><td>只拦 <code>text/html</code> 中转页，<code>text/plain</code> 按 JSON 试解析（避免误杀）</td></tr>
+  <tr><td>代码格式</td><td><code>bareCode()</code>：<code>002708.SZ</code> 与 <code>002708</code> 统一，修股性查不到 + 同票重复</td></tr>
+</table>
+</div>
+
+<!-- 2 -->
+<h2>2. 上传了哪些文件到服务器</h2>
+<div class="card">
+<table>
+  <tr><th>类别</th><th>内容</th><th>位置</th><th>规模</th></tr>
+  <tr>
+    <td>站点发版包</td>
+    <td>猎手代码 + 配置 + <code>dist/</code>（前端产物）</td>
+    <td class="mono">~/limao/releases/limao-site-20261030-135101/</td>
+    <td class="n">8.3MB · 2 268 条目<br>（解压 56M）</td>
+  </tr>
+  <tr>
+    <td>软链</td>
+    <td>当前版本指针，回滚只换它</td>
+    <td class="mono">~/limao/current → releases/…/app</td>
+    <td>—</td>
+  </tr>
+  <tr>
+    <td>影子副本</td>
+    <td>仅代码（无 cache/dist），服务器自产数据用</td>
+    <td class="mono">~/limao/shadow/</td>
+    <td class="n">3.5MB</td>
+  </tr>
+  <tr>
+    <td>数据入口</td>
+    <td>服务端数据链路启动脚本</td>
+    <td class="mono">~/limao/remote_pipeline.sh</td>
+    <td class="n">2.6KB</td>
+  </tr>
+  <tr>
+    <td>环境文件</td>
+    <td><code>LIMAO_ROOT / LIMAO_PY / LIMAO_DIST_DIR / TZ</code></td>
+    <td class="mono">~/limao/remote_env.sh</td>
+    <td>—</td>
+  </tr>
+  <tr>
+    <td>systemd 单元</td>
+    <td>limao-serve / limao-pulse(timer) / limao-pipeline(timer) / limao-shadow(timer)</td>
+    <td class="mono">/etc/systemd/system/</td>
+    <td class="n">7 个文件</td>
+  </tr>
+  <tr>
+    <td>nginx 配置</td>
+    <td>IP 直连（已启用）+ 子域模板（备用）</td>
+    <td class="mono">/etc/nginx/sites-available/limao-ip.conf</td>
+    <td>—</td>
+  </tr>
+  <tr>
+    <td>数据副本</td>
+    <td>按 <code>serve.py</code> 路由反推的 4 层数据</td>
+    <td class="mono">~/limao/current/cache/</td>
+    <td class="n">1 885 个文件<br>≈63MB</td>
+  </tr>
+</table>
+
+<h3>数据分层明细</h3>
+<table>
+  <tr><th>层</th><th>范围</th><th>文件数</th><th>频率</th><th>单次耗时</th></tr>
+  <tr><td><span class="tag t-risk">T0R 实时</span></td><td><code>cadence=intraday</code> 的 16 个接口</td><td class="n">16</td><td>每 30s（仅盘中）</td><td class="n">≈1.0s</td></tr>
+  <tr><td><span class="tag t-warn">T0 热</span></td><td>全部单文件路由</td><td class="n">37</td><td>每 5 分钟</td><td class="n">≈1.5s</td></tr>
+  <tr><td><span class="tag t-accent">T1 温</span></td><td>目录路由最新切片（题材/情绪/龙虎榜/资金史）</td><td class="n">674</td><td>每 5 / 30 分钟</td><td class="n">≈2s</td></tr>
+  <tr><td><span class="tag t-mute">T2 冷</span></td><td>股性全库、财富码缓存</td><td class="n">1 158</td><td>每交易日 15:45</td><td class="n">≈10s</td></tr>
+</table>
+<div class="warnbox">
+  <b>没有上传的东西</b>（有意排除）：<code>cache/logs</code>、<code>*.log</code>、<code>__pycache__</code>、
+  <code>tests/.pytest_tmp</code>、<code>.workbuddy</code>、<code>cache/kline_qfq</code>、<code>cache/stock_arc</code>。
+  前五个属于垃圾，后两个是可重建的大件（site 模式不需要）。
+</div>
+</div>
+
+<!-- 3 -->
+<h2>3. 服务器上有哪些服务在跑</h2>
+<div class="card">
+<table>
+  <tr><th>单元</th><th>状态</th><th>作用</th><th>端口 / 备注</th></tr>
+  <tr>
+    <td class="mono">limao-serve.service</td>
+    <td><span class="tag t-ok">active · enabled</span></td>
+    <td>只读站点（<code>serve.py</code>）：白名单 API + SPA</td>
+    <td class="mono">127.0.0.1:8000</td>
+  </tr>
+  <tr>
+    <td class="mono">limao-shadow.timer</td>
+    <td><span class="tag t-ok">active</span></td>
+    <td>每 30s 触发影子管线：服务器自己产数据 → <code>shadow/cache</code></td>
+    <td>只写影子目录，<b>不推送</b></td>
+  </tr>
+  <tr>
+    <td class="mono">limao-pulse.timer</td>
+    <td><span class="tag t-mute">disabled</span></td>
+    <td>备用的抓取定时器（与 shadow 二选一，切换后启用）</td>
+    <td>未启动</td>
+  </tr>
+  <tr>
+    <td class="mono">limao-pipeline.timer</td>
+    <td><span class="tag t-mute">未安装</span></td>
+    <td>正式数据面（<code>SHADOW=0</code>）待切换时安装</td>
+    <td>模板已就位</td>
+  </tr>
+  <tr>
+    <td class="mono">nginx</td>
+    <td><span class="tag t-ok">active · enabled</span></td>
+    <td>80 端口反代</td>
+    <td>见下</td>
+  </tr>
+</table>
+
+<h3>nginx 站点（80 端口）</h3>
+<table>
+  <tr><th>配置文件</th><th>server_name</th><th>指向</th><th>说明</th></tr>
+  <tr><td class="mono">limao-ip.conf</td><td class="mono">43.136.183.186</td><td class="mono">127.0.0.1:8000</td><td>本次新增：<b>IP 直接访问狸猫终端</b></td></tr>
+  <tr><td class="mono">oscarwl.icu.conf</td><td class="mono">oscarwl.icu</td><td>原站点</td><td>未改动</td></tr>
+  <tr><td class="mono">default</td><td>兜底</td><td>原默认页</td><td>未改动</td></tr>
+</table>
+
+<h3>端口与资源</h3>
+<div class="card">
+<table>
+  <tr><th>监听</th><th>用途</th></tr>
+  <tr><td class="mono">0.0.0.0:80</td><td>nginx（对外唯一开放端口）</td></tr>
+  <tr><td class="mono">127.0.0.1:8000</td><td>狸猫终端 serve.py（仅本机）</td></tr>
+  <tr><td class="mono">0.0.0.0:18437 / 127.0.0.1:18439-18440</td><td>服务器原有服务，未触碰</td></tr>
+  <tr><td class="mono">*:22</td><td>SSH（已加 ed25519 密钥）</td></tr>
+</table>
+<p style="margin:10px 0 0;font-size:12.5px;color:var(--sub)">
+磁盘 <b>50G / 已用 26G（55%）</b>，<code>~/limao</code> 占 <b>60M</b>（release 56M + shadow 3.6M）。
+内存 1.9G，可用约 950M —— 这也是为什么不在服务器上装 docker / node。
+</p>
+</div>
+</div>
+
+<!-- 4 -->
+<h2>4. 本地和哪些数据相关联</h2>
+
+<h3>当前生效的链路（Mac 生产 → 服务器展示）</h3>
+<div class="card">
+<div class="flow">
+  <div class="node"><h4>cron（每分钟）</h4><p><code>pulse_fetcher.sh</code><br>抓东财/腾讯，落 <code>cache/*.json</code></p></div>
+  <div class="arrow">→</div>
+  <div class="node"><h4>本机 cache/</h4><p>5232 个文件<br>最新快照 <b>15:00:12</b></p></div>
+  <div class="arrow">→</div>
+  <div class="node"><h4>launchd<br>migrate-sync（30s）</h4><p>按 4 层清单推<br>T0R / T0 / T1 / T2</p></div>
+  <div class="arrow">→</div>
+  <div class="node"><h4>服务器 current/cache</h4><p>只读镜像<br><b>延迟 0s</b></p></div>
+  <div class="arrow">→</div>
+  <div class="node"><h4>limao-serve :8000</h4><p>← nginx :80<br>对外站点</p></div>
+</div>
+<div class="note">
+  这条链路下，<b>Mac 关机 = 站点停在最后一帧</b>。这正是要改的部分（见下节）。
+</div>
+</div>
+
+<h3>本地相关组件清单</h3>
+<div class="card">
+<table>
+  <tr><th>组件</th><th>状态</th><th>与服务器的关系</th></tr>
+  <tr><td class="mono">launchd com.limao.migrate-sync</td><td><span class="tag t-ok">在册 · 30s</span></td><td>推送数据（T0R/T0/T1/T2）</td></tr>
+  <tr><td class="mono">cron → pulse_fetcher.sh</td><td><span class="tag t-ok">运行中</span></td><td>数据源；60s 落一次盘</td></tr>
+  <tr><td class="mono">launchd com.limao.terminal-serve</td><td><span class="tag t-ok">在册</span></td><td>本机 :8000，与服务器站点并存</td></tr>
+  <tr><td class="mono">launchd com.limao.terminal-tunnel</td><td><span class="tag t-ok">在册</span></td><td>cloudflared 快隧（旧分享链接，域名会变）</td></tr>
+  <tr><td class="mono">launchd com.limao.pulse-fetcher</td><td><span class="tag t-mute">不在册</span></td><td>抓取实际由 cron 驱动，非 launchd</td></tr>
+  <tr><td class="mono">~/.limao/sync_state/</td><td>—</td><td>各层最近同步时间、失败计数</td></tr>
+  <tr><td class="mono">~/.ssh/id_ed25519_limao</td><td>—</td><td>免密登录；<code>~/.ssh/config</code> 别名 <code>limao-server</code></td></tr>
+  <tr><td class="mono">25 个 AI 自动化</td><td><span class="tag t-warn">依赖 Mac</span></td><td>读本地 <code>cache/</code> 做研判、推飞书；<b>不迁</b></td></tr>
+</table>
+</div>
+
+<h3>本地数据关联矩阵</h3>
+<div class="card">
+<table>
+  <tr><th>本地数据</th><th>谁写</th><th>谁读</th><th>是否同步到服务器</th></tr>
+  <tr><td class="mono">cache/pulse_snapshots/latest.json</td><td>cron 抓取链</td><td>站点、AI 研判</td><td><span class="tag t-risk">是（T0R）</span></td></tr>
+  <tr><td class="mono">cache/short_spirit_signals.json<br>cache/relay_effect.json</td><td>抓取链</td><td>站点、AI 研判</td><td><span class="tag t-risk">是（T0R）</span></td></tr>
+  <tr><td class="mono">cache/zt_genes/（1607 个）</td><td>盘后跑批</td><td>站点股性页</td><td><span class="tag t-mute">是（T2 每日）</span></td></tr>
+  <tr><td class="mono">cache/kline_qfq/</td><td>抓取/回补</td><td>本地回测</td><td><span class="tag t-mute">否</span></td></tr>
+  <tr><td class="mono">cache/decision*.json</td><td>AI 自动化</td><td>站点决策页</td><td><span class="tag t-mute">否（AI 产出，隐私白名单也排除）</span></td></tr>
+  <tr><td class="mono">outputs/*.json</td><td>AI 复盘</td><td>公众号/归档</td><td><span class="tag t-mute">否</span></td></tr>
+</table>
+</div>
+
+<!-- 5 -->
+<h2>5. 下一步：把数据面搬上去（已备好，待验证）</h2>
+<div class="card">
+<p style="margin-top:0">
+  可行性已实测：在服务器跑完整数据链 <b>10 个步骤全部 rc=0、ready=True、耗时 3 秒</b>，链路纯标准库、
+  零 <code>/Users/zxl</code> 硬编码。但盘中脚本有交易时段守卫，端到端只能在真实盘中验证，
+  因此先开了<b>影子管线</b>（<code>limao-shadow.timer</code>，已在跑，只写影子目录、不推送）。
+</p>
+<table>
+  <tr><th>切换后</th><th>归属</th><th>Mac 关机后</th></tr>
+  <tr><td>采集 / 计算 / 落盘</td><td>服务器</td><td><span class="tag t-ok">照常</span></td></tr>
+  <tr><td>对外站点</td><td>服务器</td><td><span class="tag t-ok">照常</span></td></tr>
+  <tr><td>规则卡片推送</td><td>服务器</td><td><span class="tag t-ok">照常</span></td></tr>
+  <tr><td>AI 研判与成文</td><td>Mac</td><td><span class="tag t-risk">停</span></td></tr>
+</table>
+<div class="warnbox">
+  <b>切换前必须补两件事</b>：① 盘后链 <code>capture_daily / guard_eod_chain</code> 未在服务器验证；
+  ② <code>realtime_push</code> 尚未真实发过卡（影子模式跳过），首次切换建议先打测试群。
+</div>
+</div>
+
+<h2>6. 体积复盘：代码 vs 缓存</h2>
+<div class="card">
+<p style="margin-top:0">有人会以为「几百兆」是代码。实测不是：</p>
+<table>
+  <tr><th>项</th><th>体积</th><th>说明</th></tr>
+  <tr><td>Python 源码（101 个文件 / 39 060 行）</td><td class="n">1.8 MB</td><td>真正的「代码」就这么多</td></tr>
+  <tr><td>前端产物 dist</td><td class="n">1.5 MB</td><td>构建后已压缩</td></tr>
+  <tr><td>本机 <code>cache/</code></td><td class="n">285 MB</td><td>财经缓存：股性库 81M、registry.db 57M、K 线 45M、决策日志 29M…</td></tr>
+  <tr><td>服务器 release</td><td class="n">56 MB</td><td>只含路由清单里的数据：<code>wealth_code</code> 30M + <code>cache</code> 23M + 代码 4.6M</td></tr>
+</table>
+<div class="warnbox">
+  <b>第一版打包犯的错</b>：用「排除式」rsync 整个项目，只排了 3 个目录 → 把 285M 缓存几乎全打进去，
+  还混入了 <code>.git</code>（13M）和 <code>.pytest_tmp</code>（24M）。包 52M / 解压 291M。
+  <br>改成<b>按路由清单打包</b>后：<b>8.3M / 解压 56M / 2268 条目</b>，服务器总占用 344M → 60M。
+</div>
+</div>
+
+<h2>7. 已知问题与坑（都踩过）</h2>
+<div class="card">
+<table>
+  <tr><th>现象</th><th>真因</th><th>处理</th></tr>
+  <tr><td>打包脚本报 <code>PKG…: unbound variable</code></td><td><code>$VAR</code> 紧跟全角括号，bash 把中文当成变量名一部分</td><td>一律 <code>${VAR}</code></td></tr>
+  <tr><td>打包中断「Broken pipe」</td><td><code>pipefail</code> + <code>du|sort|head</code> → SIGPIPE</td><td>显式 <code>|| true</code></td></tr>
+  <tr><td>SSH 偶发 Permission denied</td><td>连续建连被 sshd 抖动拒绝</td><td><b>只对退出码 255 重试</b>，业务失败不重</td></tr>
+  <tr><td><code>/</code> 与 <code>/timeline</code> 404</td><td><code>serve.py</code> 默认去 <code>../狸猫终端/dist</code> 找前端</td><td>注入 <code>LIMAO_DIST_DIR</code>，已回写模板</td></tr>
+  <tr><td>本机脚本卡在输密码</td><td><code>rsh</code> 未带 <code>-i key</code>，也没 <code>BatchMode</code></td><td>统一带密钥；无密钥则 <code>BatchMode</code> 快速失败</td></tr>
+  <tr><td>影子 <code>feedback_matrix</code> rc=1</td><td>影子目录无当日行情，属预期</td><td>开盘后复核</td></tr>
+  <tr><td>换版本后 <code>/</code> 突然 404</td><td><code>serve.py</code> 启动时把 dist 真实路径写进白名单，换软链不重启就仍指向旧 release</td><td><code>push.sh</code> 已补「切链后重启 + 自检 200」</td></tr>
+  <tr><td>包里有 <code>.git</code> / <code>.pytest_tmp</code></td><td>排除项写在 <code>pack.sh</code> 里但实际数组在 <code>migrate.conf</code></td><td>已改 conf；包从 52M 降到 8.3M</td></tr>
+</table>
+</div>
+
+<footer>
+  本文件由实际命令输出生成，非人工回忆；数字采集时间 2026-10-30 16:38-16:40。
+  相关文档：<code>MIGRATION.md</code>（第八节为数据面迁移）｜工具目录 <code>scripts/migrate/</code>
+</footer>
+
+</div>
+</body>
+</html>

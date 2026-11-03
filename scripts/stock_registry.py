@@ -15,6 +15,8 @@
   python3 scripts/stock_registry.py range 2026-10-01 2026-10-14 [--limit-up]
   python3 scripts/stock_registry.py dump [--since ISO]
   python3 scripts/stock_registry.py refresh
+  python3 scripts/stock_registry.py xgb [--path cache/pulse_snapshots/latest.json]
+  python3 scripts/stock_registry.py technical [--date YYYY-MM-DD] [--limit N]
   python3 scripts/stock_registry.py prune [--keep-days 40]
 """
 from __future__ import annotations
@@ -282,6 +284,35 @@ def cmd_refresh(argv: list[str]) -> int:
     return 0
 
 
+def cmd_xgb(argv: list[str]) -> int:
+    path = Path(_arg_value(argv, "--path") or
+                (ROOT / "cache" / "pulse_snapshots" / "latest.json"))
+    if not path.exists():
+        print(f"[xgb] 文件不存在: {path}")
+        return 1
+    try:
+        snap = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        print(f"[xgb] JSON 读取失败: {e}")
+        return 1
+    res = SR.ingest_xgb_snapshot(snap)
+    print(f"[xgb] {res.get('source', 'xuangubao:snapshot')} | "
+          f"新增{res.get('inserted', 0)} 更新{res.get('updated', 0)} "
+          f"无变化{res.get('unchanged', 0)} 跳过{res.get('skipped', 0)}")
+    return 0 if res.get("ok") else 1
+
+
+def cmd_technical(argv: list[str]) -> int:
+    """盘后处理当天所有命中股票的技术派生队列。"""
+    date10 = _arg_value(argv, "--date") or SR._today_iso()
+    SR.enqueue_daily_codes(trade_date=date10, trigger="cli:technical")
+    res = SR.process_technical_queue(trade_date=date10,
+                                     limit=int(_arg_value(argv, "--limit") or 0) or None)
+    print(f"[technical] {date10} 入队/处理 {res.get('queued', 0)} 只 | "
+          f"写入 {res.get('written', 0)} | 失败 {res.get('failed', 0)}")
+    return 0 if res.get("ok") else 1
+
+
 def cmd_init(argv: list[str]) -> int:
     path = SR.init_db()
     print(f"[init] 底库就绪 → {path}")
@@ -313,6 +344,8 @@ COMMANDS = {
     "range": cmd_range,
     "dump": cmd_dump,
     "refresh": cmd_refresh,
+    "xgb": cmd_xgb,
+    "technical": cmd_technical,
     "prune": cmd_prune,
 }
 

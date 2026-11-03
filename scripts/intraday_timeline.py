@@ -35,6 +35,7 @@
 | 炸板 | `broken.names` 新增 | 全量 |
 | 跌停 | `limit_down.names` 新增 | 全量 |
 | 杀跌板块 | `sector_risk.declining[]` | 板块级（含跌幅与主力净流出） |
+| **消息面快讯** | `newsflash[]` | 外部快讯（⛔ 时刻用快讯自己的 `ctime`；按 id 去重后 append-only） |
 
 ⚠️ **个股级「跌」目前只有跌停**（`limit_down`）；系统未落盘「个股跌幅榜」，
 故个股大跌**无法逐个记录** —— 如实标注，不伪造。
@@ -44,6 +45,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -63,12 +65,37 @@ def _today() -> str:
     return datetime.now(BJ).strftime("%Y%m%d")
 
 
+def _in_timeline_session(now: datetime | None = None) -> bool:
+    """时间轴只在 A 股真实盘中运行，避免盘前旧快照污染当天基线。"""
+    now = now or datetime.now(BJ)
+    date10 = now.strftime("%Y-%m-%d")
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from common.trading_calendar import is_a_share_trading_day
+        if not is_a_share_trading_day(date10):
+            return False
+    except Exception:
+        # 日历源不可用时宁可不写盘，也不把旧快照写成当日事件。
+        return False
+    hm = now.hour * 60 + now.minute
+    return (9 * 60 + 25 <= hm <= 11 * 60 + 30) or (13 * 60 <= hm <= 15 * 60)
+
+
 def timeline_path() -> Path:
     return CACHE / f"intraday_timeline_{_today()}.jsonl"
 
 
 def state_path() -> Path:
     return CACHE / f"intraday_timeline_state_{_today()}.json"
+
+
+def _atomic_write_json(path: Path, value: dict) -> None:
+    """原子写状态，避免守护被中断时留下半截 JSON。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _is_st(name: str) -> bool:
@@ -90,6 +117,37 @@ def _is_zt(pct: float, is_20cm: bool) -> bool:
         return float(pct) >= (ZT_20CM if is_20cm else ZT_MAIN)
     except Exception:
         return False
+
+
+def _ctime_to_at(ctime) -> str | None:
+    """快讯 `ctime`（epoch 秒/毫秒/ISO/`YYYY-MM-DD HH:MM:SS`）→ `YYYY-MM-DD HH:MM:SS`（北京时间）。
+
+    ⛔ 必须用**快讯自己的发布时刻**，不能用记录时刻 —— 「记录时刻 ≠ 发生时刻」是本文件
+       反复强调的口径；用记录时刻会把 3 小时前的旧快讯画到当前分钟上。
+    拿不到时刻一律返回 None（⛔ 不猜、不落盘到「现在」）。
+    """
+    if ctime is None:
+        return None
+    try:
+        if isinstance(ctime, (int, float)):
+            ts = float(ctime)
+            if ts <= 0:
+                return None
+            if ts > 1e12:          # 毫秒
+                ts /= 1000
+            return datetime.fromtimestamp(ts, BJ).strftime("%Y-%m-%d %H:%M:%S")
+        s = str(ctime).strip()
+        if not s:
+            return None
+        if s.isdigit():
+            return _ctime_to_at(int(s))
+        dt = (datetime.fromisoformat(s.replace("Z", "+00:00"))
+              if "T" in s else datetime.strptime(s, "%Y-%m-%d %H:%M:%S"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=BJ)
+        return dt.astimezone(BJ).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
 
 
 def _limit_up_map(rows, total):
@@ -138,6 +196,7 @@ def collect(latest: dict, state: dict) -> tuple[list, dict]:
         "seen_ld": set(state.get("seen_ld") or []),
         "seen_broken": set(state.get("seen_broken") or []),
         "seen_decl": set(state.get("seen_decl") or []),
+        "seen_nf": set(state.get("seen_nf") or []),
     }
     evs: list = []
 
@@ -185,6 +244,9 @@ def collect(latest: dict, state: dict) -> tuple[list, dict]:
             "seen_ld": sorted(st["seen_ld"]),
             "seen_broken": sorted(st["seen_broken"]),
             "seen_decl": sorted(st["seen_decl"]),
+            # ⛔ 基线不播种快讯 id：快讯自带发布时刻，下一轮按真实 ctime 补记即可
+            #    （播种会把它当成「开盘前已有」而永久丢掉）。
+            "seen_nf": [],
         }
 
     # ── 涨停总数变化（必须有完整个股差分，采集不完整就不写节点）──
@@ -256,6 +318,36 @@ def collect(latest: dict, state: dict) -> tuple[list, dict]:
                         "inflow": d.get("main_inflow")})
             st["seen_decl"].add(name)
 
+    # ── 消息面快讯（2026-10-20 用户：「消息面呢？这边是否介入快讯【短线精灵+终端！！】」）──
+    # 为什么必须在这里落盘：`latest.json.newsflash` 每轮**覆盖写**，且只保留最近 600s 的
+    # ≤8 条（见 intraday_pulse.parse_newsflash 后的时效门）→ 前端直接读它只能看到一根
+    # 「滚动的尾巴」，10 分钟前的快讯会凭空消失。时间轴要的是「当天发生过的消息」，
+    # 故按 id 去重后 append-only 记账。
+    # ⛔ 不作任何筛选与解读：不判利好利空、不挑题材、不排序 —— 纯记录（硬约束④）。
+    # ⛔ 时刻取快讯自己的 `ctime`，不是记录时刻（「记录时刻 ≠ 发生时刻」）。
+    for nf in (latest.get("newsflash") or []):
+        if not isinstance(nf, dict):
+            continue
+        title = str(nf.get("title") or "").strip()
+        if not title:
+            continue
+        key = str(nf.get("id") or "").strip() or f"t:{title[:40]}"
+        if key in st["seen_nf"]:
+            continue
+        at = _ctime_to_at(nf.get("ctime"))
+        if not at:
+            # 拿不到发布时刻 → 记不了分钟轴，且**不标记已见**（下轮可能补到时刻）
+            continue
+        plates = [str(p).strip() for p in (nf.get("bkj") or []) if str(p).strip()]
+        stocks = []
+        for s in (nf.get("stocks") or []):
+            nm = str(s[0] if isinstance(s, (list, tuple)) and s else s).strip()
+            if nm and not _is_st(nm):
+                stocks.append(nm)
+        evs.append({"kind": "newsflash_new", "at": at, "id": key, "name": title[:60],
+                    "title": title, "plates": plates[:4], "stocks": stocks[:6]})
+        st["seen_nf"].add(key)
+
     new_state = {
         "baseline_seeded": True,
         "total": st["total"],
@@ -265,12 +357,17 @@ def collect(latest: dict, state: dict) -> tuple[list, dict]:
         "seen_ld": sorted(st["seen_ld"]),
         "seen_broken": sorted(st["seen_broken"]),
         "seen_decl": sorted(st["seen_decl"]),
+        "seen_nf": sorted(st["seen_nf"]),
     }
     return evs, new_state
 
 
 def append_events(evs: list, at: str | None = None) -> int:
-    """追加写（⛔ 绝不覆盖）；返回写入条数。"""
+    """追加写（⛔ 绝不覆盖）；返回写入条数。
+
+    ⚠️ **事件可自带 `at`**：快讯（`newsflash_new`）用它自己的发布时刻，
+    其余事件用记录时刻。`{"at": ts, **e}` 里 `e["at"]` 在后 → 天然覆盖。
+    """
     if not evs:
         return 0
     ts = at or datetime.now(BJ).strftime("%Y-%m-%d %H:%M:%S")
@@ -284,6 +381,9 @@ def append_events(evs: list, at: str | None = None) -> int:
 
 def main() -> int:
     try:
+        if not _in_timeline_session():
+            print("[intraday_timeline] 非交易时段/非交易日，跳过")
+            return 0
         latest = _load(LATEST)
         if not isinstance(latest, dict):
             print("[intraday_timeline] latest.json 缺失/不可读，跳过")
@@ -291,7 +391,7 @@ def main() -> int:
         state = _load(state_path()) or {}
         evs, new_state = collect(latest, state)
         n = append_events(evs)
-        state_path().write_text(json.dumps(new_state, ensure_ascii=False), encoding="utf-8")
+        _atomic_write_json(state_path(), new_state)
         print(f"[intraday_timeline] 记录 {n} 条 → {timeline_path().name}")
         return 0
     except Exception as e:  # ⛔ 绝不影响守护链

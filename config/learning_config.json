@@ -1,13 +1,14 @@
 {
   "schema": "learning_config_v1",
   "updated": "2026-09-01T09:06:38+08:00",
-  "note": "回测自我学习开关。auto_apply_mode 为唯一模式开关：off=只建议；tiered=分级自动（数值阈值自动回写·语义类仅建议·默认）；high_only=只应用 high（旧行为）。",
+  "note": "回测自我学习开关。auto_apply_mode 为唯一模式开关：off=只建议；tiered=分级自动（数值阈值自动回写·语义类仅建议·默认）；high_only=只应用 high（旧行为）。2026-10-18 用户拍板：R1_range_low / R4_range_high 已 enabled=false —— 区间命中率是动态描述量，高低不构成对错判据，停止作为『命中率偏低=有问题』的建议输出（原始数据仍在 backtest_report_*.json 内，未删；改回 true 即恢复）。",
   "auto_apply": false,
   "max_adjust_step": 0.3,
   "window_days": 5,
   "rules": {
     "R1_range_low": {
-      "enabled": true,
+      "enabled": false,
+      "disabled_reason": "2026-10-18：命中率不作对错判据（用户拍板）",
       "hit_rate_threshold": 40,
       "suggest": "base_range 下移 0.3（预期系统性偏乐观）",
       "target": "expectation_rules.json.base_range",
@@ -28,7 +29,8 @@
       "step": null
     },
     "R4_range_high": {
-      "enabled": true,
+      "enabled": false,
+      "disabled_reason": "2026-10-18：命中率不作对错判据（用户拍板）",
       "hit_rate_threshold": 80,
       "suggest": "max_range_width 收紧 0.3（区间过宽无信息量）",
       "target": "expectation_rules.json.max_range_width",

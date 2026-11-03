@@ -1,0 +1,544 @@
+{
+ "title": "📝 盘后复盘 10-30 | 跌停82只·钱缩进白酒医药",
+ "color": "grey",
+ "elements": [
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📉 ① 情绪演变 · 五日轨迹**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**情绪分**　<text_tag color='neutral'>▰▰▱▱▱▱▱▱▱▱</text_tag>　**1.8 / 10 · 退潮**　昨日 1.0 → 今日 1.8，单日 <text_tag color='red'>+0.8</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**五日轨迹**　1.4 → 1.8 → 5.3 → 1.0 → **1.8**　3 日均 2.70　3 日窗震荡，方向仍未定"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📊 ② 真实情绪总览**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**指数**　上证 3599.02 <text_tag color='green'>-1.44%</text_tag>（开 3605.65／高 **3660.21 翻红**／低 3595.26，收在次低）　深证 10833.78 <text_tag color='green'>-2.73%</text_tag>（高 11171.58 也翻红，收全天最低）　创业板 2413.63 <text_tag color='green'>-4.13%</text_tag>（收最低）　科创50 <text_tag color='green'>-5.48%</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**涨停**\n47 只（昨 39）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**晋级率**\n23.1%（门槛 19.4·过线）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**连板晋级**\n3 / 10＝30.0%"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**炸板率**\n39.0%（21 只炸过）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**核按钮**\n14 只（昨 21）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**大面 / 跌停**\n5 只 / **82 只**"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**最高板**\n4 → 5（青岛食品）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**成交**\n1.67 万亿（放 1180 亿）"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**昨涨停今均**　<text_tag color='green'>-0.67%</text_tag>，只 **48.7%** 收红（39 只有效）——晋级率过线靠的是几只高位封住，多数仍是亏　**广度**　涨 <text_tag color='red'>900</text_tag> : 跌 <text_tag color='green'>4602</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**上证五日线**　3655.55，收盘低 **56.53 点（-1.55%）**，连续第 2 日在下方　**首板 38 只（80.9%）**，封板上午 38 只、午后 9 只"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🧠 ③ AI 综合判断**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**判断**　今天不是「跌完反弹」，是**反抽完再杀**。低开 → 上证盘中翻红到 3660.21 → 午后二次杀 → 收在次低；深证、创业板都摸到昨收上方，然后一路砸到全天最低。跌停 **82 只**（昨 41）直接翻倍。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**变**　昨天是「开盘即最高、单边杀到尾盘」，今天是「低开—翻红—再杀」。形态更差：**给了反弹窗口，收得比昨天更低**（上证 -0.82% → -1.44%，创业板 -4.45% → -4.13% 但收在全天最低）。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**矛盾**　情绪分 1.0→1.8 反而升了，可跌停翻倍、广度 900:4602。原因是这个分只算涨停池里的接力质量（核按钮 21→14、晋级率 13.9→23.1、涨停 39→47），**池子里几只高位封住了，池外还在崩**——这是抱团，不是修复。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**赚 38 只**　人气接力 31（+11.62%）｜独走 6（+10.03%）｜新题材板块龙 1（+9.99%）\n**亏 20 只**　高位被核 3（-9.61%）｜低位失败出货 11（-8.56%）｜没人跟的小票 6（-3.23%）　净偏 <text_tag color='red'>+18</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**三问**　赚＝白酒医药里一起封住的那批；亏＝昨首板与 2 板被砸的那批；**变了**＝高位被核从 0 只回到 3 只（光洋股份 -8.69%、东贝集团 -10.00%、文投控股 -10.13%），砸的层次从首板又爬回高位。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>风险</text_tag>　**A.** 跌停 82 只对涨停 47 只，跌停是涨停的 1.7 倍；半导体 -4.65%、通信技术 -4.87%、国产芯片 -4.77%，整链一直没止住"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>风险</text_tag>　**B.** 白酒医药是避险不是主攻：涨的是茅台 +2.81%、汾酒 +7.76%、五粮液 +3.35% 这类大票，涨停的泸州老窖只封 0.12 亿占流通 0.01%——钱来躲，不来打"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>风险</text_tag>　**C.** 今天 47 只涨停里有 21 只盘中炸过板，炸板率 39.0%；明天接的人，接的是炸过一轮的票"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🔥 ⑤ 主线复盘**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='red'>⭐ 最强</text_tag>　**白酒 · 大消费**　13 只｜今天唯一逆势方向，也是唯一在进钱的方向\n· **青岛食品** 5 板（09:30:00 封·封 0.57 亿占流通 1.50%·炸 3 次·换手 24.9%；昨天是一字封 1.65 亿、换手 1.57%，今天换手翻了 15 倍）\n· 白酒 4 只　**泸州老窖**（成交 31.16 亿·封 0.12 亿只占流通 0.01%）· **古井贡酒**（炸 7 次）· 迎驾贡酒 · 皇台酒业（换手 28.8%·炸 6 次）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· 另 **东方海洋** 2 板（封 0.82 亿·换手 27.2%）· 巴比食品 2 板（封 0.04 亿·炸 6 次最松）· 新乳业 · 泉阳泉 · 好想你 · 合百集团 · 首旅酒店（炸 14 次）\n· 催化　选股宝「白酒股逆势走强、茅台创半年新高、板块出清已渐近尾声」；茅台 +2.81%、汾酒 +7.76%、五粮液 +3.35%\n· 钱　食品饮料 <text_tag color='red'>+28.9</text_tag>／白酒 <text_tag color='red'>+25.5</text_tag>／味蕾经济 <text_tag color='red'>+24.7</text_tag> 亿"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='blue'>🔹 次强</text_tag>　**医药链**　8 只｜昨天 2 只，今天 8 只\n· **澳洋健康** 3 板（封 0.60 亿·炸 2 次·换手 30.0%）· **桂林三金** 2 板（封 1.07 亿占 1.26%）\n· **万邦医药** 20cm（封 1.36 亿占 6.48%·换手 43.5%）· **永安药业**（09:30 封·封 1.04 亿占 3.46%）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· 另 九安医疗（封 1.15 亿·成交 11.32 亿）· 百花医药 · 阳普医疗 20cm · 大参林 · 羚锐制药（炸 12 次）\n· 钱　医药生物 <text_tag color='red'>+26.2</text_tag>／CRO <text_tag color='red'>+18.4</text_tag> 亿；⚠️ 医药生物指数仍 -0.58%，钱进了票、没进整个板块"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>🔻 缩水</text_tag>　**商业航天**　7 → 3 只｜昨天的最强线，今天掉剩三分之一\n· **上海沪工** 3 板（09:25:02 封·封 2.58 亿占流通 4.36%）· **阳光照明** 2 板（封 **6.10 亿占流通 11.17%**，全场最实）· **盛洋科技** 2 板（封 2.43 亿占 4.90%）\n⚠️ 昨天那条线的大票全泄了：中国卫星盘中最高 59.72（+6.8%）收 **+0.02%**、上海港湾 +4.98%、西部材料 +3.90%、航天晨光 -3.49%"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>🔻 退</text_tag>　**机器人**　6 只（昨 6，但换了一批人）\n· 传智教育 2 板（封 0.95 亿占 3.35%）· 沈阳机床 · 欧圣电气 20cm · 天元智能 · 派斯林（另 1 只科创板按纪律不点名）\n⚠️ 昨天 3 板两只（光洋股份 -8.69%／东贝集团 -10.00%）与 2 板两只（联明股份 -9.99%／山东矿机 -10.06%）全砸；机器人概念 <text_tag color='green'>-102.4</text_tag> 亿"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**PCB** 3 只\n金安国纪 成交 40.8 亿全场第一"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**业绩增长** 3 只\n津滨发展 · 智度股份 · 洪通燃气"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**大农业** 2 只\n天鹅股份 · 红太阳"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**固态电池** 1 只\n上海洗霸（炸 11 次）"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**👑 ⑥.5 核心演化史**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**昨日核心 · 今日命运**"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**青岛食品** 4 → 5 板\n炸 3 次·换手 24.9%，从一字转分歧"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**上海沪工** 2 → 3 板\n封 2.58 亿占流通 4.36%，航天唯一连板"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**中国卫星** 首板 → +0.02%\n盘中冲 +6.8% 全吐回去"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**光洋股份** 4 板 → -8.69%\n炸 17 次的烂板，今天被核"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**今日核心**　高度在 **青岛食品**（5 板·大消费），方向在 **白酒**（4 只涨停＋茅台 +2.81%）。这跟昨天「高度和方向分家」不是同一件事——今天是**钱找地方躲**，不是钱找地方打。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**走到哪步**　商业航天：启动第 3 日 → **分歧转弱**（9→3 只、大票冲高全吐）。机器人：退潮第 2 日（高位 4 只全被核）。白酒医药：**启动第 1 日**，只有避险属性、没有高度。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**明日推演**\n· **5 进 6**　青岛食品 是唯一高度；今天炸 3 次、换手 24.9%，明天看能不能重新缩量封住\n· **3 进 4**　上海沪工（航天唯一连板）／澳洋健康（换手 30.0%，已在高位）\n· **2 进 3**　阳光照明 封 6.10 亿占流通 11.17%，是这批里最实的一只"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📊 ⑥ 轮动复盘**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**✅ 扩的**　白酒Ⅱ 0→4｜元件 0→3｜医疗服务 1→3｜休闲食品 1→3｜医疗器械 0→2｜中药Ⅱ 1→2｜一般零售 1→2｜饮料乳品 1→2"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**❌ 缩的**　汽车零部 2→0｜通用设备 4→2｜专用设备 3→1｜航天装备 1→0｜影视院线 1→0｜游戏Ⅱ 1→0｜风电设备 1→0｜光伏设备 1→0"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**清零的**　10-27 那条 5 板线今天全灭：上海九百 <text_tag color='green'>-9.98%</text_tag>、国芳集团 <text_tag color='green'>-10.00%</text_tag>、百大集团 <text_tag color='green'>-10.00%</text_tag>、新华百货 <text_tag color='green'>-10.01%</text_tag>、茂业商业 -6.35%"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**换仓判定**　算**换仓，不算换人**——钱从科技硬件搬到白酒医药（国产芯片 -136.8／通信技术 -136.5／半导体 -117.6 亿 → 食品饮料 +28.9／医药生物 +26.2），搬进去的是防御方向，不出高度、不出新龙头。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**💰 ⑦ 板块资金（14:59 收盘快照 · 亿）**"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**食品饮料**\n<text_tag color='red'>+28.9</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**国产芯片**\n<text_tag color='green'>-136.8</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**医药生物**\n<text_tag color='red'>+26.2</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**通信技术**\n<text_tag color='green'>-136.5</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**白酒**\n<text_tag color='red'>+25.5</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**华为概念**\n<text_tag color='green'>-131.4</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**味蕾经济**\n<text_tag color='red'>+24.7</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**半导体**\n<text_tag color='green'>-117.6</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**CRO**\n<text_tag color='red'>+18.4</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**5G 概念**\n<text_tag color='green'>-112.3</text_tag>"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**一句话**　进钱的五个全在吃喝吃药，出海的五个全是芯片通信——不是换方向，是**整条科技链在被抽水，抽出来的钱躲进消费医药**。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📎 ⑨ 明日展望与延续观察**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**看点**\n① 跌停 82 只能不能收回来——跌停对涨停 1.7 倍，这个比例不收敛，任何反弹都只是反抽\n② 白酒是不是只躲一天——4 只里 3 只封单不到 0.8 亿，泸州老窖只封 0.12 亿，明天低开就是避险的钱走了\n③ 青岛食品 5 进 6（唯一高度·换手已 24.9%）\n④ 上证能不能收回五日线 3655.55（今收 3599.02，差 56.53 点）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**修复还差两步**　晋级率已过门槛（23.1% > 19.4%），但核按钮 14 只还在两位数、跌停 82 只——**核按钮降到个位数 + 跌停收回到 20 只以内**，才算能动手。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· 股性　**澳弘电子** 近一年涨停 11 次·最长 5 板｜**澳洋健康** 10 次·最长 3 板｜**上海洗霸** 8 次·最长 3 板｜**青岛食品** 5 次·最长 5 板"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>风险</text_tag>　科技硬件整链今天又是单日 -100 亿级别的失血，82 只跌停里大概率还是它们；不要在第一天反抽里抢反弹，等跌停数先收敛。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🧘 心法**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "恐慌里封住的板，值不了第二天的高开。钱躲进白酒，说明它这会儿不想打仗。"
+   }
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "📡 数据：选股宝涨停池 + 东财板块资金 + 腾讯行情 | 17:2x | AI 盘后复盘"
+    }
+   ]
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "⚠️ 本报告基于公开信息分析，投资需谨慎"
+    }
+   ]
+  }
+ ]
+}

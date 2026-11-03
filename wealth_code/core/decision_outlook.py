@@ -29,7 +29,12 @@ PROMO_OK = 30.0           # 晋级率 ≥30%（待命触发之一·心法纪律�
 GAP_PARTICIPATE = 5.0     # 竞价高开 ≤5% 才可参与（2026-09-14 用户「低于5%直接买」硬线·原 3.0 已废）
 GAP_ABANDON = 5.0         # 竞价高开 >5% 一律放弃
 STOP_LOSS_PCT = 3.0       # 止损 -3% 或破当日均价线（五日线=生命线）
-POSITION_MAX = 0.5        # 单票仓位上限 50%（2026-09-14 用户「买入仓位不超过 50%」·原 30%）
+# 单票仓位上限 50%（2026-09-14 用户「买入仓位不超过 50%」·原 30%）
+# ⛔ 单一源 = core/risk_limits.MAX_POSITION_PER_STOCK（此处仅转出，禁再写数字）
+try:  # noqa: E402
+    from wealth_code.core.risk_limits import MAX_POSITION_PER_STOCK as POSITION_MAX  # noqa: E402
+except ImportError:  # pragma: no cover
+    from core.risk_limits import MAX_POSITION_PER_STOCK as POSITION_MAX  # noqa: E402
 DRAWDOWN_FLOOR_AT = 25.0  # 回撤触底点（≥ → 压到最低乘数）
 DRAWDOWN_MIN_MULT = 0.15  # 最低乘数（⛔ 不归零）
 

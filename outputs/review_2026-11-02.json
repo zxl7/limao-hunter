@@ -1,0 +1,633 @@
+{
+ "title": "📝 盘后复盘 11-02 | 涨停铺到 125 只·接力只剩 11 只",
+ "color": "red",
+ "elements": [
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📉 ① 情绪演变 · 五日轨迹**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**情绪分**　<text_tag color='red'>▰▰▰▰▰▰▰▰▰▰</text_tag>　**10.0 / 10 · 亢奋**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**昨日 → 今日**　1.8（市场很冷）→ **10.0**，<text_tag color='red'>全天转好</text_tag>。一天之内从跌停 82 只走到涨停 125 只。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**五日轨迹**　1.8 → 5.3 → 1.0 → 1.8 → **10.0**　近 3 日均 4.27　（10-27→28→29→30→11-02）"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📊 ② 真实情绪总览**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**指数**　上证 3638.03 +1.08%（开 3614.31 / 低 3594.77 / 高 3648.13，先跌破昨收再一路拉起，收在次高）　深证 11010.68 +1.63%　创业板 2458.70 +1.87%　科创50 1196.94 +3.11%"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**情绪分**\n10.0 / 10 · 亢奋"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**涨停**\n125 只（昨 47）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**首板**\n114 只（91.2%）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**连板**\n11 只（昨 9）"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**最高板**\n5 → 6"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**晋级率**\n23.4%（门槛 20.2%）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**连板晋级**\n5 / 9（55.6%）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**昨涨停今均**\n+2.83%（66% 收红）"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**核按钮**\n0 只（昨 14）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**炸板**\n28 只 · 18.3%（昨 39.0%）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**跌停**\n8 只（昨 82）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**大面**\n7 只（昨 5）"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**广度**　涨 <text_tag color='red'>4412</text_tag> : 跌 <text_tag color='green'>795</text_tag>　成交 **1.78 万亿**（放量 1092 亿）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**上证五日线**　3643.65，收盘仍低 **5.62 点（-0.15%）**，连续第 3 日在下方——差一点没站上去"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🧠 ③ AI 综合判断**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**判断**　这不是新钱进场的普涨，是**钱从「低估值防御」整批搬到 AI 应用**。指数只涨 1.08%，涨停 125 只，成交却只多 6.5%——量没上来，是存量搬家。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**变**　昨天跌停 82 只、1.8 分；今天跌停 8 只、10 分。换的是口袋不是公司：低市盈率、近期新高、趋势股、银行在被卖，华为、人工智能、AI应用、AIGC、传媒在被买。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**含金量**　同样是满分，10-23 那天晋级率 36.4%，今天只有 23.4%（门槛 20.2%，刚过 3.2 点）。125 只里 114 只是首板，连板只剩 11 只——**分数是家数堆出来的，接力没跟上**。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**前例只有一次**　近 10 个交易日满分出现 2 次，上一次是 10-23，次日掉到 1.4、最高板 6 掉到 4。方向可参考，幅度不能照搬。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**赚 115 只**　人气接力 99（+11.62%）｜独走 10（+11.00%）｜新题材板块龙 4（+10.03%）｜前排龙头 2（+9.91%）\n**亏 16 只**　没人跟的小票 15（-2.60%）｜高位温和下杀 1（上海沪工 -1.42%）　净偏 **+99**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**三问**　赚＝AI 应用里一起封住的那一大批；亏＝昨天没人跟的小票在阴跌；**变了**＝昨天三条亏钱路今天只剩两条，高位被核 3→0、低位失败出货 11→0。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>风险</text_tag>　**A.** 91.2% 是首板，明天全市场要一起考「1 进 2」。今天封住的 114 只只要掉一批，亏钱效应当天就回来。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>风险</text_tag>　**B.** AI 线封单都薄：芒果超媒 0.48%、巨人网络 0.26%、捷成股份 0.43%、掌阅科技 0.57%。厚度在成交额上、不在封单上，靠的是当天冲进来的钱，不是锁住的筹。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>风险</text_tag>　**C.** 上证连续第 3 天在五日线下方（差 5.62 点）。指数没站上去，今天的热是结构性的，不是全面的。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>风险</text_tag>　**D.** 涨的是传媒软件这类轻资产方向，三季报在异动原因里出现 20 次，但主线不在业绩上——纯情绪驱动，隔夜的风险在情绪。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🔥 ⑤ 主线复盘**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='red'>⭐ 最强</text_tag>　**AI 应用 · 传媒**　50 只（影视传媒 29 + AI大模型 10 + 短剧影游 4 + 游戏出版广告）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· **芒果超媒**（11:25:48 封·封 1.30 亿·成交 19.66 亿）· **捷成股份**（13:46:06 封·成交 **22.06 亿全场第一**·炸 3 次）· **巨人网络**（11:05 封·封 1.03 亿·成交 14.11 亿）· **掌阅科技**（11:15 封·成交 13.82 亿）· **银之杰** 20cm（10:09 封·成交 17.93 亿）等"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· 催化：DeepSeek 重构 Agent、AI 应用加速落地。异动原因里 AI漫剧 8 次、AI短剧 8 次、AI应用 7 次、AIGC / AI影视 / AI营销 各 4 次——**今天唯一有名字的主线**。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "⚠️ 全是首板，一只连板都没有；封单占流通全在 0.26%~0.62%。这是靠成交额堆出来的方向，不是靠封单。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='blue'>🔹 次强</text_tag>　**大金融 · 券商＋金融 IT**　5 只"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· **太平洋**（09:50 封·封 1.35 亿·成交 12.29 亿）· **国金证券**（09:34 封·封 1.02 亿）· **恒生电子**（10:06 封·封 1.04 亿）· 银之杰 20cm · 赢时胜（13:33 封）\n· 催化：重磅会议接连召开、稳市工具或再加码"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "⚠️ 券商只封住 2 只，量没铺开——是「稳市预期」的姿势，还不是主升。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='blue'>🔹 持续</text_tag>　**大消费 · 白酒**　14 只｜昨天是唯一逆势方向，今天变成普涨里的跟涨"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· **青岛食品 6 板**（09:54:48 封·封 0.72 亿占 1.73%·换手 19.74%·没炸过板）· **东方海洋 3 板**（封 2.63 亿占 5.35%）· **皇台酒业 2 板**（封 1.60 亿）· 水井坊 · 金种子酒 · 合百集团 2 板 · 百大集团 · 国芳集团 · 广百股份 等"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**封单最实**\n阳光照明 3 板·封 5.64 亿占 9.39%"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**首板封单王**\n高争民爆·封 8.89 亿占 5.65%"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**20cm**\n17 只（含科创板 4 只不点名）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**机器人**\n16 只（归类偏宽·不当主线）"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**👑 ⑥.5 核心演化史**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**昨日核心 · 今日命运**"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**青岛食品** 昨 5 → 今 6 板\n封 0.72 亿·换手 19.74%·没炸板"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**澳洋健康** 昨 3 → 今 4 板\n封 0.71 亿·换手 25.05%·炸 2 次"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**上海沪工** 昨 3 板 → <text_tag color='green'>断板 -1.42%</text_tag>\n温和断·没摸板也没砸"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**阳光照明** 昨 2 → 今 3 板\n封 5.64 亿占 9.39%·全场最实"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**今日核心**　高度在 **青岛食品**（6 板·大消费），方向在 **AI 应用**（50 只涨停·成交前四全是它）。本月第三次高度与方向分家。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**走到哪步**　青岛食品 = 加速末期（6 板·没炸板·换手从 24.9% 回到 19.74%，但封单只占 1.73%）；AI 应用 = <text_tag color='red'>诞生第 1 日</text_tag>（50 只全首板）。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**明日推演**\n· **6 进 7**　青岛食品是唯一高度，今天没炸过板，但封单薄、换手不低\n· **1 进 2**　芒果超媒 / 捷成股份 / 巨人网络——成交额最大的那批还接不接\n· **断板反包**　上海沪工温和断，明天是反包还是接着杀\n· **4 进 5**　澳洋健康换手 25.05% 已经很高"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📊 ⑥ 轮动复盘**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**✅ 扩的**　影视传媒 0→29｜AI大模型 0→10｜短剧影游 0→4｜大金融 0→5｜一般零售 2→3｜白酒 4→3｜机器人 6→16（归类偏宽）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**❌ 缩的**　医药 8→5｜商业航天 3→2（只剩长江通信、高凌信息）｜半导体 4 只｜PCB 1→0"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**换仓判定**　算**换仓，也算换方向**——卖的是「便宜、创新高、趋势好」这些风格篮子（低市盈率 -28.6 / 近期新高 -26.2 / 趋势股 -23.1 / 低市净率 -22.3 / 银行Ⅱ -21.4 亿），买的是 AI 整条链。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**切换日判定**　<text_tag color='orange'>成立·但要打折</text_tag>——新方向 AI 应用是同日首日爆发（50 只），这一半够了；但旧高度青岛食品没断、还晋级到 6 板，另一半没满足。上证收复大半仍差 5.62 点，高度 5→6 是升的，催化是真的。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**💰 ⑦ 板块资金（14:58 收盘快照 · 亿）**"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>**华为概念**</text_tag>\n<text_tag color='red'>+86.0</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>**低市盈率**</text_tag>\n<text_tag color='green'>-28.6</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>**基金增仓**</text_tag>\n<text_tag color='red'>+69.1</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>**近期新高**</text_tag>\n<text_tag color='green'>-26.2</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>**人工智能**</text_tag>\n<text_tag color='red'>+67.7</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>**趋势股**</text_tag>\n<text_tag color='green'>-23.1</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>**AI应用**</text_tag>\n<text_tag color='red'>+64.3</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>**低市净率**</text_tag>\n<text_tag color='green'>-22.3</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>**传媒**</text_tag>\n<text_tag color='red'>+54.9</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>**银行Ⅱ**</text_tag>\n<text_tag color='green'>-21.4</text_tag>"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**一句话**　出的是「便宜、创新高、趋势好」这些风格篮子，进的是 AI 整条链——**今天不是加钱，是把旧仓搬过来**。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📎 ⑨ 明日展望与延续观察**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**看点**\n① 114 只首板明天能有一批晋级吗——这是唯一能把满分变成行情的路\n② AI 应用能不能出高度（今天 50 只全是首板，最高 1 板）\n③ 上证能不能收回五日线 3643.65（差 5.62 点，第 3 天在下方）\n④ 青岛食品 6 进 7（唯一高度票）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**接力还差什么**　晋级率 23.4%，刚过 20.2% 的门槛 3.2 点。要站稳 30% 以上，连板才敢说接上了——今天连板只有 11 只，是这轮满分的短板。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**· 股性**　历史上爱涨停、连板能晋级的老面孔，明天看谁继续扛：\n龙版传媒 涨停 11 次·最长 6 板｜国芳集团 10 次·最长 5 板｜澳洋健康 11 次·最长 4 板｜襄阳轴承 8 次·最长 5 板\n百大集团 8 次·最长 5 板｜掌阅科技 8 次·最长 2 板｜华阳国际 7 次·最长 2 板｜青岛食品 6 次·最长 6 板"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>风险</text_tag>　满分之后最贵的错误是「补涨思维」——明天去接今天排在后面、既没成交额也没封单的票，比不接更糟。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🧘 心法**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "高潮不追一致，分歧回封才有性价比。今天 91% 是首板，明天考的是谁能在分歧里重新封住，不是谁今天涨停。"
+   }
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "📡 数据：选股宝涨停池 + 东财板块资金 + 腾讯行情 ｜ 17:2x ｜ AI 盘后复盘"
+    }
+   ]
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "注：板块资金当日连续归档缺失，仅用收盘快照；科创板 4 只涨停按纪律不点名"
+    }
+   ]
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "⚠️ 本报告基于公开信息分析，投资需谨慎"
+    }
+   ]
+  }
+ ]
+}

@@ -11,7 +11,12 @@ from copy import deepcopy
 from datetime import date, timedelta
 from pathlib import Path
 
+from core import dragon_confirm as _dc      # 龙头资格认定（2026-10-21 P2·纯计算）
+
 ENABLE_STATUS_PRIORITY = True
+# 🐉 龙头资格认定（2026-10-21 P2）：把五维确认与两把尺合成结论写进 `dragon_confirm`。
+# ⛔ False 时逐字回到旧行为（`annotate` 不产出该字段）。
+ENABLE_DRAGON_CONFIRM = True
 ROLE_ORDER = {"龙头": 3, "准龙头": 2, "跟风": 1}
 HIGH_BOARD_MIN = 5
 HISTORY_DAYS = 30
@@ -394,6 +399,26 @@ def annotate(rows, history, asof, catalysts=(), *, continuity_by_boards=False):
                                   "succession": links, "dimensions": dimensions,
                                   "confirmation": "confirmed" if confirmed else "pending",
                                   "note": "；".join(notes)}
+        # 🐉 龙头资格认定（2026-10-21 P2）：把五维确认与 92科比 两把尺（时间越走越早 /
+        #   爆量检验）合成一个结论 + 逐项证据 + 一句人话。
+        #   ⛔ 只写 `dragon_confirm` 字段与叙述，**不改上面的 role 判定**——
+        #      用户 2026-09-24 已拍板「地位优先 + 五维确认」是资格唯一判据，
+        #      两把尺只作叙述层（详情见 dragon_confirm 模块注释）。
+        if ENABLE_DRAGON_CONFIRM:
+            try:
+                _dc_res = _dc.confirm(row, _dc.series_of(days, code, asof))
+                row["dragon_confirm"] = _dc_res
+                # ⛔ 只升不降（2026-10-21）：认定结论为「龙头」但上面 role 仍是准龙头时，
+                #    必须同步升级——否则会出现「卡面写龙头、排序按准龙头」的双标，
+                #    读者和系统各说一套（海洋王 10-20 实测即此：五维只差催化，认定龙头，
+                #    但 role 停在准龙头）。
+                #    反向**绝不降级**：认定说准龙头而 role 是龙头时保持原样，
+                #    因为「五维已确认过就受用户 2026-09-24 拍板保护」。
+                if _dc_res.get("identity_role") == "龙头" and role != "龙头":
+                    row["leader_role"] = "龙头"
+            except Exception:
+                row["dragon_confirm"] = {"enabled": False, "level": "", "label": "",
+                                         "checks": [], "narrative": ""}
     return events
 
 

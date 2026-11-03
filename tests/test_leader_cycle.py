@@ -98,7 +98,8 @@ def test_five_dimensions_competition_follow_and_news_boundary():
     assert lc.five_dimensions(r, hist, "2026-09-22", news)["catalyst"]["status"] != "sustained_verified"
 
 
-def test_five_dimensions_recovery_and_launch_no_future():
+def test_five_dimensions_recovery_and_launch_no_future(monkeypatch):
+    from core import dragon_confirm as _dc
     r = stock("000001", 4, "准龙头", 3)
     hist = [day("2026-09-16", [stock("000099", theme="机器人")]),
             day("2026-09-17", [stock("000099", theme="机器人")]),
@@ -111,8 +112,17 @@ def test_five_dimensions_recovery_and_launch_no_future():
     assert ev["divergence"]["status"] == "recovery_with_carry"
     early = lc.five_dimensions(r, hist, "2026-09-22")
     assert early["divergence"]["status"] == "held_during_contraction"
+    # ⛔ 替代路径关闭时保持原文语义：缺催化不能确认（这是本条测试的本意）
+    monkeypatch.setenv(_dc.ALLOW_NO_CATALYST_ENV, "0")
     lc.annotate([r], hist, "2026-09-23")
     assert r["leader_role"] == "准龙头"  # 缺催化不能确认
+    # 2026-10-21 用户拍板 A：替代路径开启后，只差催化也能确认（数据缺口补偿）
+    monkeypatch.delenv(_dc.ALLOW_NO_CATALYST_ENV, raising=False)
+    r.pop("dragon_confirm", None)
+    r["leader_role"] = "准龙头"
+    lc.annotate([r], hist, "2026-09-23")
+    assert r["leader_role"] == "龙头"          # A 方案：只差催化 → 也算确认
+    assert "催化这一项目前拿不到证据" in (r["dragon_confirm"]["narrative"] or "")
     news = [{"date": d, "title": title, "stocks": ["000001"], "kind": "policy",
              "verified": True, "source": "test_fixture"} for d, title in
             [("2026-09-22", "事件一"), ("2026-09-23", "事件二")]]

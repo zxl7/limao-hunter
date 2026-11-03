@@ -124,6 +124,32 @@ def test_qualified_becomes_participate():
     assert "+3.00%" in v["reason"]
 
 
+def test_lowboard_standalone_without_red_open_is_watch(monkeypatch):
+    """低板独苗在同题材报价全不红时，即使位于 watch 仍不可被 09:25 直接买入。"""
+    monkeypatch.setenv("THEME_LINKAGE_CANDIDATE_MODE", "soft")
+    lone = _cand("000001", "独苗", boards=1, need=1.0)
+    lone.update({"core_theme": "机器人", "theme_name": "机器人",
+                 "theme_pool_zt_count": 1, "theme_mates": ["000002"]})
+    mate = _q(10.0, 0.0, amt=5.0)
+    res = pool_call.call_pool({"relay": [], "watch": [lone]},
+                              {"000001": _q(10.0, 3.0, amt=5.0), "000002": mate})
+    v = res["views"]["000001"]
+    assert v["view"] == "watch"
+    assert v["linkage_gate"] is True
+    assert "昨日同题材仅本股涨停" in v["reason"]
+
+
+def test_lowboard_standalone_missing_mate_quote_is_not_assumed_weak(monkeypatch):
+    """同题材竞价缺失是数据不足，不应被伪判为“板块没人跟”。"""
+    monkeypatch.setenv("THEME_LINKAGE_CANDIDATE_MODE", "soft")
+    lone = _cand("000001", "独苗", boards=1, need=1.0)
+    lone.update({"core_theme": "机器人", "theme_name": "机器人",
+                 "theme_pool_zt_count": 1, "theme_mates": ["000002"]})
+    res = pool_call.call_pool({"relay": [], "watch": [lone]},
+                              {"000001": _q(10.0, 3.0, amt=5.0)})
+    assert res["views"]["000001"]["view"] == "participate"
+
+
 # ── 2) 名额 ───────────────────────────────────────────────────────────
 def _pool_of(n, start=1):
     return [f"{start + i:06d}" for i in range(n)]
@@ -182,8 +208,14 @@ def test_mech_leader_normal_ranks_with_focus_not_below_it():
     assert winner["view"] == "participate" and winner["quota_rank"] == 1
     assert winner["bias"] == "normal", "融合只改09:25排序，不能篡改盘后预案"
     assert winner["mechanical_leader"] is True
-    assert "接力池第1" in (winner["mechanical_leader_note"] or "")
-    assert "机械强龙" in winner["reason"]
+    # ⚠️ 2026-10-21：「接力池第1」是内部排序术语，已从卡面文案剔除；
+    #    note 现在只讲事实（几点封板·带动几家）。`mechanical_leader` 标志本身不变。
+    _note = winner["mechanical_leader_note"] or ""
+    assert "封板" in _note and "接力池" not in _note
+    # ⚠️ 2026-10-21：「机械强龙」「同档优先」是内部排序术语，已从卡面文案剔除 →
+    #    reason 现在只带事实（封板时间 + 带动家数）。融合是否生效由
+    #    `mechanical_leader` 标志与 `quota_rank` 决定，⛔ 不靠这段文案判定。
+    assert "封板" in winner["reason"] and "机械强龙" not in winner["reason"]
     assert res["views"]["000002"]["view"] == "watch"
 
 
@@ -297,14 +329,22 @@ def test_follower_gate_off_restores_old_behaviour(monkeypatch):
 
 
 def test_follower_gate_does_not_fire_when_core_still_in_board():
-    """核心仍在板（未断板）→ 不硬拦，靠排序表达（避免误杀 2 进 3 倾斜）。"""
+    """核心仍在板（未断板）→ **跟风闸**不拦，靠排序表达（避免误杀 2 进 3 倾斜）。
+
+    ⚠️ 2026-10-21 分层变化：这只票虽然过了跟风闸，但被**后排接力闸**拦下——核心 6 板今天
+    还在板、想买就买核心，买 4 板的它＝「有前排却买小弟」，正是 92科比「往前排核心选」要治的。
+    ⛔ 两道闸语义不同，断言也分开：`follower_gate` 不置位、`backrow_gate` 置位。
+    """
     cores = {"绿电": {"code": "000993", "name": "闽东电力", "boards": 6,
                       "last_date": "2026-09-18", "last_boards": 6, "broken": False}}
     cands = {"relay": [_cand("603248", "锡华科技", boards=4, sector="风电设备")],
              "watch": []}
     res = pool_call.call_pool(cands, {"603248": _q(10.0, 4.5, amt=5.0)},
                               plan=_plan({}, stance="defend"), line_cores=cores)
-    assert res["views"]["603248"]["view"] == "participate"
+    v = res["views"]["603248"]
+    assert not v.get("follower_gate")
+    assert v.get("backrow_gate") is True and v["view"] == "watch"
+    assert "闽东电力" in v["reason"] and "前排" in v["reason"]
 
 
 # ── 6) 向后兼容 ───────────────────────────────────────────────────────

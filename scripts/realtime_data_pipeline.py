@@ -25,6 +25,12 @@ STEPS = (
     ("intraday_pulse", ("scripts/intraday_pulse.py", "--mode", "intra", "--json-only", "--force"), "intraday.log"),
     ("gen_candidates", ("scripts/gen_candidates.py",), "candidates.log"),
     ("feedback_matrix", ("scripts/feedback_matrix.py",), "feedback.log"),
+    # 卖出侧峰值采集：只记录封单/板块家数的当日峰值，不参与就绪判据、不发卡、不裁决。
+    # 必须排在 feedback 后，封单仅存在于 feedback.quotes。
+    ("intraday_exit_peaks", ("scripts/intraday_exit_peaks.py",), "exit_peaks.log"),
+    # 赚钱/亏钱路径归因（EffectEngine §3.1b）：依赖上一行 feedback.quotes，必须排在其后。
+    # ⛔ 旁路观测，不进 _compute_ready 的 required 集合，失败不影响数据就绪。
+    ("effect_paths", ("scripts/effect_paths.py",), "effect_paths.log"),
     ("ma5_check", ("scripts/ma5_check.py",), "ma5.log"),
     ("memory_detect", ("scripts/memory_lib.py", "detect"), "detect.log"),
     ("intraday_timeline", ("scripts/intraday_timeline.py",), "timeline.log"),
@@ -62,7 +68,27 @@ def _write_ready(value: dict) -> None:
     os.replace(tmp, READY)
 
 
-def _compute_ready(*, results: dict, feedback_error, rotation_date) -> tuple[bool, str]:
+def _consistency_error(*, latest: dict, feedback: dict, zt_history: dict) -> str | None:
+    """校验同一交易日的涨停池计数，阻止不同来源静默混用。"""
+    if not latest or not feedback or not zt_history:
+        return None
+    # 盘前/接口异常标记没有今日涨停集合，不能拿空字段与上一交易日归档对账。
+    if feedback.get("error"):
+        return None
+    dates = {str(x.get("date") or "")[:10] for x in (feedback, zt_history) if x}
+    source_ts = str(latest.get("ts") or "")[:10]
+    if len(dates) == 1 and source_ts and source_ts not in dates:
+        return f"日期不一致 latest={source_ts}, feedback/zt={next(iter(dates))}"
+    code_count = len(feedback.get("today_zt_codes") or [])
+    feedback_count = feedback.get("now_zt_count")
+    zt_count = zt_history.get("zt_count")
+    counts = {int(x) for x in (feedback_count, zt_count, code_count) if isinstance(x, (int, float))}
+    if len(counts) > 1:
+        return f"涨停计数不一致 feedback={feedback_count}, codes={code_count}, zt_history={zt_count}"
+    return None
+
+
+def _compute_ready(*, results: dict, feedback_error, rotation_date, consistency_error=None) -> tuple[bool, str]:
     """计算数据是否就绪（纯函数，便于回归测试）。
 
     ⛔ 2026-10-08 修复前：`same_source` 拿 `rotation.source_ts` 与每 30s 刷新的
@@ -82,7 +108,8 @@ def _compute_ready(*, results: dict, feedback_error, rotation_date) -> tuple[boo
     )
     same_source = bool(rotation_date == datetime.now().strftime("%Y-%m-%d"))
     feedback_ok = not (feedback_error and feedback_error != "pre_auction")
-    ready = bool(required_ok and same_source and feedback_ok)
+    consistency_ok = not consistency_error
+    ready = bool(required_ok and same_source and feedback_ok and consistency_ok)
     if ready:
         reason = ""
     elif not required_ok:
@@ -91,6 +118,8 @@ def _compute_ready(*, results: dict, feedback_error, rotation_date) -> tuple[boo
         reason = f"题材轮动引擎今日快照缺失(date={rotation_date})"
     elif not feedback_ok:
         reason = f"反馈矩阵报错：{feedback_error}"
+    elif not consistency_ok:
+        reason = f"实时数据口径不一致：{consistency_error}"
     else:
         reason = "关键实时数据未完成"
     return ready, reason
@@ -111,10 +140,17 @@ def main() -> None:
     feedback = _json(CACHE / "feedback_matrix.json")
     rotation = _json(CACHE / "theme_rotation.json")
     source_ts = latest.get("ts")
+    zt_history = _json(CACHE / "zt_history" / f"zt_{str(source_ts or '')[:10]}.json")
+    consistency_error = _consistency_error(
+        latest=latest,
+        feedback=feedback,
+        zt_history=zt_history,
+    )
     ready, reason = _compute_ready(
         results=results,
         feedback_error=feedback.get("error"),
         rotation_date=rotation.get("date"),
+        consistency_error=consistency_error,
     )
     # 推送只认这份标记；任一步关键计算失败，保留原因而不把旧数据当作新数据推送。
     _write_ready({

@@ -153,7 +153,7 @@ def _cand_fields_of(decision_date: str, code: str) -> dict:
         d = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    for k in ("relay", "watch"):
+    for k in ("relay", "watch", "low_pool"):
         for it in (d.get(k) or []):
             if str(it.get("code") or "") == str(code):
                 exp = it.get("expectation") or {}
@@ -205,7 +205,7 @@ def _cand_stock_of(decision_date: str, code: str) -> dict:
         d = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    for bucket in ("relay", "watch"):
+    for bucket in ("relay", "watch", "low_pool"):
         for it in (d.get(bucket) or []):
             if str(it.get("code") or "") == str(code):
                 return {**it, "_bucket": bucket}
@@ -352,12 +352,18 @@ def _next_trade_day(date10: str) -> str:
 
 
 def _write_ai_view(trade_date: str, decision_date: str, views: dict,
-                   meta: dict | None = None) -> Path:
+                   meta: dict | None = None, *, replace: bool = False) -> Path:
     """写 AI 判断视图（合并进竞价验证·build_verify_card 消费）。
 
     meta（2026-09-11 用户「竞价卡要告诉我今天买什么」）：stance/stance_label/direction/note
     → 竞价卡顶部「🤖 AI 今日买入计划」段的定调与方向；缺省则只渲染逐票 AI 判断行。
     幂等：同 trade_date 重复写按 code 合并（后写覆盖同 code），不丢已有 views。
+
+    `replace=True`（2026-10-27 补·治幽灵票）：**不合并、整体以本次为准**。
+      踩坑实证：同日因池子规则修正重跑了一次决策（5 只 → 4 只），合并逻辑把上一版
+      已被踢出池的 襄阳轴承/文投控股/国芳集团 留在 `views` 里，次日竞价卡会显示
+      「这三只要买」——而它们根本不在候选池，属于凭空多出来的决策。
+      ⛔ 默认仍合并（兼容多次分批写入），只在显式传 `--replace` 时覆盖。
     """
     p = AI_VIEW_DIR / f"ai_view_{trade_date}.json"
     prev: dict = {}
@@ -366,7 +372,12 @@ def _write_ai_view(trade_date: str, decision_date: str, views: dict,
     except Exception:
         prev = {}
     p.parent.mkdir(parents=True, exist_ok=True)
-    merged_views = dict(prev.get("views") or {})
+    merged_views = {} if replace else dict(prev.get("views") or {})
+    if not replace:
+        _ghosts = sorted(set(merged_views) - set(views))
+        if _ghosts:
+            print(f"[ai_ledger] ⚠️ 视图里还有 {len(_ghosts)} 只上一版遗留（{','.join(_ghosts)}）；"
+                  f"若本次是同日整体重判，请带 --replace 覆盖", file=sys.stderr)
     merged_views.update(views)
     out = {k: v for k, v in prev.items() if k not in ("views", "date", "decision_date", "ts")}
     out.update({
@@ -566,7 +577,8 @@ def cmd_record(args) -> int:
 
     if view_map:
         meta.setdefault("entry_max_gap", DEFAULT_ENTRY_MAX_GAP)
-        p = _write_ai_view(trade_date, ddate, view_map, meta=meta)
+        p = _write_ai_view(trade_date, ddate, view_map, meta=meta,
+                           replace=bool(getattr(args, "replace", False)))
         print(f"[ai_ledger] 🤖 AI 判断视图已写 {p}（{len(view_map)} 只·供竞价验证卡渲染"
               f"{'·含今日买入计划' if meta.get('stance_label') or meta.get('note') else ''}）")
     print(f"[ai_ledger] 记录 {n} 条 AI 决策 → {DECISIONS.name}")
@@ -747,11 +759,38 @@ def cmd_compare(args) -> int:
     return 0
 
 
+def cmd_research_input(args) -> int:
+    """操盘手只读研究输入；读取冻结候选字段，不运行record/settle。"""
+    from datetime import date as _date
+    decision_date = _date.fromisoformat(args.decision_date).isoformat()
+    payload = json.loads((CACHE / f"candidates-{decision_date}.json").read_text(encoding="utf-8"))
+    picks = []
+    for pool in ("relay", "watch"):
+        for candidate in payload.get(pool, []):
+            evidence = candidate.get("rsi_evidence")
+            valid = (isinstance(evidence, dict) and evidence.get("schema") == "rsi_evidence_v1"
+                     and evidence.get("code") == candidate.get("code")
+                     and evidence.get("asof") == decision_date)
+            picks.append({"pool": pool, "candidate": candidate,
+                          "rsi_input_status": evidence.get("quality") if valid else "unavailable",
+                          "rsi_evidence": evidence if valid else None})
+    print(json.dumps({"schema": "operator_research_input_v1", "decision_date": decision_date,
+                      "usage": "research_only", "environment": payload.get("environment"),
+                      "picks": picks}, ensure_ascii=False, allow_nan=False))
+    return 0
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="AI 判断平行台账")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    research = sub.add_parser("research-input", help="只读导出操盘手候选及RSI研究输入")
+    research.add_argument("--decision-date", required=True)
+    research.set_defaults(func=cmd_research_input)
     r = sub.add_parser("record"); r.add_argument("--decision-date"); r.add_argument("--file", required=True)
     r.add_argument("--trade-date", help="执行日（默认=decision_date 次一交易日）")
+    # 2026-10-27：同日整体重判时用（池子规则改动后重跑），不留下上一版的幽灵票。
+    r.add_argument("--replace", action="store_true",
+                   help="整卡覆盖 AI 判断视图（不合并上一版 views）·同日重判用")
     r.set_defaults(func=cmd_record)
     s = sub.add_parser("settle"); s.add_argument("--trade-date", required=True); s.set_defaults(func=cmd_settle)
     st = sub.add_parser("status"); st.set_defaults(func=cmd_status)

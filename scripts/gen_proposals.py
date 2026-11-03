@@ -33,6 +33,7 @@ gen_proposals.py — skill 更新提案生成器（财神-回测 skill · 2026-0
 """
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -46,6 +47,13 @@ LATEST_FILE = CACHE / "learning_proposals_latest.json"
 BJ_TZ = timezone(timedelta(hours=8))
 # 候选池目录（与 backtest_engine.py WC_CACHE 口径一致）
 WC_CACHE = ROOT / "wealth_code" / "cache"
+
+# ⛔ 2026-10-27 开关：P3（区间命中率）提案产线默认关闭。
+#   理由：R1/R4 已于 2026-09-18 冻结（range_hit 与赚钱无因果，仅描述量），
+#   且 2026-10-18 用户拍板「命中率不得作对错判据」。但产线仍在跑，
+#   09-01→10-26 空堆 34 条（33 approved + 1 applied），标题还写「已自动回写」——
+#   与实际（一次都没回写）不符。此开关置 True 可恢复旧行为（无需改代码）。
+ENABLE_P3_RANGE_PROPOSAL = os.environ.get("ENABLE_P3_RANGE_PROPOSAL", "0") == "1"
 
 # 提案 → 目标 skill 映射（只读，不自动写）
 PROPOSAL_SKILL_MAP = {
@@ -119,10 +127,38 @@ def _mk_proposal(rule: str, title: str, evidence: str, suggest: str) -> dict:
     }
 
 
+def _is_vacuous_day(row: dict) -> bool:
+    """当日「零参与」= 正常业务，不算数据缺口（2026-10-27 新增）。
+
+    与 backtest_engine._vacuous_reason 同口径：只认 `pool_call.participate`
+    **存在且为空列表**；字段缺失（老版本）或非列表 → 不算真空仓，落回原判。
+    """
+    settle = str(row.get("settle_date") or "")
+    if not settle:
+        return False
+    p = WC_CACHE / f"pool_call-{settle}.json"
+    if not p.exists():
+        return False
+    try:
+        j = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    meta = j.get("meta") or {}
+    part = meta.get("participate")
+    if part is None:
+        part = j.get("participate")
+    return isinstance(part, list) and len(part) == 0
+
+
 def _is_real_gap(row: dict) -> bool:
-    """单日是否为「真数据缺口」（P4 用）——2026-09-07 误报修复：
-    candidate_hit 不可用须区分：relay 空池（冰点无 buy 候选→nav 不写账）是正常业务，不算缺口；
-    候选文件缺失 / relay 有票却无 nav 结算 / 竞价快照缺失 才是链路缺口。
+    """单日是否为「真数据缺口」（P4 用）。
+
+    2026-09-07 修复：relay 空池（冰点无 buy 候选→nav 不写账）是正常业务，不算缺口。
+    2026-10-27 修复（第二次误报）：`pool_call.participate=[]` 的**零参与日**同样正常
+    ——当日满仓防守/买不进，一笔没成交，nav 本来就没有账可写。旧实现只看
+    「relay 有票」，于是把「有候选但决定不开仓」全线判成链路断，P4 天天假阳性。
+    判据顺序：竞价快照缺失 → 真缺口；有结算 → 非缺口；零参与 → 非缺口；
+    候选文件缺失 → 真缺口；relay 空池 → 非缺口；其余（有票无结算）→ 真缺口。
     """
     m = row.get("metrics", {})
     # 竞价快照缺失 = 真缺口（range_hit 评估 watch 池，与 relay 空无关）
@@ -130,6 +166,9 @@ def _is_real_gap(row: dict) -> bool:
         return True
     ch = m.get("candidate_hit", {})
     if ch.get("available"):
+        return False
+    # 零参与（真空仓）= 正常业务，不是缺口
+    if _is_vacuous_day(row):
         return False
     # candidate_hit 不可用 → 看当日候选池
     rec_date = str(row.get("rec_date") or "")
@@ -188,28 +227,31 @@ def gen_proposals() -> list[dict]:
             if not any(e.get("proposal_id") == np_["proposal_id"] for e in existing):
                 new_proposals.append(np_)
 
-    # P3 区间命中率低（标注已自动回写）
+    # P3 区间命中率低 —— ⛔ 2026-10-27 起默认停用（见文件头 ENABLE_P3_RANGE_PROPOSAL）。
+    #    理由：R1/R4 已 09-18 冻结、10-18 拍板「命中率不得作对错判据」，
+    #    但产线空堆 34 条且标题写「已自动回写」（实际一次都没回写）。
+    #    区间落区在回测卡上照常显示「评估 N 只｜N 只落在区间内」，只是不再生成提案。
     range_rates = [r["summary"].get("range_hit_rate") for r in hist
                    if r["metrics"]["range_hit"].get("available")]
-    if range_rates and sum(range_rates) / len(range_rates) < 40:
+    if ENABLE_P3_RANGE_PROPOSAL and range_rates and sum(range_rates) / len(range_rates) < 40:
         avg = sum(range_rates) / len(range_rates)
         np_ = _mk_proposal(
             "P3_range_low",
-            f"区间命中率低（均值 {avg:.0f}%）·已自动回写",
-            f"近{len(range_rates)}日区间命中率均值 {avg:.1f}%",
-            "R1 规则已自动回写 expectation_rules.json base_range，无需人工；如需深度核查可审阅竞价预期引擎。",
+            f"区间落区均值 {avg:.0f}%（仅描述量，非判据）",
+            f"近{len(range_rates)}日落区均值 {avg:.1f}%",
+            "区间落区仅作描述量（R1/R4 已冻结·10-18 拍板不得作对错判据）。如需深度核查可审阅竞价预期引擎。",
         )
-        np_["status"] = "approved"  # R1 已处理，提案直接标 approved 供周报展示
+        np_["status"] = "draft"  # ⛔ 不再自动 approved：本规则无任何自动回写动作，不得冒充已处理
         if not any(e.get("proposal_id") == np_["proposal_id"] for e in existing):
             new_proposals.append(np_)
 
-    # P4 数据缺口（连续 3 日「真缺口」；relay 空池不算——09-07 误报修复）
+    # P4 数据缺口（连续 3 日「真缺口」；relay 空池 / 池内零参与都不算——09-07、10-27 两次误报修复）
     gap_days = [r for r in hist if _is_real_gap(r)]
     if len(gap_days) >= 3:
         np_ = _mk_proposal(
             "P4_data_gap",
             "回测数据连续缺口",
-            f"近{len(hist)}日中 {len(gap_days)} 日存在真数据缺口（候选文件缺失/relay 有票无结算/竞价快照缺失）",
+            f"近{len(hist)}日中 {len(gap_days)} 日存在真数据缺口（候选文件缺失/有候选无结算/竞价快照缺失；零参与日已排除）",
             "数据链路补漏：检查 candidates/auction_quotes/nav 落盘是否中断，建议中枢体检关注。",
         )
         if not any(e.get("proposal_id") == np_["proposal_id"] for e in existing):

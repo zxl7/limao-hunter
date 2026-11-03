@@ -35,6 +35,11 @@ HISTORY_FILE = CACHE / "backtest_history.jsonl"
 SUGGEST_FILE = CACHE / "learning_suggestions.json"
 BJ_TZ = timezone(timedelta(hours=8))
 
+# ⛔ 2026-10-18 用户拍板：个股/区间的「命中率」是动态描述量，
+#    高低不构成对错判据 → 卡面只报事实（几只落区），不报比率红绿判定、不列偏离 Top3。
+#    置 True 可恢复「区间命中率 + 偏离 Top3」的旧观感（数据本身一直留在 backtest_report JSON 里，未删）。
+RANGE_HIT_VERDICT = False
+
 # 语义色板（A股：改善红/恶化绿；本卡是数据诊断卡，命中率高低=质量好坏）
 RED = "red"
 GREEN = "green"
@@ -133,10 +138,15 @@ def render_daily(report: dict, suggestions: list[dict]) -> dict:
     a_txt = f"{a['hit_rate']}%" if a.get("hit_rate") is not None else "—"
     b_txt = f"{b['hit_rate']}%" if b.get("hit_rate") is not None else "—"
     c_txt = f"{c['diff']:+.1f}" if c.get("diff") is not None else "—"
+    if RANGE_HIT_VERDICT:
+        b_seg = f"｜区间命中 {_tag(b_txt, rate_color(b.get('hit_rate')))}"
+    else:
+        b_seg = (f"｜区间落区 {b.get('hit_count')}/{b.get('evaluable')}"
+                 if b.get("available") and b.get("evaluable") else "｜区间落区 —")
     el.append(_div(
         f"**📊 推测回测 {settle[5:]}** ｜ 推荐日 {rec[5:]} 结算\n"
         f"候选命中 {_tag(a_txt, rate_color(a.get('hit_rate')))}"
-        f"｜区间命中 {_tag(b_txt, rate_color(b.get('hit_rate')))}"
+        f"{b_seg}"
         f"｜情绪差 {_tag(c_txt, RED if (c.get('diff') or 0) > 1 else (GREEN if (c.get('diff') or 0) < -1 else NEUTRAL))}"
     ))
     el.append(_hr())
@@ -159,25 +169,28 @@ def render_daily(report: dict, suggestions: list[dict]) -> dict:
         el.append(_div(f"⛔ {a.get('reason', '无数据')}"))
     el.append(_hr())
 
-    # 区间命中明细
-    el.append(_div(f"**🎯 预期区间命中**（竞价涨幅 vs 预期区间）"))
+    # 预期区间（只报落区只数，不做命中率判决）
+    el.append(_div(f"**🎯 预期区间**（竞价涨幅 vs 预期区间）"))
     if b.get("available"):
         if b.get("evaluable"):
-            el.append(_div(
-                f"评估 {b.get('evaluable')} 只 ｜ 命中 {b.get('hit_count')} 只"
-                f"（命中率 {_tag(str(b['hit_rate'])+'%', rate_color(b.get('hit_rate')))}）"
-            ))
-            # 展示未命中 Top3（最偏离的）
-            rows = b.get("rows", [])
-            if rows:
-                misses = [r for r in rows if not r["hit"]]
-                misses.sort(key=lambda r: abs(r["actual_gap_pct"] - (r["expected_range"][0] + r["expected_range"][1]) / 2), reverse=True)
-                for r in misses[:3]:
-                    er = r["expected_range"]
-                    el.append(_div(
-                        f"{_tag(r['name'], PURPLE)} 预期 {er[0]:+.1f}~{er[1]:+.1f}%"
-                        f" ｜ 实际 {r['actual_gap_pct']:+.2f}% {_tag('偏离', GREEN)}"
-                    ))
+            if RANGE_HIT_VERDICT:
+                el.append(_div(
+                    f"评估 {b.get('evaluable')} 只 ｜ 命中 {b.get('hit_count')} 只"
+                    f"（命中率 {_tag(str(b['hit_rate'])+'%', rate_color(b.get('hit_rate')))}）"
+                ))
+                # 展示未命中 Top3（最偏离的）
+                rows = b.get("rows", [])
+                if rows:
+                    misses = [r for r in rows if not r["hit"]]
+                    misses.sort(key=lambda r: abs(r["actual_gap_pct"] - (r["expected_range"][0] + r["expected_range"][1]) / 2), reverse=True)
+                    for r in misses[:3]:
+                        er = r["expected_range"]
+                        el.append(_div(
+                            f"{_tag(r['name'], PURPLE)} 预期 {er[0]:+.1f}~{er[1]:+.1f}%"
+                            f" ｜ 实际 {r['actual_gap_pct']:+.2f}% {_tag('偏离', GREEN)}"
+                        ))
+            else:
+                el.append(_div(f"评估 {b.get('evaluable')} 只 ｜ {b.get('hit_count')} 只落在区间内"))
         else:
             el.append(_div(f"⛔ {b.get('reason', '无评估数据')}"))
     else:

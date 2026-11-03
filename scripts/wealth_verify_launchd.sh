@@ -12,6 +12,11 @@
 #       并恢复平台自动化 prompt（原 verify --push 版本）。
 # ============================================================
 set -u
+# ⛔⛔ 变量引用一律写 `${VAR}`，⛔ 不许写 `$VAR` 紧跟中文标点（，）（）。
+#   事故（2026-10-22 09:26）：第 69 行 `$NARR_DAY，平台任务…` 在脚本运行环境下
+#   bash 把全角逗号的首字节 0xEF 并进了变量名 → `NARR_DAY<?>: unbound variable`
+#   → `set -u` 直接终止脚本。当时正好命中「旁白文件陈旧」分支，脚本在推卡前一刻崩掉，
+#   只因另有链路兜底才没缺卡。⛔ 这类 bug 只在特定分支触发，平时看不出来。
 ROOT=/Users/zxl/WorkBuddy/狸猫猎手
 PY=/Users/zxl/.workbuddy/binaries/python/versions/3.13.12/bin/python3
 LOG=$ROOT/cache/wealth_verify_launchd.log
@@ -32,7 +37,7 @@ log "launchd 触发，等待竞价报价落地（09:26:05）..."
 # 仅交易日（周一~周五）执行；周末直接退出（launchd StartCalendarInterval 无 BYDAY 过滤）
 DOW=$(TZ=Asia/Shanghai date '+%u')  # 1=周一 ... 7=周日
 if [ "$DOW" -ge 6 ]; then
-    log "非工作日（周$DOW），跳过（避免周末写脏数据）"
+    log "非工作日（周${DOW}），跳过（避免周末写脏数据）"
     exit 0
 fi
 
@@ -64,9 +69,9 @@ PUSH_ARGS="--fetch --push"
 NARR_DAY=$(TZ=Asia/Shanghai date '+%Y-%m-%d')
 if [ -f "$NARR" ] && [ "$(TZ=Asia/Shanghai date -r "$NARR" '+%Y-%m-%d' 2>/dev/null)" = "$NARR_DAY" ]; then
     PUSH_ARGS="$PUSH_ARGS --narratives $NARR"
-    log "使用 AI 旁白 $NARR（今日 $NARR_DAY）"
+    log "使用 AI 旁白 ${NARR}（今日 ${NARR_DAY}）"
 elif [ -f "$NARR" ]; then
-    log "⚠️ 旁白文件陈旧（mtime 非今日 $NARR_DAY，平台任务未及时写入）→ 弃用，无旁白推卡"
+    log "⚠️ 旁白文件陈旧（mtime 非今日 ${NARR_DAY}，平台任务未及时写入）→ 弃用，无旁白推卡"
 else
     log "旁白文件缺失（平台自动化未生成），无旁白推卡"
 fi

@@ -20,13 +20,13 @@ watch_rank/expectation/{gap/super/amount}/tags
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
-from core.leader import (
-    _build_theme_stats,
+from core.leader import (    _build_theme_stats,
     _quantile,
     _theme_priority,
     _time_hhmmss_to_sec,
@@ -44,6 +44,9 @@ from adapters.daily_verdict import digest_daily_verdict, match_candidate
 from core.expectation_ai import build_ai_expectation
 from core.dimension_score import build_dimension_panel
 from core.quant_score import select_relay_watch
+from core import pool_admit                     # 源头准入闸（2026-10-21 用户「后排的票不要推到这里面来」）
+from core import zt_gene as _zt_gene            # 股性判据单一真源（2026-10-22 与卡面共用）
+from core import defense_gate as _defense_gate  # 位置判据（雷达与 09:25 防守闸同一套口径）
 from core.historical_relay import annotate_historical_relay
 
 # ⛔ `common/` 在**项目根**、不在 wealth_code/ 下；以脚本/CLI 方式运行时 cwd 不入 sys.path，
@@ -99,6 +102,106 @@ LADDER_DRAGON_BONUS = 3.0
 # 成交额门控（用户纪律 2026-08-13）：成交额<5亿 的票流动性/辨识度不足，一律不进池。
 # 须在板块梯队计算(_attach_sector_ladder)之前过滤，避免低流动性票污染梯队/龙一归属。
 MIN_TURNOVER_YI = 5.0
+# ── 成交额门槛按板数分阶段（2026-10-22 用户拍板·可逆开关）──────────────────
+# 用户原话：「前期成交额不高是很正常的，因为资金筹码没有什么抛压，所以成交额很低但能封板
+#   是很正常的。我们要重点观察，因为它的量能是一步步放大的。」
+# 判据依据（实证）：大业股份启动前一路缩量到 1.58 亿 → 首板放量 4.89 亿 → 2/3 板缩到
+#   1.01/0.74 亿仍封住＝筹码锁死；而同为缩量的大业能连 5 板。反之高位巨量不缩
+#   （冰山冷热 20 亿/日）才是倒货。故：**低位缩量封板＝筹码锁定（放行），高位缩量＝真硬伤**。
+# ⛔ 只放宽「进场门槛」，不动「池外高辨识度名单」的只展示不买入铁律。
+MIN_TURNOVER_YI_LOW_BOARD = 3.0   # 低位（1~2 板）放行线·亿（2026-10-22 用户拍板 1.0 → 3.0）
+LOW_BOARD_CEIL = 2                # 「低位」上界（含）＝首板 / 2 板
+ENABLE_TURNOVER_BY_STAGE = "1"    # 2026-10-22 用户拍板开启（低位 3 亿 / 高位 5 亿）。
+                                  # 📌 历史：1.0 亿时实测池子 8→5（低成交额票涌入→题材分组重排→
+                                  #    哈空调/出版传媒/海量数据被挤出），故先回 3 亿观察；
+                                  #    真正的「低位低成交额」票由下面的 gene_radar 只展示不占名额兜住。
+
+
+def turnover_floor(boards: Any) -> float:
+    """该板数档位下的成交额门槛（亿）：低位（≤LOW_BOARD_CEIL 板）放宽，高位仍守 5 亿。
+
+    板数缺失/非法 → 按高位处理（⛔ 不猜、不给不存在的票开后门）。
+    """
+    if os.environ.get("ENABLE_TURNOVER_BY_STAGE", ENABLE_TURNOVER_BY_STAGE) in ("0", "false", "False", ""):
+        return MIN_TURNOVER_YI
+    try:
+        b = int(boards)
+    except (TypeError, ValueError):
+        return MIN_TURNOVER_YI
+    if b <= 0:                       # 板数缺失/0 → 按高位守 5 亿（⛔ 不给缺数据的票开后门）
+        return MIN_TURNOVER_YI
+    return MIN_TURNOVER_YI_LOW_BOARD if b <= LOW_BOARD_CEIL else MIN_TURNOVER_YI
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 👑 龙头门槛豁免（2026-10-27 用户「推的全是杂毛，既不是板块龙一，也不是高度第一」）
+# ══════════════════════════════════════════════════════════════════════════
+# 病灶（当日实证）：
+#   ① 上海九百 5 板（全市场唯一高度）成交 3.94 亿 < 5 亿 → 被剔出池，只进「只看不买」名单；
+#   ② 赛福天 4 板 09:25:02 秒板 3.02 亿 → 同样被剔；
+#   ③ 大消费线龙头被剔后，组内最高板变成**首板**的文投控股 → 它成了「这条线的前排」，
+#      还被推成接力池第 2 位（09:41 封、炸 5 次、封单占流通 0.12%、梯队 D）。
+#   ⇒ **先砍掉老大，再从残骸里挑前排** —— 池子必然由二线构成。
+# 修法：高度层（全市场最高板 / 次高板层，且 ≥LEADER_EXEMPT_MIN_BOARDS 板）的成交额门槛
+#   降到 MIN_TURNOVER_YI_LEADER。⛔ 只放宽「进场门槛」，不改排序、不改任何裁决逻辑；
+#   ⛔ 不是无门槛（1.5 亿以下仍剔，防极端失真）。
+# 为什么按「板数层」而不是按「题材分组」判龙头：题材映射存在跨线误归（实证 line_family
+#   把多伦科技归到「AI算力」），拿它定龙头会把豁免发错人；板数层是当日客观事实，无映射风险。
+MIN_TURNOVER_YI_LEADER = 1.5       # 高度层（龙头层）放行线·亿
+LEADER_EXEMPT_MIN_BOARDS = 3       # 豁免只给 ≥3 板的高度层（1~2 板交给 gene_radar / 低池）
+ENABLE_LEADER_TURNOVER_EXEMPT = "1"
+
+
+def leader_exempt_enabled() -> bool:
+    """龙头门槛豁免开关（默认开，`ENABLE_LEADER_TURNOVER_EXEMPT=0` 一键回旧行为）。"""
+    return os.environ.get(
+        "ENABLE_LEADER_TURNOVER_EXEMPT", ENABLE_LEADER_TURNOVER_EXEMPT
+    ) not in ("0", "false", "False", "")
+
+
+def leader_turnover_floor(
+    boards: Any,
+    market_max_boards: Any,
+    *,
+    enabled: bool | None = None,
+) -> float | None:
+    """高度层票的豁免门槛（亿）；**不该豁免则返回 None**（调用方继续用常规门槛）。
+
+    豁免范围：`boards >= market_max - 1` 且 `boards >= LEADER_EXEMPT_MIN_BOARDS`。
+      · market_max=5 → 5 板、4 板都算「高度层」
+      · market_max=6 → 6 板、5 板豁免；4 板不豁免（那是中位股，非高度层）
+    板数/最高板缺失 → None（⛔ 不猜、不开后门）。
+    """
+    if enabled is None:
+        enabled = leader_exempt_enabled()
+    if not enabled:
+        return None
+    try:
+        b = int(boards)
+        m = int(market_max_boards)
+    except (TypeError, ValueError):
+        return None
+    if b <= 0 or m <= 0:
+        return None
+    if b < LEADER_EXEMPT_MIN_BOARDS or b < m - 1:
+        return None
+    return MIN_TURNOVER_YI_LEADER
+
+
+# ⛔ P1（2026-10-18 用户「按顺序处理」·治「选股宇宙被 5 亿门槛砍掉 3/4」）：
+# 实证 10-16：涨停 61 只 → 成交额<5亿 剔掉 45 只(74%) → 只剩 16 只进评分；
+# 复盘点名的新华传媒(2.47亿)、金盾股份(3.35亿) 就死在这一刀上，**根本没进视野**。
+# 此处单列「池外高辨识度」名单：连板≥3 或 全市场唯一高度。
+# ⛔ 铁律：**只展示、不参与排序、不占名额、标 buyable=False**——看得到 ≠ 买得到，
+#    成交额门槛作为用户纪律不放松，本名单只解决"复盘说得头头是道、选股里却查无此票"。
+# 开关 ENABLE_OFFPOOL_HIGH_IDENT=0 可一键回旧行为。
+OFFPOOL_MIN_BOARDS = 3      # 池外票进名单的最低连板高度
+OFFPOOL_TOPN = 8            # 名单上限（防刷屏）
+
+
+def offpool_high_ident_enabled() -> bool:
+    """池外高辨识度名单开关（默认开，环境变量可回滚）。"""
+    return os.environ.get("ENABLE_OFFPOOL_HIGH_IDENT", "1") not in ("0", "false", "False", "")
 # 最近强势板块加权（用户纪律 2026-08-13：聚焦题材/主线/强势板块）
 # 数据源=聚合最近N天 candidates.theme(申万二级)——即每天记录的题材炒作路径里爆发过的板块；
 # 排除当天文件避免自举，跨日持续(≥min_persist_days)的板块=持续主线→加权，历史单日→小加权，
@@ -159,6 +262,317 @@ def _capacity_score(cje_yi: float, zsz_yi: float, hs_pct: float, zbc: int, fbt: 
     }
 
 
+# 🎯 低位连板龙雷达（2026-10-22 用户拍板「需要做，雷达叠加观察的意思」）──────────
+# 要解决的问题（用户原话）：大业股份这种票「尽量在第一个板或者第二个板的时候，必须要发现它
+#   被推出来了」。但首板/2 板往往成交额只有 1~3 亿，会被 5 亿/3 亿的进场门槛挡在池外，
+#   于是「复盘说得头头是道、选股里却查无此票」。
+# 设计（与 `offpool_high_ident` 同一套护栏）：
+#   ① **叠加观察**：只展示，⛔ 不占 relay/watch 名额、⛔ 不参与排序、⛔ 不进 09:25 池内裁决；
+#   ② 门槛：1~2 板 ∧ 成交额 ≥ GENE_RADAR_MIN_TURNOVER_YI 亿 ∧ 股性档＝**连板龙**（严格档，
+#      「连板龙·次数少/历史短」不进——样本不够就不是「它一直能连」的证据）；
+#   ③ 排除已在池内的票（池里已有就别重复占版面）、688（无权限）、ST（铁律不看）。
+GENE_RADAR_MIN_TURNOVER_YI = 1.0   # 雷达的成交额下限：低于这个连买卖都困难，看了也白看
+GENE_RADAR_MAX_BOARDS = 2          # 只盯低位（首板 / 2 板）
+GENE_RADAR_TOPN = 6                # 名单上限（防刷屏）
+
+
+def gene_radar_enabled() -> bool:
+    """低位连板龙雷达开关（默认开，`ENABLE_GENE_RADAR=0` 一键回旧行为）。"""
+    return os.environ.get("ENABLE_GENE_RADAR", "1") not in ("0", "false", "False", "")
+
+
+# 🐣 低位池（2026-10-27 用户「还不如推低位！」）：
+#   雷达此前「只展示不买」，用户的诉求是「这种低位的才想买」→ 升级为可买第三桶。
+#   ⛔ 名额与 relay/watch **共享**（不另开），否则等于悄悄放大仓位（违反回撤期单票/总仓纪律）。
+LOW_POOL_ENABLED_ENV = "ENABLE_LOW_POOL"
+LOW_POOL_TOPN = 3                 # 最多 3 只（防刷屏；真正能买的只有名额内的 1 只）
+# ⛔ 封板质量护栏（2026-10-27 当天实证补上）：低池 = 「低位起步」，不是「低位的垃圾」。
+#   首例反例：海洋王(002724) 首板、20.9 亿、股性连板龙（晋级54%/最长6板）→ 机械上完全符合，
+#   但换手 28.9%、一天炸开 6 次、上一波已经到过 6 板 —— 这是「大资金借涨停倒货」，
+#   用户口径里恰好是最差的那种：地量→首板放量→连板缩量才是筹码锁定，巨量换手就是出货。
+#   故低池额外要求：换手 ≤20% ∧ 炸板 ≤2 次。⛔ 只卡低池（可买），雷达展示层不卡（信息不丢）。
+LOW_POOL_MAX_HS_PCT = 20.0
+LOW_POOL_MAX_ZBC = 2
+
+
+def low_pool_quality_ok(row: dict[str, Any]) -> bool:
+    """低池封板质量门槛：换手不过度、炸板不多。缺数据 → 放行（⛔ 缺数据≠不利证据）。"""
+    try:
+        hs = float((row or {}).get("hs") or 0.0)
+    except (TypeError, ValueError):
+        hs = 0.0
+    try:
+        zbc = int((row or {}).get("zbc") or 0)
+    except (TypeError, ValueError):
+        zbc = 0
+    if hs > LOW_POOL_MAX_HS_PCT:
+        return False
+    return zbc <= LOW_POOL_MAX_ZBC
+
+
+def low_pool_enabled() -> bool:
+    """低位池可买开关（默认开，`ENABLE_LOW_POOL=0` → 退回「只看不买」）。"""
+    return os.environ.get(LOW_POOL_ENABLED_ENV, "1") not in ("0", "false", "False", "")
+
+
+# 🧊 2026-10-27 用户定调（原话「只观察，行情差没有必要强行接力」）：
+#    **全市场最高板 + 封单极薄 → 默认只当观察（能看不能买）**。
+#    背景实证：上海九百(600838) 5 板是全市场唯一高度，但封单只占流通 0.24%
+#    （1,000 万级别的封单量级 vs 十几亿的成交）—— 最高板却没人愿意把封单堆厚，
+#    这不是「强」，是「没人接」。缩量 + 情绪 1.8 分的日子再强行接力这类票，
+#    赔率极差（用户口径：没必要强行接力）。
+#    阈值直接复用防守闸已校准的「封单薄」口径（`defense_gate.DIST_SEAL_RATIO_MAX`
+#    = 2%），⛔ 不另造一套阈值，否则卡面说「封单薄」、这里却按别的线判，两套口径打架。
+#    可逆开关 `ENABLE_THIN_SEAL_TOP_WATCH=0` 逐字回退。
+THIN_SEAL_TOP_RATIO_MAX = 2.0
+THIN_SEAL_TOP_MIN_BOARDS = 3          # 最高板不到 3 板 → 谈「高度」无意义，不启用
+THIN_SEAL_TOP_ENABLED_ENV = "ENABLE_THIN_SEAL_TOP_WATCH"
+
+
+def thin_seal_top_enabled() -> bool:
+    """最高板极薄封单降级开关（默认开，`ENABLE_THIN_SEAL_TOP_WATCH=0` 回滚）。"""
+    return os.environ.get(THIN_SEAL_TOP_ENABLED_ENV, "1") not in ("0", "false", "False", "")
+
+
+def demote_thin_seal_top(
+    relay: list[dict[str, Any]],
+    watch: list[dict[str, Any]],
+    ztgc: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], int]:
+    """把「全市场最高板 ∧ 封单极薄」的票从接力池降为观察（只看不买）。
+
+    返回 `(relay, watch, moved, market_max)`；`moved` 供 diagnostics/打印留痕。
+
+    判据（两条同时满足才动，缺数据一律不动）：
+      ① `boards >= 全市场最高板`（严格最高，最高板-1 不管 —— 用户说的是「最高板」）
+      ② `seal_ratio_pct < THIN_SEAL_TOP_RATIO_MAX`（封单/流通 百分比）
+    ⛔ 缺 `seal_ratio_pct`（拿不到流通市值）→ 不裁决，留在接力池（不编造）。
+    ⛔ 只在接力池里降级；本来就是观察池的票只打标（`watch_only`），不改归属。
+    """
+    if not thin_seal_top_enabled():
+        return relay, watch, [], 0
+    boards_all: list[int] = []
+    for _s in (ztgc or []):
+        try:
+            boards_all.append(int(_s.get("lbc") or _s.get("boards") or 1))
+        except (TypeError, ValueError):
+            continue
+    market_max = max(boards_all or [0])
+    if market_max < THIN_SEAL_TOP_MIN_BOARDS:
+        return relay, watch, [], market_max
+
+    def _hit(r: dict[str, Any]) -> str | None:
+        """返回白话理由；不该降级返回 None。"""
+        b = _to_int(r.get("boards"), 1)
+        if b < market_max:
+            return None
+        ratio = r.get("seal_ratio_pct")
+        if not isinstance(ratio, (int, float)):
+            return None                     # 缺数据 → 不裁决
+        if float(ratio) >= THIN_SEAL_TOP_RATIO_MAX:
+            return None
+        return (f"它是今天全市场最高 {b} 板，但封单只占流通盘的 {float(ratio):.2f}%"
+                f"（没有资金愿意把封单堆厚）→ 位置最高、封得最薄，只看不买")
+
+    moved: list[dict[str, Any]] = []
+    keep: list[dict[str, Any]] = []
+    for r in (relay or []):
+        why = _hit(r)
+        if why:
+            r["thin_seal_top"] = True
+            r["watch_only"] = True
+            r["watch_reason"] = why
+            r["watch_group"] = "最高板封单过薄"
+            moved.append(r)
+            watch.append(r)
+        else:
+            keep.append(r)
+    # 已经在观察池里的最高板也打标（防裁决层把它捡回去买）
+    for r in (watch or []):
+        why = _hit(r)
+        if why and not r.get("watch_only"):
+            r["thin_seal_top"] = True
+            r["watch_only"] = True
+            r["watch_reason"] = why
+            if not r.get("watch_group"):
+                r["watch_group"] = "最高板封单过薄"
+    # 降级后接力池序号重排，避免卡面出现「2、3」起头的断档编号
+    for i, r in enumerate(keep, start=1):
+        r["relay_rank"] = i
+    # ⛔ 观察池序号也必须重排（2026-10-27 实测卡面 `None、`）：
+    #    走 append 路径进观察池的票**本来没有 `watch_rank`**（只有 relay 行有 `relay_rank`），
+    #    卡面 `it.get('watch_rank')` 直接渲染出 `None、`。
+    #    与 `pool_admit` 的同一条铁律：桶归属改了，序号与标签都要跟着改。
+    for i, r in enumerate(watch or [], start=1):
+        r["watch_rank"] = i
+        r.pop("relay_rank", None)
+        r["bucket"] = "watch"
+        r["bucket_label"] = "观察池"
+    return keep, watch, moved, market_max
+
+
+
+def select_gene_radar(
+    rows: list[dict[str, Any]],
+    *,
+    in_pool_codes: set[str] | None = None,
+    excluded_turnover_codes: set[str] | None = None,
+    series: dict[str, list[tuple[str, int]]] | None = None,
+    trading_days: list[str] | None = None,
+    topn: int = GENE_RADAR_TOPN,
+) -> list[dict[str, Any]]:
+    """从**评分全量**里挑「低位 + 连板龙 + 有量」的票（纯展示·不可买）。
+
+    `rows` 必须是成交额过滤**之前**的评分全量（否则被门槛剔掉的票根本不在里面，
+    雷达就只剩「本来就能进池」的票，等于什么都没补）。
+
+    ⛔ **位置过滤不能省**（2026-10-22 当天实测抓到）：冰山冷热 000530 首板、成交 25.5 亿、
+       基因「连板龙」（晋级 57%/最长 6 板），单看这三项完美符合，但它 10-21 之前已经涨了
+       45%~64%、上一波最高 4 板、断板 3 天后重启 —— 是「高位二波」，不是「刚起步」。
+       用户的核心口径是「往期接力强 × **启动位置低**」，位置这一维漏了，雷达就会变成
+       又一堆「别人已经赚完的票」。故此处直接复判 `defense_gate.position_wave`（本地
+       zt 序列，⛔ 不外呼网络）：**断板 ≥3 天 ∧ 上一波最高 ≥3 板 → 不进雷达**，
+       与 09:25 的防守闸同一套判据，避免「卡上说低位、系统却另判高位」两套口径打架。
+
+    返回每项带 `buyable=False` + `radar_why`（为什么没进池）+ 基因原始数字（不加工）。
+    """
+    pool = {str(c) for c in (in_pool_codes or set())}
+    dropped_by_turnover = {str(c) for c in (excluded_turnover_codes or set())}
+    picked: list[dict[str, Any]] = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        code = str(r.get("code") or "").strip()
+        name = str(r.get("name") or "").strip()
+        if not code or not name:
+            continue
+        if code in pool or code.startswith("688"):
+            continue
+        if "ST" in name.upper() or bool(r.get("is_st")):
+            continue
+        if bool(r.get("is_one_word")):        # 一字板买不到，看了只会误导
+            continue
+        boards = _to_int(r.get("boards"), 0)
+        if boards < 1 or boards > GENE_RADAR_MAX_BOARDS:
+            continue
+        cje = _to_float(r.get("cje_yi"), 0.0)
+        if cje < GENE_RADAR_MIN_TURNOVER_YI:
+            continue
+        # 位置：高位二波（断板多日 + 上一波已经到过 3 板以上）→ 不是低位，不进雷达
+        wave = _defense_gate.position_wave(code, series, trading_days)
+        if (wave.get("known") and wave.get("is_rebound")
+                and _to_int(wave.get("prior_max_board"), 0) >= _defense_gate.POSITION_PRIOR_BOARD_MIN):
+            continue
+        d10, d30 = r.get("dev_10d_pct"), r.get("dev_30d_pct")
+        d10 = d10 if d10 is not None else r.get("ret_10d_pct")
+        d30 = d30 if d30 is not None else r.get("ret_30d_pct")
+        if ((isinstance(d10, (int, float)) and float(d10) >= _defense_gate.POSITION_DEV10_MIN)
+                or (isinstance(d30, (int, float)) and float(d30) >= _defense_gate.POSITION_DEV30_MIN)):
+            continue
+        facts = _zt_gene.gene_facts(code)
+        if facts.get("grade") != "连板龙":     # 严格档：次数少/历史短不进雷达
+            continue
+        picked.append({
+            "code": code,
+            "name": name,
+            "boards": boards,
+            "theme": str(r.get("core_theme") or r.get("theme") or r.get("sector") or ""),
+            "pct": _to_float(r.get("pct"), 0.0),
+            "cje_yi": round(cje, 2),
+            "fbt": str(r.get("fbt") or ""),
+            "zbc": _to_int(r.get("zbc"), 0),
+            "is_20cm": bool(r.get("is_20cm")),
+            "gene": facts,
+            # 2026-10-27 升级为可买桶后，裁决层的闸（派发/位置/身位）要有原始读数才能判，
+            # 故把这几项一并带出（此前只展示，缺了也不影响）。
+            "price": _to_float(r.get("price"), 0.0),
+            "hs": _to_float(r.get("hs"), 0.0),
+            "seal_ratio_pct": r.get("seal_ratio_pct"),
+            "seal_yi": r.get("seal_yi"),
+            "zsz_yi": r.get("zsz_yi"),
+            "lt_yi": r.get("lt_yi"),
+            "carry_cnt": _to_int(r.get("carry_cnt"), 0),
+            "sector": str(r.get("sector") or ""),
+            "dev_10d_pct": r.get("dev_10d_pct"),
+            "dev_30d_pct": r.get("dev_30d_pct"),
+            # ⛔ 纪律护栏：渲染层必须保留 buyable=False 语义
+            "buyable": False,
+            "radar_why": (
+                f"成交额{cje:.2f}亿＜{turnover_floor(boards):g}亿进池门槛"
+                if code in dropped_by_turnover else "评分/名额没排上"
+            ),
+        })
+    picked.sort(key=lambda x: (
+        _to_float((x.get("gene") or {}).get("promo_rate_hist"), 0.0),
+        _to_int((x.get("gene") or {}).get("zt_250"), 0),
+        _to_float(x.get("cje_yi"), 0.0),
+    ), reverse=True)
+    return picked[:topn]
+
+
+def select_offpool_high_ident(
+    excluded: list[dict[str, Any]],
+    *,
+    market_max_boards: int = 0,
+    market_max_count: int = 0,
+    min_boards: int = OFFPOOL_MIN_BOARDS,
+    topn: int = OFFPOOL_TOPN,
+) -> list[dict[str, Any]]:
+    """从「成交额被剔除」的票里挑出**高辨识度**名单（P1 · 纯展示·不可买）。
+
+    入选判据（满足其一）：
+      ① 连板高度 ≥ min_boards（默认 3 板）
+      ② 该票是**全市场唯一高度**（boards == market_max_boards 且全市场仅 market_max_count=1
+         只达到该高度，且 ≥2 板）——`market_max_*` 必须按**全池**统计、不是按本名单统计，
+         否则池内同高度的票不会被算进去，会把"两 5 板"误判成"唯一高度"。
+
+    硬排除：688（无权限）/ ST（铁律不看）/ 无 code 无 name。
+
+    返回按 (boards desc, cje_yi desc) 排序、截 topn；每项带：
+      - buyable=False          ⛔ 本名单永不作为买入依据
+      - offpool_reason         被池外剔除的真实原因（成交额不足 X 亿）
+      - ident_reason           为什么仍值得看（N 板 / 唯一高度）
+    """
+    rows = [r for r in (excluded or []) if isinstance(r, dict)]
+    if not rows:
+        return []
+    uniq_height = market_max_boards >= 2 and market_max_count == 1
+
+    picked: list[dict[str, Any]] = []
+    for r in rows:
+        code = str(r.get("code") or r.get("dm") or "").strip()
+        name = str(r.get("name") or r.get("mc") or "").strip()
+        if not code or not name:
+            continue
+        if code.startswith("688"):
+            continue
+        if "ST" in name.upper():
+            continue
+        boards = _to_int(r.get("boards"), 0)
+        is_uniq = bool(uniq_height and boards == market_max_boards)
+        if boards < min_boards and not is_uniq:
+            continue
+        cje = _to_float(r.get("cje_yi"), 0.0)
+        picked.append({
+            "code": code,
+            "name": name,
+            "sector": str(r.get("sector") or ""),
+            "core_theme": str(r.get("core_theme") or ""),
+            "boards": boards,
+            "pct": _to_float(r.get("pct"), 0.0),
+            "cje_yi": round(cje, 2),
+            "is_20cm": bool(r.get("is_20cm")),
+            "fbt": str(r.get("fbt") or ""),
+            "raw_score": round(_to_float(r.get("raw_score"), 0.0), 1),
+            # ⛔ 下面两个字段是纪律护栏，渲染层必须保留
+            "buyable": False,
+            "offpool_reason": f"成交额{cje:.2f}亿＜{turnover_floor(boards):g}亿门槛",
+            "ident_reason": ("全市场唯一高度" if is_uniq else f"{boards}连板"),
+        })
+    picked.sort(key=lambda x: (_to_int(x.get("boards"), 0), _to_float(x.get("cje_yi"), 0.0)), reverse=True)
+    return picked[:topn]
+
+
 def _score_all(ztgc: list[dict[str, Any]], code2themes: dict[str, list[str]], hot_sectors: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     对全部涨停股计算 leader_score（复用 core/leader.py 的纯因子）。
@@ -174,10 +588,22 @@ def _score_all(ztgc: list[dict[str, Any]], code2themes: dict[str, list[str]], ho
         code = str(s.get("dm") or "").strip()
         if not code:
             continue
-        theme = pick_primary_theme(
-            code=code, code2themes=code2themes, hot_sectors=hot_sectors,
-            fallback_industry=str(s.get("hy") or ""),
-        )
+        # ⛔ 2026-10-27 确定性修复（用户「处理问题一」·治「同一天跑两次分数不同」）：
+        #    **题材必须优先取当日题材快照回填的 core_theme**，而不是只认 code2themes。
+        #    实证（10-27 同池两次跑）：15:59 那次 code2themes 尚未齐 → 赛福天/多伦科技
+        #    fallback 到行业「通用设备 / 软件开发」，16:13 那次已齐 → 「机器人」。
+        #    题材桶一变 → `_attach_sector_ladder` 分组变（C→A、health 4.6→10）
+        #    → `score_explosion` 的题材统计变（exp 2.75→38.67）→ 最终分 56.1→92.03。
+        #    即：**同一份涨停池算出两套分，差的不是随机数，而是旁路数据到没到**。
+        #    现统一走 core_theme（= cache/theme_snapshot/theme_<date>.json 的当日冻结映射，
+        #    `theme_mapping_fingerprint` 同日恒定）→ 早跑晚跑同分；
+        #    快照缺失时仍回退旧路径（不编造题材）。
+        theme = str(s.get("core_theme") or "").strip()
+        if not theme:
+            theme = pick_primary_theme(
+                code=code, code2themes=code2themes, hot_sectors=hot_sectors,
+                fallback_industry=str(s.get("hy") or ""),
+            )
         theme_of[code] = theme
         fbt = str(s.get("fbt") or "").strip()
         if not fbt:
@@ -303,14 +729,22 @@ def _build_expectation(boards: int, is_20cm: bool) -> dict[str, Any]:  # pragma:
     return {"expected_range": [lo, hi], "super_gap_min": hi + 1.0}
 
 
-def _attach_sector_ladder(scored: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _attach_sector_ladder(scored: list[dict[str, Any]], *,
+                         zt_rows: list[dict[str, Any]] | None = None,
+                         theme_map: dict[str, Any] | None = None
+                         ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """
     板块梯队因子接入：按题材聚合涨停池，调用 core/leader.build_sector_ladder 计算
     每个题材的梯队健康度，并把结果回写到每只候选：
       - ladder_health     : 0~10（核心驱动分量）
       - ladder_has_complete: 是否完整梯队（龙头+龙二+龙三+≥3补涨）
-      - is_sector_dragon  : 是否是该题材封板结构顶端（龙一）
-    纯数据驱动，无任何个股硬编码。
+
+    🐉 龙一判定（2026-10-27 用户「推的票必须是板块龙一」）：
+    传 `zt_rows` 时，`is_sector_dragon` 改由 **`core.sector_leader` 单一源**判定，
+    ⛔ 不再用 `build_sector_ladder` 的 (连板数, 涨幅, **成交额**) 排序 —— 那个口径把
+    10-27 成交额 8.1 亿的多伦科技判成龙一、而卡面推的赛福天被判「非龙一」，
+    同一系统给出两个答案（详见 `core/sector_leader.py` 模块 docstring）。
+    不传 `zt_rows` = 旧行为（保持向后兼容，测试与旧调用不受影响）。
     """
     by_theme: dict[str, list[dict[str, Any]]] = {}
     for it in scored:
@@ -324,7 +758,383 @@ def _attach_sector_ladder(scored: list[dict[str, Any]]) -> list[dict[str, Any]]:
             it["ladder_has_complete"] = lad["has_complete"]
             it["ladder_grade"] = lad["health_grade"]
             it["is_sector_dragon"] = (it.get("code") == dragon_code)
-    return scored
+
+    if not zt_rows:
+        return scored, None
+
+    # ── 龙一：单一源覆盖（sector_leader 的分层判据）────────────────────────
+    from core import sector_leader
+    extra = {str(it.get("code") or ""): it for it in scored if it.get("code")}
+    res = sector_leader.compute(zt_rows, theme_map, extra_by_code=extra)
+    for it in scored:
+        v = res["by_code"].get(str(it.get("code") or ""))
+        if not v:
+            continue
+        it["is_sector_dragon"] = bool(v["is_sector_dragon"])
+        it["dragon_rank"] = int(v["dragon_rank"])
+        it["sector_has_mates"] = bool(v["has_sector"])
+        it["dragon_leader_code"] = v["leader_code"]
+        it["dragon_leader_name"] = v["leader_name"]
+        it["dragon_leader_boards"] = v["leader_boards"]
+        it["dragon_leader_block"] = v["leader_block"]
+        if v["seal_ratio_pct"] is not None:
+            it.setdefault("seal_ratio_pct", v["seal_ratio_pct"])
+        # 板块家数取「完整涨停池口径」与既有标注的最大值（不因口径差异缩小板块）
+        try:
+            it["sector_mates_cnt"] = max(int(it.get("sector_mates_cnt") or 0), int(v["mates"]))
+        except (TypeError, ValueError):
+            it["sector_mates_cnt"] = int(v["mates"])
+        if not it.get("theme_mates_cnt"):
+            it["theme_mates_cnt"] = int(v["mates"])
+
+    summary = {
+        "enabled": True,
+        "window_min": res["window_min"],
+        "mates_min": res["mates_min"],
+        "asof_count": res["asof_count"],
+        "with_sector": sum(1 for b in res["boards"] if b["has_sector"]),
+        # ⛔ 只落龙一清单（完整梯队见 `cache/board_leader_daily/` 台账）——候选文件是卡面/前端消费，
+        #    把 42 只逐票梯队塞进 diagnostics 会让 candidates 文件翻倍且无人消费。
+        "leaders": [
+            {"theme": b["theme"], "mates": b["mates"],
+             "code": b["leader_code"], "name": b["leader_name"],
+             "boards": b["leader_boards"], "fbt": b["leader_fbt"],
+             "seal_ratio_pct": b["leader_seal_ratio_pct"],
+             "block": b["leader_block"]}
+            for b in res["boards"] if b["has_sector"]
+        ],
+    }
+    return scored, summary
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 🐉 板块龙一准入闸（2026-10-27 用户「推的票必须是板块龙一」）
+# ══════════════════════════════════════════════════════════════════════════
+DRAGON_GATE_ENV = "ENABLE_SECTOR_DRAGON_ONLY"
+
+
+def dragon_gate_enabled() -> bool:
+    return str(os.environ.get(DRAGON_GATE_ENV, "1")).strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def apply_dragon_gate(relay: list[dict[str, Any]],
+                      watch: list[dict[str, Any]],
+                      *, enabled: bool | None = None
+                      ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """接力池只放**板块龙一**；龙二/跟风一律降观察（不可买）。
+
+    判据来源 = `core.sector_leader.compute` 回填的 `dragon_rank`（单一源），
+    ⛔ 本函数不自己重算强弱，只按 `dragon_rank` 分桶。
+
+    两条规则：
+      ① `dragon_rank != 1` 且有板块 → 移出接力池（`dragon_gate="deputy"`）
+         「龙二就是龙二，不因为龙一买不到就把它顶上来」。
+      ② 龙一本身买不进（一字板 / ST）→ 移出接力池（`dragon_gate="leader_unbuyable"`），
+         **且不拿同线跟风顶替** —— 同线票在 ① 里已被同一条规则挡掉。
+      ⛔ 无板块（题材缺失 / 涨停独苗，`has_sector=False`）→ **不适用本闸**，
+        沿用原有孤军/高标逻辑（缺数据不当不利证据）。
+    """
+    on = dragon_gate_enabled() if enabled is None else bool(enabled)
+    if not on:
+        return relay, watch, {"enabled": False, "reason": f"{DRAGON_GATE_ENV}=0"}
+
+    def _rank(r: dict[str, Any]) -> int:
+        try:
+            return int(r.get("dragon_rank") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    keep: list[dict[str, Any]] = []
+    moved: list[dict[str, Any]] = []
+    for r in relay:
+        # has_sector 缺省 True：只有明确标 False 才豁免（老候选文件无此字段时按有板块处理）
+        if r.get("sector_has_mates") is False or _rank(r) == 0:
+            keep.append(r)
+            continue
+        if _rank(r) != 1:
+            r["dragon_gate"] = "deputy"
+            r["dragon_note"] = (f"这条线龙一是 {r.get('dragon_leader_name') or '别人'}"
+                                f"（{r.get('dragon_leader_boards') or '?'} 板）")
+            moved.append(r)
+            continue
+        if str(r.get("dragon_leader_block") or ""):
+            r["dragon_gate"] = "leader_unbuyable"
+            r["dragon_note"] = "它自己是龙一，但今天买不进（一字/ST）"
+            moved.append(r)
+            continue
+        keep.append(r)
+
+    diag = {
+        "enabled": True,
+        "before": len(relay),
+        "after": len(keep),
+        "moved": [{"code": str(r.get("code") or ""), "name": str(r.get("name") or ""),
+                   "theme": str(r.get("theme") or ""),
+                   "dragon_rank": _rank(r),
+                   "leader": str(r.get("dragon_leader_name") or ""),
+                   "gate": r.get("dragon_gate")} for r in moved],
+        "moved_names": [str(r.get("name") or "") for r in moved],
+    }
+    if not moved:
+        return keep, watch, diag
+
+    # 降级进观察池：同步 bucket 标签 + 重排序号（⛔ 与 pool_admit 同一条铁律：
+    # 桶归属改了标签不改 → 卡面出现「在观察段、标签写接力池」的自相矛盾）
+    out_watch = list(watch) + moved
+    for _r in moved:
+        _r["bucket"] = "watch"
+        _r["bucket_label"] = "观察池"
+    for _i, _r in enumerate(keep, start=1):
+        _r["relay_rank"] = _i
+        _r.pop("watch_rank", None)
+    for _i, _r in enumerate(out_watch, start=1):
+        _r["watch_rank"] = _i
+        _r.pop("relay_rank", None)
+    return keep, out_watch, diag
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 🎯 四条件合取硬闸
+#    2026-10-27 用户原话：「有就是有 一定要题材龙+情绪OK+量能+梯队，
+#    高胜率的个股推荐！！！没有就空！！」
+# ══════════════════════════════════════════════════════════════════════════
+# ## 为什么必须单独一道闸（旧链路「永远不会空」）
+#
+# `select_relay_watch` 在 strict 四档全空时会走 `_relay_fallback` 的
+# relaxed → broad → emergency 级联，而 emergency 门槛极低
+# （lbc 1~7 / open<15 / breakRisk<98 / raw≥45）—— 等于**每个交易日都能凑出候选**。
+# 用户要的「没有就空」在旧链路上根本无法表达，只能靠 AI 事后嘴硬。
+#
+# ## 与 `apply_dragon_gate` 的分工（⛔ 不重复判、也不互相替代）
+#   · `apply_dragon_gate` 只判**第 ① 条**（是不是题材龙一），且同样只降不升；
+#   · 本闸把用户点名的**四条做成合取**：缺任一 → 移出接力池，**池子允许为空**。
+#   两者叠加不冲突：龙一闸先滤一遍，本闸再按另外三条补刀。
+#
+# ## 四条判据（全部 AND，缺一即降观察）
+#   ① **题材龙**：`dragon_rank == 1`（单一源 `core/sector_leader.compute`），
+#      且不是孤军（`sector_is_lone`/`theme_is_lone` 均为假、`theme_mates_cnt >= 2`）。
+#      ⚠️ 这一条覆盖了 2026-08-24「认可独立总龙头」的旧口径 —— 用户本次明确要求
+#      「一定要题材龙 + 梯队」，孤军天然没有梯队。旧口径用
+#      `HIGH_WIN_ALLOW_LONE_DRAGON=1` 一键回退。
+#   ② **情绪OK**：`env.regime` 不在「冰点」且 `relay_feedback.pressure` 为假。
+#      ⛔ `ice` 一律不过 —— 这是全市场级判据，一旦不成立**整个池子清空**，
+#      正是用户说的「没有就空」。允许的 regime 用 `HIGH_WIN_OK_REGIMES` 可调。
+#
+#      ⚠️ 为什么默认**只清 `ice`、不清 `risk_off`**（2026-10-27 回测实证，勿凭直觉改）：
+#        对 52 个归档交易日、176 条接力票做次日回测（剔除一字/竞价超窗后 92 条可执行）：
+#          risk_on   n=21  均 +1.47%  胜率 61.9%  中位 +1.59%
+#          neutral   n=50  均 -0.34%  胜率 44.0%  中位 -1.22%
+#          risk_off  n= 5  均 +2.99%  胜率 40.0%  中位 -1.69%   ← 样本太少，**证据不足**
+#          ice       n=15  均 -2.54%  胜率 33.3%  中位 -4.52%   ← 唯一明确该清的环境
+#        只清 ice：保留侧均 +0.38% / 胜率 48.7%，被清侧 -2.54% / 33.3% → 分离度 +2.92pp
+#        连 risk_off 一起清：保留侧降到 +0.20%，且依据只有 5 条样本。
+#        ⇒ 默认 `HIGH_WIN_OK_REGIMES="risk_on,neutral,risk_off"`（= 只清冰点）。
+#          若日后样本变大证明 risk_off 该清，改环境变量即可，⛔ 不要改这里的默认值口头约定。
+#   ③ **量能**：`cje_yi >= 该票档位门槛`，复用入池阶段同一把尺子
+#      （`turnover_floor` + `leader_turnover_floor` 的龙头豁免），⛔ 不另造阈值。
+#      优先读候选已落盘的 `turnover_floor_used`，缺失才现算。
+#   ④ **梯队**：`ladder_has_complete` 为真，或 `ladder_health >= HIGH_WIN_LADDER_MIN`。
+#
+# ## 诚实降级
+#   ⛔ 缺数据不裁决：`dragon_rank` 缺失（旧存档 / 题材映射缺失）→ 该条**不判**，
+#      绝不因为「读不到」就把票降级。同理 `ladder_*` 缺失、`cje_yi` 缺失均不硬判。
+#      （例外：`sector_has_mates is False` 是**明确的**「无板块」信号，照判。）
+#
+# ## 开关
+#   `ENABLE_HIGH_WIN_RELAY_GATE=0` → 一键回旧行为（relay 永不因本闸为空）。
+HIGH_WIN_GATE_ENV = "ENABLE_HIGH_WIN_RELAY_GATE"
+# ⛔ 只清 `ice`。理由见上方回测表：risk_off 的「该清」结论只有 5 条样本支撑，不足以砍掉。
+# 想恢复「只认 risk_on/neutral」的严口径：`HIGH_WIN_OK_REGIMES="risk_on,neutral"`。
+HIGH_WIN_OK_REGIMES = ("risk_on", "neutral", "risk_off")
+HIGH_WIN_LADDER_MIN = 6.0          # ladder_health 0~10；6 = 梯队中上（有完整梯队者不看此值）
+HIGH_WIN_THEME_MATES_MIN = 2       # 题材内至少 2 家（独苗 = 没有题材梯队）
+HIGH_WIN_ALLOW_LONE_DRAGON_ENV = "HIGH_WIN_ALLOW_LONE_DRAGON"
+HIGH_WIN_CONDITIONS = ("题材龙", "情绪", "量能", "梯队")
+
+# ## 🧊 冰点解冻（2026-10-28 用户「冰点日若开盘后情绪转好 可以出手」）
+#   冰点日被本闸移出接力池的票**不是判死刑，是冻结**：保留身份与解冻条件，
+#   等 09:25 竞价回暖（`core.market_open.build_market_open` 的 `ready`）再放行。
+#
+#   ⛔ 分层铁律：**只有市场级条件可解冻**。
+#     · 情绪            = 全市场的事。今晨资金集体回暖是同一层的新证据，可推翻昨收判断。
+#     · 题材龙/量能/梯队 = 票自己的硬伤。市场回暖救不了一只量能不足、或本来就不是龙一的票。
+#   故 `HIGH_WIN_MARKET_LEVEL` 只放「情绪」，⛔ 不要往里加个股级条件。
+#
+#   回测依据（51 个归档交易日 × relay 票 · 次日开盘买→收盘卖 · 剔一字与竞价超窗）：
+#     ice   + 竞价回暖  n=4   均 +1.37%  胜率 50%  中位 +0.68%
+#     ice   + 未回暖    n=11  均 -3.97%  胜率 27%  中位 -5.43%
+#     且同一判据在 risk_on（+2.07% / -1.07%）、neutral（+1.50% / -1.78%）**同样单调有效**
+#     → 跨三种环境同向，不是只在冰点上偶然成立。
+#     ⚠️ ice 组样本仅 4 条，**幅度不可当真**；方向性由「三环境同向」支撑。
+HIGH_WIN_UNFREEZE_ENV = "ENABLE_ICE_UNFREEZE"
+HIGH_WIN_MARKET_LEVEL = ("情绪",)
+
+
+def high_win_unfreeze_enabled() -> bool:
+    """冰点解冻开关（默认开）。`ENABLE_ICE_UNFREEZE=0` → 回退「冰点一票不出」。"""
+    return os.environ.get(HIGH_WIN_UNFREEZE_ENV, "1") not in ("0", "false", "False", "")
+
+
+def high_win_market_level_missing(miss: list[str] | None) -> bool:
+    """缺失项是否**全部**属市场级（= 可被 09:25 竞价回暖解冻）。
+
+    空列表（无缺失）返回 False —— 无缺失的票本来就不该进冻结流程。
+    """
+    items = [str(x) for x in (miss or [])]
+    if not items:
+        return False
+    return all(x in HIGH_WIN_MARKET_LEVEL for x in items)
+
+
+def high_win_gate_enabled() -> bool:
+    """四条件合取闸开关（默认开，`ENABLE_HIGH_WIN_RELAY_GATE=0` 回滚）。"""
+    return os.environ.get(HIGH_WIN_GATE_ENV, "1") not in ("0", "false", "False", "")
+
+
+def high_win_allow_lone_dragon() -> bool:
+    """是否放行「高标独立总龙头」（2026-08-24 旧口径）。默认 0 = 不放行。"""
+    return os.environ.get(HIGH_WIN_ALLOW_LONE_DRAGON_ENV, "0") not in ("0", "false", "False", "")
+
+
+def high_win_ok_regimes() -> tuple[str, ...]:
+    raw = os.environ.get("HIGH_WIN_OK_REGIMES", "")
+    if not raw.strip():
+        return HIGH_WIN_OK_REGIMES
+    return tuple(x.strip() for x in raw.split(",") if x.strip())
+
+
+def high_win_missing(c: dict[str, Any], env: dict[str, Any] | None,
+                     market_max: Any = None) -> list[str]:
+    """返回该票**缺失**的条件名列表；`[]` = 四条件齐备（可直接推）。
+
+    ⛔ 纯函数、只读，不改入参。缺数据一律不算「缺失」（诚实降级）。
+    """
+    miss: list[str] = []
+    e = env or {}
+
+    # ① 题材龙 ------------------------------------------------------------
+    _rank_raw = c.get("dragon_rank")
+    _rank = _to_int(_rank_raw, 0)
+    _mates = _to_int(c.get("theme_mates_cnt"), 0)
+    _has_sector = c.get("sector_has_mates")
+    _lone = bool(c.get("sector_is_lone")) or bool(c.get("theme_is_lone"))
+    if _rank_raw is None and _has_sector is None:
+        pass                                  # 完全无身位信息 → 不裁决（旧存档）
+    elif _rank != 1:
+        miss.append("题材龙")                  # 有信息但不是龙一（含 rank=0「无板块」）
+    elif _lone or (_mates and _mates < HIGH_WIN_THEME_MATES_MIN):
+        if not high_win_allow_lone_dragon():
+            miss.append("题材龙")              # 是龙一但孤军 → 没有题材梯队
+
+    # ② 情绪OK（全市场级）--------------------------------------------------
+    _regime = str(e.get("regime") or "")
+    if _regime:                               # regime 缺失 → 不裁决
+        if _regime not in high_win_ok_regimes():
+            miss.append("情绪")
+        elif bool((e.get("relay_feedback") or {}).get("pressure")):
+            miss.append("情绪")
+
+    # ③ 量能 --------------------------------------------------------------
+    _floor = _to_float(c.get("turnover_floor_used"), None)
+    if _floor is None:
+        _floor = leader_turnover_floor(c.get("boards"), market_max)
+        if _floor is None:
+            _floor = turnover_floor(c.get("boards"))
+    _cje = _to_float(c.get("cje_yi"), None)
+    if _cje is not None and _floor is not None and float(_cje) < float(_floor):
+        miss.append("量能")
+
+    # ④ 梯队 --------------------------------------------------------------
+    _has_complete = c.get("ladder_has_complete")
+    _lh = _to_float(c.get("ladder_health"), None)
+    if _has_complete is None and _lh is None:
+        pass                                  # 无梯队信息 → 不裁决
+    elif not _has_complete and (_lh is None or float(_lh) < HIGH_WIN_LADDER_MIN):
+        miss.append("梯队")
+
+    return miss
+
+
+def apply_high_win_gate(
+    relay: list[dict[str, Any]],
+    watch: list[dict[str, Any]],
+    env: dict[str, Any] | None = None,
+    *,
+    market_max_boards: Any = None,
+    enabled: bool | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """四条件合取：缺任一 → 移出接力池进观察池（**接力池允许为空**）。
+
+    返回 `(relay, watch, diagnostics)`。降级票打标：
+      · `high_win_gate`   = 缺失条件名列表（如 `["情绪"]`），供 diagnostics / 复盘追溯
+      · `watch_only`      = True（防裁决层把它捡回去）
+    ⛔ 刻意**不写** `watch_reason`：用户 2026-10-27「不用给」——
+       池子空就空，不需要给市场找说法。
+    """
+    on = high_win_gate_enabled() if enabled is None else bool(enabled)
+    if not on:
+        return list(relay or []), list(watch or []), {
+            "enabled": False, "reason": f"{HIGH_WIN_GATE_ENV}=0",
+        }
+
+    keep: list[dict[str, Any]] = []
+    moved: list[dict[str, Any]] = []
+    _unfreeze_on = high_win_unfreeze_enabled()
+    for r in (relay or []):
+        miss = high_win_missing(r, env, market_max_boards)
+        if miss:
+            r["high_win_gate"] = miss
+            r["watch_only"] = True
+            # 🧊 冻结：只缺市场级条件（情绪）→ 留解冻资格，等 09:25 竞价回暖放行。
+            #   缺个股级硬伤（题材龙/量能/梯队）→ ⛔ 不给资格，市场回暖救不了它。
+            if _unfreeze_on and high_win_market_level_missing(miss):
+                r["frozen"] = True
+                r["unfreeze_on"] = "market_open_ready"
+            else:
+                r.pop("frozen", None)
+                r.pop("unfreeze_on", None)
+            moved.append(r)
+        else:
+            r.pop("high_win_gate", None)
+            r.pop("frozen", None)
+            r.pop("unfreeze_on", None)
+            keep.append(r)
+
+    _frozen = [r for r in moved if r.get("frozen")]
+    diag: dict[str, Any] = {
+        "enabled": True,
+        "before": len(relay or []),
+        "after": len(keep),
+        "conditions": list(HIGH_WIN_CONDITIONS),
+        "regime": str((env or {}).get("regime") or ""),
+        "ok_regimes": list(high_win_ok_regimes()),
+        "unfreeze_enabled": _unfreeze_on,
+        "frozen_count": len(_frozen),
+        "frozen": [{"code": str(r.get("code") or ""), "name": str(r.get("name") or ""),
+                    "unfreeze_on": str(r.get("unfreeze_on") or ""),
+                    "missing": list(r.get("high_win_gate") or [])} for r in _frozen],
+        "moved": [{"code": str(r.get("code") or ""), "name": str(r.get("name") or ""),
+                   "theme": str(r.get("core_theme") or r.get("theme") or ""),
+                   "missing": list(r.get("high_win_gate") or []),
+                   "frozen": bool(r.get("frozen"))} for r in moved],
+        "moved_names": [str(r.get("name") or "") for r in moved],
+    }
+    if not moved:
+        return keep, list(watch or []), diag
+
+    out_watch = list(watch or []) + moved
+    for _r in moved:
+        _r["bucket"] = "watch"
+        _r["bucket_label"] = "观察池"
+    # 桶归属改了，序号与标签必须跟着改（与 pool_admit / thin_seal_top 同一条铁律）
+    for _i, _r in enumerate(keep, start=1):
+        _r["relay_rank"] = _i
+        _r.pop("watch_rank", None)
+    for _i, _r in enumerate(out_watch, start=1):
+        _r["watch_rank"] = _i
+        _r.pop("relay_rank", None)
+    return keep, out_watch, diag
 
 
 def _build_early_code_map(early: list[dict[str, Any]]) -> dict[str, str]:
@@ -670,10 +1480,18 @@ def run_eod(
     # 旧实现只在 annotate_lone 之后对 relay+watch 候选拉题材，pool 行只有静态行业
     # → 候选与 pool 失配，题材层聚合到「机器人」错误桶（实证：黄河旋风 theme_name=机器人
     # ·theme_mates_cnt=6 误判）。ThemeFetcher 带缓存（fetch_all 幂等），后续候选回填复用。
-    _theme_map_all = {}
+    # ⛔ 2026-10-18 P0（用户「按顺序处理」·治「选股不可复现」）：**题材映射必须走当日快照**。
+    # 旧实现直连 `ThemeFetcher().fetch_all()`，映射随抓取时刻漂移 → core_theme/板块梯队变
+    # → 同一涨停池算出两套 relay/watch（实证 10-16：长城军工 54.51→58.28、接力池
+    # [晨曦航空,尖峰集团]→[冰山冷热,新华文轩]）。现由 `get_theme_map` 统一：
+    # 首跑抓接口并落 cache/theme_snapshot/theme_<date>.json，同日重跑/回放只读快照。
+    # 开关：THEME_SNAPSHOT_ENABLED=0 回旧行为；THEME_SNAPSHOT_FORCE_REFRESH=1 强制刷新。
+    _theme_map_all: dict[str, Any] = {}
+    _theme_meta: dict[str, Any] = {"source": "empty", "count": 0}
     try:
-        from common.stock_theme import ThemeFetcher
-        _theme_map_all = ThemeFetcher().fetch_all()
+        from common.stock_theme import get_theme_map
+        # cache_dir 透传：run_eod 指定了自定义缓存目录时，快照要落在同一处（默认→项目 cache）
+        _theme_map_all, _theme_meta = get_theme_map(zt["date"], cache_dir=cache_dir)
         for _z in (zt.get("ztgc") or []):
             _zc = str(_z.get("dm") or _z.get("code") or "")
             _ti = _theme_map_all.get(_zc) if _zc else None
@@ -681,16 +1499,90 @@ def run_eod(
                 _z["core_theme"] = _ti.get("theme")
             else:
                 _z.setdefault("core_theme", "")
-    except Exception:
+    except Exception as _e:
+        _theme_meta = {"source": "error", "count": 0, "error": str(_e)}
         pass  # 题材接口失败 → pool 行无 core_theme，回退行业映射（不编造）
 
     scored = _score_all(zt["ztgc"], zt["code2themes"], zt["hot_sectors"])
 
-    # 成交额门控（用户纪律 2026-08-13）：成交额< MIN_TURNOVER_YI 亿的票不进池。
-    # 须在板块梯队计算之前过滤，避免低流动性票污染梯队/龙一归属。
-    n_before_filter = len(scored)
-    scored = [it for it in scored if (it.get("cje_yi") or 0.0) >= MIN_TURNOVER_YI]
-    n_excluded_turnover = n_before_filter - len(scored)
+    # P3（2026-10-18 用户「按顺序处理」·打通「复盘 → 选股」）：读**上一交易日**复盘推演，
+    # 给候选打 `review_flag`（height/new_direction/caution）+ `review_bonus`（±1.2 排序倾斜）。
+    # ⛔ 边界：不塞池、不改 raw_score、不改入池资格；只影响 relay/watch 同层展示顺序。
+    # 读不到文件（昨日没写推演）→ 静默跳过，不编造"复盘说了什么"。
+    review_directions: dict[str, Any] | None = None
+    review_date = ""
+    review_stats: dict[str, Any] = {"available": False}
+    try:
+        from scripts.review_directions import annotate_candidates, load_for_eod
+        review_directions, review_date = load_for_eod(zt["date"], cache_dir=cache_dir)
+        if review_directions:
+            review_stats = annotate_candidates(scored, review_directions)
+            review_stats["review_date"] = review_date
+            # 推演兑现核对：复盘点名、但今日仍未涨停的票（= 复盘说对了没走出来 / 说错了没封板）
+            # ⛔ 只统计不评价——"为什么没走出来"要 AI 结合盘面判断，脚本不下结论。
+            _pool_names = {str(s.get("mc") or "").strip() for s in (zt.get("ztgc") or [])}
+            _pool_codes = {str(s.get("dm") or "").strip() for s in (zt.get("ztgc") or [])}
+            _missed: list[dict[str, Any]] = []
+            for _kind, _field in (("height", "height"),
+                                  ("new_direction", "new_directions"),
+                                  ("caution", "cautions")):
+                for _it in (review_directions.get(_field) or []):
+                    _nm = str(_it.get("name") or "").strip()
+                    _cd = str(_it.get("code") or "").strip()
+                    if (_cd and _cd in _pool_codes) or (_nm and _nm in _pool_names):
+                        continue
+                    _missed.append({"kind": _kind, "name": _nm, "code": _cd})
+            review_stats["missed"] = _missed
+    except Exception as _e:
+        review_stats = {"available": False, "error": str(_e)}
+
+    # 成交额门控（用户纪律 2026-08-13 → 2026-10-22 按板数分阶段）：低于该板数档位的
+    # 成交额门槛的票不进池。须在板块梯队计算之前过滤，避免低流动性票污染梯队/龙一归属。
+    # 📌 先留一份**过滤前全量**：低位连板龙雷达要在这里面挑「被门槛挡掉但股性很强」的票，
+    #    否则雷达只剩本来就能进池的票，等于没补（2026-10-22）。
+    _scored_all: list[dict[str, Any]] = list(scored)
+    _scored_kept: list[dict[str, Any]] = []
+    _excluded_turnover: list[dict[str, Any]] = []
+    # 👑 高度层门槛豁免（2026-10-27）：先把「全市场最高板」定出来，再判每只票的门槛。
+    #    ⛔ 顺序即病根——门槛若跑在「谁是高度第一」之前，龙头会被 5 亿门槛先杀掉，
+    #      准入闸只能在残骸里挑前排（实证：上海九百 5 板 3.94 亿被剔 → 文投控股首板顶上）。
+    _pool_boards_all = [_to_int(_s.get("lbc"), 1) for _s in (zt.get("ztgc") or [])]
+    _market_max_boards = max(_pool_boards_all or [0])
+    if not _market_max_boards:                      # 涨停池缺板数字段 → 退回评分全量
+        _market_max_boards = max((_to_int(_s.get("boards"), 0) for _s in scored), default=0)
+    _leader_exempt_rows: list[dict[str, Any]] = []
+    for _it in scored:
+        _cj = _it.get("cje_yi") or 0.0
+        _floor_normal = turnover_floor(_it.get("boards"))
+        _floor_leader = leader_turnover_floor(_it.get("boards"), _market_max_boards)
+        if _cj >= _floor_normal:
+            _scored_kept.append(_it)
+        elif _floor_leader is not None and _cj >= _floor_leader:
+            # 高度层但成交额不足常规门槛 → 按龙头线放行，并留痕（卡面/诊断可复核）
+            _it["leader_turnover_exempt"] = True
+            _it["turnover_floor_used"] = _floor_leader
+            _it["turnover_floor_normal"] = _floor_normal
+            _scored_kept.append(_it)
+            _leader_exempt_rows.append(_it)
+        else:
+            _excluded_turnover.append(_it)
+    scored = _scored_kept
+    n_excluded_turnover = len(_excluded_turnover)
+    if _leader_exempt_rows:
+        print(f"[EOD] 👑 龙头门槛豁免：{len(_leader_exempt_rows)} 只高度层票按 "
+              f"{MIN_TURNOVER_YI_LEADER:g} 亿放行（全市场最高 {_market_max_boards} 板）"
+              f" → {'、'.join(str(_r.get('name') or '') for _r in _leader_exempt_rows)}")
+
+    # P1（2026-10-18 用户「按顺序处理」）：**池外高辨识度名单**——被成交额门槛剔掉、
+    # 但连板高度仍值得看的票（新华传媒 2.47亿 这种复盘会点名、选股却查无此票的）。
+    # ⛔ 纯展示：不参与排序、不占名额、每项 buyable=False；成交额门槛纪律不变。
+    offpool_high_ident: list[dict[str, Any]] = []
+    if offpool_high_ident_enabled() and _excluded_turnover:
+        offpool_high_ident = select_offpool_high_ident(
+            _excluded_turnover,
+            market_max_boards=_market_max_boards,
+            market_max_count=sum(1 for _b in _pool_boards_all if _b == _market_max_boards),
+        )
 
     # 科创板硬排除（用户无权限 2026-08-13 落铁律）：688 开头一律不进池。
     # 此前仅靠 20cm 惩罚压底，属隐患；创业板(300/301)开放后必须显式补齐。
@@ -706,7 +1598,10 @@ def run_eod(
             it["daily_verdict"] = dv
 
     # 板块梯队因子：按题材聚合计算梯队健康度，回写每只候选（核心驱动之一）
-    _attach_sector_ladder(scored)
+    # 🐉 同时用 `core.sector_leader`（单一源·分层判据）覆盖龙一归属：
+    #    分组基准 = **完整涨停池 ztgc**（含被门槛剔掉的票，否则"龙一"会变成"池内最强"）。
+    scored, _dragon_summary = _attach_sector_ladder(
+        scored, zt_rows=zt.get("ztgc") or [], theme_map=_theme_map_all)
 
     # 板块孤军标注（2026-08-24 用户「板块掉队只剩一人·次日高开无承接被砸」思想）：
     # 同 sector 涨停池成员数==1 → sector_is_lone=True + sector_mates=[]（供次日 09:25
@@ -729,6 +1624,18 @@ def run_eod(
     # 供卡片「带动N家」标签 + relay_score 带动性加分 + AI 点评引用。纯标注不改排序硬门槛。
     from core.sector_support import annotate_carry
     scored = annotate_carry(scored, pool=zt.get("ztgc") or scored)
+
+    # 板块联动事实层（2026-10-22 用户纪律）：事实与交易纪律分离。
+    # 此处仅冻结完整涨停池结构、题材映射版本与可逆标签；不改分、不删候选。
+    # 09:25 再用同题材竞价助攻验证，避免“昨天独苗”被误读成今天必然不可做。
+    try:
+        from core.theme_linkage import annotate_eod
+        for _it in scored:
+            _it["theme_mapping_fingerprint"] = _theme_meta.get("fingerprint")
+        scored = annotate_eod(scored)
+    except Exception as _e:  # noqa: BLE001
+        print(f"[EOD] 板块联动事实层降级: {_e}")
+
 
     # P0-2 孤岛打通（2026-08-17）：盘中强势信号 → 盘后候选回标。
     # 情绪传递链：盘中未封板强势拉升(uplimit=false) + newsflash 点名股 → 次日候选。
@@ -794,8 +1701,187 @@ def run_eod(
             leader_cycle.load_history(ROOT.parent, zt["date"], before_only=True),
             asof=zt["date"], cutoff=datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S"),
             themes=_theme_map_all)
-    relay, watch, diagnostics, sel_mode = select_relay_watch(scored, env, pulse, ai_env, comparison=comparison)
+    # 🌊（2026-10-19 用户「学习上海 7.10 聚会心得」）：**指数形态 → 选股风格**。
+    # 情绪分只回答「能不能做」，指数形态回答「用哪种方式做」（主升只做最强／分歧只做逆势）。
+    # ⛔ 纯标记：不排序、不改 raw_score、不塞池、不改入池资格；权威=`core/market_style.py`+宪法 🌊 章。
+    # 量能/趋势取原始 feedback_matrix（load_environment 只给规范化字段，缺 amount/trend）。
+    # ⚠️ 整段兜底：风格层是**附加信息**，任何异常都不得连累候选产出（降级为中性 + 记 error）。
+    try:
+        from core.market_style import annotate_candidates, detect_style, no_trend_hint
+        _style_fb = load_json((cache_dir or ROOT.parent / "cache") / "feedback_matrix.json") or {}
+        if not isinstance(_style_fb, dict):
+            _style_fb = {}
+        _style_fb.setdefault("sentiment_score", env.get("sentiment_score"))
+        market_style = detect_style((pulse or {}).get("index"), _style_fb)
+        market_style["stats"] = annotate_candidates(scored, market_style)
+        market_style["no_trend_hint"] = no_trend_hint(_style_fb)
+    except Exception as _e:  # noqa: BLE001
+        market_style = {
+            "style": "neutral", "label": "没方向",
+            "trading_rule": "挑着做：不硬贴风格，按原分数排序",
+            "rule": "风格层降级（计算异常）", "error": str(_e),
+            "ice_note": None, "no_trend_hint": None,
+            "evidence": {}, "data_gap": ["exception"], "stats": {},
+        }
+        print(f"[EOD] 指数风格层降级: {_e}")
+
+    # P2（2026-10-18）：新方向首板独立观察槽——用外部容器接收，⛔ 不占 relay/watch 名额。
+    new_direction_first_board: list[dict[str, Any]] = []
+    relay, watch, diagnostics, sel_mode = select_relay_watch(scored, env, pulse, ai_env, comparison=comparison, first_board_out=new_direction_first_board)
     diagnostics["historical_relay"] = history_diag
+
+    # 🚪 源头准入闸（2026-10-21 用户「后排的票不要推到这里面来了」·`core/pool_admit`）：
+    #    「我们接力的票必须是龙头票，龙头票才能做接力，趋势票做容量观察用，
+    #      前排的须是龙头前排」→ **按炒作题材分组，每组只留最强 N 只**（默认 2 只活口）。
+    #    ⛔ 位置极其关键：必须在 `select_relay_watch` **之后、任何回填/展示之前** ——
+    #      这里已经是「谁进池」的最终出口；放到 9:25 去拦只能把票标成观察，
+    #      票还在池里就还在卡上（用户三次要求瘦身都没根治，根就在这）。
+    #    ⛔ 只动 relay/watch 两个桶；`new_direction_first_board` / `offpool_*` 一律不碰。
+    _relay_before, _watch_before = len(relay), len(watch)
+    relay, watch, _admit_diag = pool_admit.admit(relay, watch)
+    diagnostics["pool_admit"] = _admit_diag
+    if _admit_diag.get("enabled"):
+        print(f"[EOD] 🚪 准入闸：{_relay_before}+{_watch_before}={_relay_before + _watch_before} 只"
+              f" → {len(relay)}+{len(watch)}={len(relay) + len(watch)} 只"
+              f"（每条线留 {_admit_diag.get('per_line')} 只·挡掉 {_admit_diag.get('dropped')} 只）")
+        if _admit_diag.get("dropped_names"):
+            print(f"[EOD]    挡掉：{'、'.join(_admit_diag['dropped_names'])}")
+
+    # 🔍 池外龙头校验（2026-10-21 用户「可以加一层池外龙头校验」·`core/pool_admit`）：
+    #    准入闸只能在**池内**比强弱；若某条线真正的龙头没进池（分数不够/被别的闸挡），
+    #    "池内第一"也可能只是后排 —— 这一层就是拿**当日涨停池**回头核一遍。
+    #    ⛔ 日期铁律：`zt["ztgc"]` 与 `zt["date"]` 就是本次候选的同一交易日，
+    #      天然同源；⛔ 不要另读别的日期的池子。
+    #    ⛔ 默认**只标记不砍**（`POOL_ADMIT_OUTPOOL_DROP=0`）：用户要「我来看看对不对」，
+    #      先让判断露在 `diagnostics.outpool_check` + 卡面，确认无误再决定是否落刀。
+    _outpool = pool_admit.outpool_dragon_check(relay + watch, zt.get("ztgc") or [])
+    diagnostics["outpool_check"] = _outpool
+    for _r in relay + watch:
+        _v = (_outpool.get("rows") or {}).get(str(_r.get("code") or "")) or {}
+        if _v:
+            _r["line_tier_outpool"] = _v.get("tier")
+            _r["line_tier_why"] = _v.get("why")
+            _r["line_top"] = _v.get("line_top")
+            _r["line_tops"] = _v.get("line_tops")
+    if _outpool.get("enabled"):
+        _s = _outpool.get("summary") or {}
+        print(f"[EOD] 🔍 池外龙头校验（配置 {zt.get('date')} 涨停池 {_outpool.get('zt_rows')} 只）："
+              f"前排 {_s.get('front', 0)} · 次排 {_s.get('second', 0)} · "
+              f"后排 {_s.get('back', 0)} · 独苗 {_s.get('lone', 0)} · 不明 {_s.get('unknown', 0)}")
+        for _c in (_outpool.get("back") or []):
+            _v = _outpool["rows"][_c]
+            print(f"[EOD]    ⛔ 后排：{_v.get('theme')} → {_v.get('why')}")
+        if pool_admit.outpool_drop_enabled() and _outpool.get("back"):
+            _drop = set(_outpool["back"])
+            relay = [r for r in relay if str(r.get("code")) not in _drop]
+            watch = [r for r in watch if str(r.get("code")) not in _drop]
+            diagnostics["outpool_check"]["dropped"] = sorted(_drop)
+            print(f"[EOD]    🗑 已砍后排 {len(_drop)} 只（POOL_ADMIT_OUTPOOL_DROP=1）")
+
+    # 🧊 最高板 + 极薄封单 → 只当观察（2026-10-27 用户「只观察，行情差没有必要强行接力」）：
+    #    放在准入闸/池外校验**之后**：先定「谁有资格进池」，再判「进来的这只该不该给买单资格」。
+    #    ⛔ 只降级、不删除 —— 票还在卡面上（用户能看见「最高板但封单太薄」这个事实）。
+    relay, watch, _thin_seal_moved, _market_max_boards = demote_thin_seal_top(
+        relay, watch, zt.get("ztgc") or [])
+    diagnostics["thin_seal_top"] = {
+        "enabled": thin_seal_top_enabled(),
+        "market_max_boards": _market_max_boards,
+        "ratio_max_pct": THIN_SEAL_TOP_RATIO_MAX,
+        "moved": [{"code": str(r.get("code") or ""), "name": str(r.get("name") or ""),
+                   "boards": _to_int(r.get("boards"), 1),
+                   "seal_ratio_pct": r.get("seal_ratio_pct")} for r in _thin_seal_moved],
+    }
+    if _thin_seal_moved:
+        _ts_desc = "、".join(
+            "{}({}板/封单{}%)".format(r.get("name"), r.get("boards"), r.get("seal_ratio_pct"))
+            for r in _thin_seal_moved)
+        print(f"[EOD] 🧊 最高板封单过薄 → 降为观察（只看不买·不占名额）：{_ts_desc}")
+
+    # 🐉 板块龙一准入闸（2026-10-27 用户「推的票必须是板块龙一」）：
+    #    「接力的票必须是龙头票」的前一层 —— 先认准谁是这条线的龙一（`core/sector_leader`），
+    #    再要求**接力池里只放龙一**：龙二/跟风一律降观察、不给买单资格。
+    #    ⛔ 位置必须在 `thin_seal_top` 之后：龙一若因「最高板+极薄封单」被降级，
+    #      同线副手必须跟着不可买（不拿跟风顶替）——这正是用户「行情差没必要强行接力」。
+    #    ⛔ 无板块（题材缺失/独涨停）不受本闸约束，沿用孤军/高标逻辑。
+    _relay_before_dragon = len(relay)
+    relay, watch, _dragon_gate_diag = apply_dragon_gate(relay, watch)
+    diagnostics["dragon_gate"] = _dragon_gate_diag
+    if _dragon_gate_diag.get("enabled"):
+        print(f"[EOD] 🐉 龙一闸：接力 {_relay_before_dragon} 只 → {len(relay)} 只"
+              f"（降观察 {len(_dragon_gate_diag.get('moved') or [])} 只）")
+        for _m in (_dragon_gate_diag.get("moved") or []):
+            print(f"[EOD]    ↓ {_m.get('name')}（{_m.get('theme') or '无题材'}·"
+                  f"第{_m.get('dragon_rank')}身位·龙一={_m.get('leader') or '—'}）")
+    diagnostics["sector_dragon"] = _dragon_summary
+
+    # 🎯 四条件合取硬闸（2026-10-27 用户「一定要题材龙+情绪OK+量能+梯队…没有就空！！」）
+    #    ⛔ 位置必须在**所有降级闸之后**（pool_admit → thin_seal_top → 龙一闸 → 本闸）：
+    #      前面各闸解决「这只票本身行不行」，本闸解决「今天这条线+这个环境该不该推」。
+    #    ⛔ 接力池**允许为空** —— 这是用户要的效果，不是异常；卡面已有「今日无接力候选」分支。
+    _relay_before_hw = len(relay)
+    # 高度层豁免需要「全市场最高板」：thin_seal_top 关闭时它不回传（返回 0），
+    # 此处独立兜底算一次，⛔ 不让开关状态影响量能豁免口径。
+    _hw_market_max = _market_max_boards or max(
+        [_to_int((_s or {}).get("lbc") or (_s or {}).get("boards"), 1)
+         for _s in (zt.get("ztgc") or [])] or [0]
+    )
+    relay, watch, _hw_diag = apply_high_win_gate(
+        relay, watch, env, market_max_boards=_hw_market_max)
+    diagnostics["high_win_gate"] = _hw_diag
+    if _hw_diag.get("enabled"):
+        _hw_missing_text = "、".join(_hw_diag.get("conditions") or [])
+        print(f"[EOD] 🎯 四条件闸（{_hw_missing_text}）：接力 {_relay_before_hw} 只 → {len(relay)} 只"
+              f"（regime={_hw_diag.get('regime') or '—'}）")
+        for _m in (_hw_diag.get("moved") or []):
+            print(f"[EOD]    ↓ {_m.get('name')}（缺少：{'/'.join(_m.get('missing') or [])}）")
+        if not relay:
+            print("[EOD] 🈳 接力池为空 —— 四条件未同时成立，今日不推（用户纪律「没有就空」）")
+
+    # 🎯 低位连板龙雷达（2026-10-22 用户「需要做，雷达叠加观察的意思」）：
+    #    「大业股份这种票，第一个板或第二个板就必须发现」。首板/2 板常只有 1~3 亿成交额，
+    #    会被进场门槛挡在池外 —— 本名单把「低位 + 股性连板龙 + 还有量」的票单独列出来，
+    #    ⛔ 只展示、不占 relay/watch 名额、不进 09:25 池内裁决（`buyable=False`）。
+    #    ⛔ 必须在 `pool_admit` 定稿之后算：排除集要用最终池子，否则会把刚被闸挡掉的票
+    #      又当成"没进池"重复列一遍（同一条线的后排已经在池外校验里说过一次了）。
+    gene_radar: list[dict[str, Any]] = []
+    low_pool: list[dict[str, Any]] = []
+    if gene_radar_enabled():
+        try:
+            _rs, _rd = _defense_gate.load_zt_series(upto=str(zt.get("date") or ""))
+        except Exception as _e:      # 数据缺料 → 位置判据降级为「不裁决」，不硬猜
+            _rs, _rd = {}, []
+            print(f"[EOD] 🎯 雷达位置判据缺料（{_e}），本批不做位置过滤")
+        gene_radar = select_gene_radar(
+            _scored_all,
+            in_pool_codes={str(r.get("code") or "") for r in (relay + watch)},
+            excluded_turnover_codes={str(r.get("code") or "") for r in _excluded_turnover},
+            series=_rs, trading_days=_rd,
+        )
+        if gene_radar:
+            print(f"[EOD] 🎯 低位连板龙雷达：{len(gene_radar)} 只（只看不买）"
+                  f" → {'、'.join(x.get('name', '') for x in gene_radar)}")
+
+    # 🐣 低位池（2026-10-27 用户「还不如推低位！」· C 档）：
+    #    把上面雷达里**股性最强**的前几只从「只看不买」升级为**真可买**，进 09:25 池内裁决。
+    #    理由：接力池全被高标占满时（今天最高只剩 4 板、还都是成交额勉强够线的），
+    #    用户更愿意在「低位 + 连板龙基因 + 位置不高」的票上试仓，而不是接中位股。
+    #    ⛔ 三条护栏不变：①1~2 板 ②严格股性「连板龙」③位置不高（高位二波已在上游剔除）。
+    #    ⛔ 与 relay/watch **共享当日名额**（不另开独立名额），否则等于偷偷放大仓位。
+    #    ⛔ 排序仍按板数 → 低池天然排在接力池之后：它是「名额空出来时的入口」，
+    #      不抢前排；若前排全被防守闸拦掉，它才轮到（这正是想要的行为）。
+    if low_pool_enabled() and gene_radar:
+        _clean = [r for r in gene_radar if low_pool_quality_ok(r)]
+        _dirty = [r for r in gene_radar if not low_pool_quality_ok(r)]
+        low_pool = [
+            {**r, "buyable": True, "bucket": "low_pool", "bucket_label": "低位池",
+             "low_rank": i}
+            for i, r in enumerate(_clean[:LOW_POOL_TOPN], start=1)
+        ]
+        if _dirty:
+            print(f"[EOD] 🐣 封板质量不够、不进低池："
+                  f"{'、'.join(str(x.get('name') or '') for x in _dirty)}")
+        print(f"[EOD] 🐣 低位池（可买·与接力池共享名额）：{len(low_pool)} 只"
+              f" → {'、'.join(x.get('name', '') for x in low_pool) or '无'}")
 
     # early 回标统计（diagnostics 来自 select_relay_watch 返回值，须在其后写入）
     diagnostics["early_buy_hits"] = early_hits
@@ -819,10 +1905,15 @@ def run_eod(
     # （只依赖 relay+watch 的 ladder_health，不触网），故上提到 try 之外。
     _sector_zt = {str(it.get("theme") or ""): int(it.get("ladder_health") or 0) for it in relay + watch}
     try:
-        from common.stock_theme import ThemeFetcher, annotate_candidate
-        _tf = ThemeFetcher()
-        _theme_map = (_theme_map_all if comparison is not None else
-                      _tf.for_codes([str(it.get("dm") or it.get("code") or "") for it in relay + watch]))
+        from common.stock_theme import annotate_candidate
+        # P0（2026-10-18）：**一律复用 `_theme_map_all`（=当日快照）**，不再二次实时抓。
+        # 旧实现在 comparison is None 时另起一次 for_codes 抓取，
+        # 与前面 pool 回填用的映射可能不同源 → 同一文件里 topic 前后不一致。
+        _theme_map = {
+            _c: _theme_map_all[_c]
+            for _c in (str(it.get("dm") or it.get("code") or "") for it in relay + watch)
+            if _c and _c in _theme_map_all
+        }
     except Exception:
         _theme_map = {}
     for it in relay + watch:
@@ -832,6 +1923,7 @@ def run_eod(
         _ti = _theme_map.get(_code)
         _zt_cnt = _sector_zt.get(str(it.get("theme") or ""), 0)
         annotate_candidate(it, _ti, sector_zt_count=_zt_cnt)
+
     # AI 竞价预期覆盖（用户指定：AI 逐只读取涨停强度推断合理区间，覆盖确定性引擎基线）
     exp_overrides = (ai_env or {}).get("expectations") or {}
     for _it in relay + watch:
@@ -856,6 +1948,27 @@ def run_eod(
             _code = str(_it.get("code") or "")
             if _code in narratives:
                 _it["narrative"] = narratives[_code]
+
+    # 🐣 低位池补强（2026-10-27）：低池要进 09:25 裁决，就必须带上期望区间 + 面板，
+    #   否则裁决层读不到预期区间 → 只能按「缺数据不裁决」放行，等于少一道闸。
+    #   ⛔ 独立 try：低池补强失败**不得**影响 relay/watch 主链（宁可低池退化，不炸整条 eod）。
+    if low_pool:
+        for _it in low_pool:
+            try:
+                _it["dim_panel"] = build_dimension_panel(_it, env, theme_ctx)
+                _it["expectation"] = build_ai_expectation(_it, env, theme_ctx)
+                _code = str(_it.get("code") or "")
+                annotate_candidate(_it, _theme_map.get(_code),
+                                   sector_zt_count=_sector_zt.get(str(_it.get("theme") or ""), 0))
+                if narratives and _code in narratives:
+                    _it["narrative"] = narratives[_code]
+            except Exception as _e:      # noqa: BLE001
+                print(f"[EOD] 🐣 低位池补强降级 {_it.get('name')}: {_e}")
+        try:
+            from scripts.tx_query import enrich_candidates as _enrich_cands
+            _enrich_cands(low_pool)
+        except Exception as _e:          # noqa: BLE001
+            print(f"[EOD] 🐣 低位池资金/筹码补强跳过: {_e}")
 
     # 个股资金/筹码补强（2026-08-25 用户「查询用腾讯自选股」·#1）：候选批量回填
     #   main_flow_yi(当日主力净流入亿)/main_flow_5d_yi/chip_profit_rate(获利盘%)/chip_avg_cost
@@ -893,10 +2006,52 @@ def run_eod(
             1 for it in relay + watch if it.get("daily_verdict")
         )
     diagnostics["excluded_low_turnover"] = n_excluded_turnover
+    # 👑 高度层门槛豁免留痕（2026-10-27）：0 = 今天没有龙头被门槛挡住（不是出错）
+    diagnostics["leader_turnover_exempt"] = {
+        "enabled": leader_exempt_enabled(),
+        "floor_yi": MIN_TURNOVER_YI_LEADER,
+        "market_max_boards": _market_max_boards,
+        "count": len(_leader_exempt_rows),
+        "names": [str(_r.get("name") or "") for _r in _leader_exempt_rows],
+        "codes": [str(_r.get("code") or "") for _r in _leader_exempt_rows],
+    }
+    # P1（2026-10-18）：池外高辨识度名单条数（可 0；0 不代表被砍，只代表今天没有高板被剔）
+    diagnostics["offpool_high_ident_count"] = len(offpool_high_ident)
+    # 🎯 低位连板龙雷达条数（可 0；0 = 今天没有「低位+连板龙+有量」的票，不是出错）
+    diagnostics["gene_radar_count"] = len(gene_radar)
+    # 🐣 低位池条数（可买·与接力池共享名额）；enabled=False 表示开关关着
+    diagnostics["low_pool"] = {
+        "enabled": low_pool_enabled(),
+        "count": len(low_pool),
+        "names": [str(x.get("name") or "") for x in low_pool],
+        "codes": [str(x.get("code") or "") for x in low_pool],
+    }
     diagnostics["excluded_688"] = n_excluded_688
     diagnostics["selection_mode"] = sel_mode
+    # 🌊（2026-10-19）：指数形态 + 标注命中数（available=False = 开关关闭，不是出错）
+    diagnostics["market_style"] = {
+        "style": market_style.get("style"),
+        "label": market_style.get("label"),
+        "rule": market_style.get("rule"),
+        "idx_avg": (market_style.get("evidence") or {}).get("idx_avg"),
+        "amount_yi": (market_style.get("evidence") or {}).get("amount_yi"),
+        "counts": (market_style.get("stats") or {}).get("counts"),
+        "no_trend_hint": market_style.get("no_trend_hint"),
+        "data_gap": market_style.get("data_gap"),
+    }
     diagnostics["data_source"] = zt.get("source", "xuangubao")
     diagnostics["pulse_ts"] = pulse.get("ts")
+    # P0（2026-10-18）：题材映射来源留痕——审计/重跑时可凭 fingerprint 确认用的是哪份映射。
+    diagnostics["theme_snapshot"] = dict(_theme_meta)
+    # P3（2026-10-18）：复盘推演读取/命中情况（available=False = 昨日没写推演，不是出错）
+    diagnostics["review_directions"] = {
+        "review_date": review_date,
+        "available": bool(review_directions),
+        "height_hit": review_stats.get("height_hit", 0),
+        "new_direction_hit": review_stats.get("new_direction_hit", 0),
+        "caution_hit": review_stats.get("caution_hit", 0),
+        "missed_count": len(review_stats.get("missed") or []),
+    }
 
     payload = {
         "schema": "wealth_code_candidates_v1",
@@ -907,6 +2062,9 @@ def run_eod(
         "real_env": pulse,                  # pulse 大盘+板块环境（真实）
         "ai_env": ai_env or {},             # AI 研判输入
         "data_source": zt.get("source", "xuangubao"),
+        # P0（2026-10-18 可复现）：当日题材映射来源快照（source/fingerprint/generated_at）。
+        # 审计口径：同 date 的 candidates 若 fingerprint 相同，说明用的同一份映射，结果应当一致。
+        "theme_snapshot": dict(_theme_meta),
         "relay": relay,
         "watch": watch,
         # P0-2 孤岛打通（2026-08-17）：盘中早鸟埋伏信号透传盘后卡。
@@ -914,7 +2072,36 @@ def run_eod(
         # 独立于 relay/watch（它们基于涨停池），供卡片「早鸟埋伏」区与 AI 点评引用——
         # 情绪传递：盘中爆发前夜 → 次日候选伏笔。
         "early_ambush": (pulse.get("early") or [])[:6],
+        # P1（2026-10-18）：池外高辨识度名单——被成交额门槛剔除但连板高度仍高的票。
+        # ⛔ 渲染层必须保留 buyable=False 语义：只解释"为什么不进池"，不得当买入标的。
+        "offpool_high_ident": offpool_high_ident,
+        # 🎯（2026-10-22）：低位连板龙雷达——1~2 板 + 连板龙股性 + 成交额≥1 亿，但没进池的票。
+        # ⛔ 纯展示：不占 relay/watch 名额、不进 09:25 裁决；渲染层保留 buyable=False。
+        "gene_radar": gene_radar,
+        # 🐣（2026-10-27 用户「还不如推低位！」）：低位池——**真可买**的第三桶。
+        # 来源 = gene_radar 里最强的几只（1~2 板 + 连板龙股性 + 位置不高 + 成交额≥1 亿）。
+        # ⚠️ 与 relay/watch **共享当日名额**（不额外加仓），在 09:25 池内裁决里同台竞争；
+        #    板数天然最低 → 排后面，只有前排被防守闸拦掉/名额空出来时才轮到。
+        # ⛔ 关 `ENABLE_LOW_POOL=0` 即退回旧行为（这些票只剩 gene_radar 的「只看不买」）。
+        "low_pool": low_pool,
+        # P2（2026-10-18）：新方向首板独立观察槽（不占 relay/watch 名额·纯观察）。
+        # 治「复盘点名的新方向首板（万丰奥威这类）在选股里被 watch 8 位挤没了」。
+        "new_direction_first_board": new_direction_first_board,
+        # P3（2026-10-18）：复盘推演（原文 + 今日命中/落空核对）。
+        # 卡面用它解释"复盘说的高度/新方向，今天兑现了没有"，⛔ 不作买入依据。
+        "review_directions": {
+            "review_date": review_date,
+            "available": bool(review_directions),
+            "stats": review_stats,
+            "directions": review_directions or {},
+        },
         "diagnostics": diagnostics,
+        # 🧊（2026-10-27）：全市场最高板——给 09:25 裁决层判「最高板 + 极薄封单」用。
+        # ⛔ 只在盘后算一次并落盘（当日恒定），裁决层读它，不自己另算，避免两套口径。
+        "market_max_boards": _market_max_boards,
+        # 🌊（2026-10-19）：指数形态（主升/分歧/没方向）+ 明日该用哪种方式做。
+        # ⛔ 只解释"为什么这样挑"，不作买入依据；买不买仍由 decision_outlook 判。
+        "market_style": market_style,
         "global_narrative": global_narrative,
     }
     from core.leader_cycle import enrich_payload
@@ -923,6 +2110,77 @@ def run_eod(
     else:
         for rank, row in enumerate(sorted(relay + watch, key=lambda r: comparison["entries"][r["code"]]["key"], reverse=True), 1):
             row["status_rank"] = rank
+    # 必须在两条龙头证据分支及所有补强之后留痕，不假定板块资金/独立技术已接通。
+    # 此层只标注最终池对象，不改变评分、顺序、名额或次日冻结裁决。
+    try:
+        from core.theme_resonance import annotate_eod as annotate_theme_resonance
+        _resonance_rows = payload["relay"] + payload["watch"]
+        annotate_theme_resonance(_resonance_rows, asof=zt["date"])
+        diagnostics["theme_resonance"] = {
+            "total": len(_resonance_rows),
+            "flow_observed": sum(r["theme_resonance_facts"]["flow_status"] != "unknown" for r in _resonance_rows),
+            "technical_observed": sum(r["theme_resonance_facts"]["technical_status"] != "unknown" for r in _resonance_rows),
+        }
+    except Exception as _e:  # noqa: BLE001
+        print(f"[EOD] 板块趋势共振事实层降级: {_e}")
+    # 最终候选的个股动能研究证据，不参与评分/分池或09:25裁决。
+    if os.environ.get("ENABLE_RSI_EVIDENCE", "1").lower() not in {"0", "false", "off"}:
+        try:
+            from common.rsi_evidence import annotate_candidates
+            annotate_candidates(payload["relay"] + payload["watch"], asof=zt["date"])
+        except Exception as exc:
+            diagnostics["rsi_evidence_error"] = type(exc).__name__
+    # 对照镜像（2026-10-30 用户「吸收 quant-review 算法，不影响我们的购买策略」）：
+    # 只写展示字段 qr_mirror，⛔ 不参与评分/分池/名额/仓位/09:25 裁决；失败只降级不留痕主链。
+    if os.environ.get("ENABLE_QR_MIRROR", "1").lower() not in {"0", "false", "off"}:
+        try:
+            from core.qr_mirror import annotate as annotate_qr_mirror
+            _qr_rows = payload["relay"] + payload["watch"]
+            annotate_qr_mirror(_qr_rows, zt.get("zt_list"))
+            diagnostics["qr_mirror"] = {
+                "total": len(_qr_rows),
+                "scored": sum(1 for r in _qr_rows
+                              if (r.get("qr_mirror") or {}).get("applicable")),
+            }
+        except Exception as exc:  # noqa: BLE001
+            diagnostics["qr_mirror_error"] = type(exc).__name__
+    # 晋级三问（2026-10-30 用户「优化推送高胜率可晋级板块地位高的个股」）：
+    # 高胜率（个股自身晋级率≥40% 且样本够）／可晋级（1~2 板且历史走过更高）／
+    # 板块地位（前排身位且题材有梯队）。只写展示字段 `promotion_quiz`，
+    # ⛔ 不参与评分/分池/名额/仓位/09:25 裁决；失败只降级不留痕主链。
+    if os.environ.get("ENABLE_PROMOTION_QUIZ", "1").lower() not in {"0", "false", "off"}:
+        try:
+            from core.promotion_quiz import annotate as annotate_promotion_quiz
+            _pq_rows = payload["relay"] + payload["watch"]
+            annotate_promotion_quiz(_pq_rows)
+            diagnostics["promotion_quiz"] = {
+                "total": len(_pq_rows),
+                "three": sum(1 for r in _pq_rows
+                             if (r.get("promotion_quiz") or {}).get("passed") == 3),
+                "two": sum(1 for r in _pq_rows
+                           if (r.get("promotion_quiz") or {}).get("passed") == 2),
+            }
+        except Exception as exc:  # noqa: BLE001
+            diagnostics["promotion_quiz_error"] = type(exc).__name__
+    # 🔮 次日开盘推测（2026-11-02 用户「要和原有的选股卡与竞价卡结合，不是新开链路」）：
+    # 给每只候选挂 `forecast`＝明早大概率开在几个点／几成概率买不到／这档真买到时的历史胜率。
+    # ⛔ 只写展示字段，不改评分/分池/名额/仓位；09:25 裁决层读它换算「实测落在哪档」。
+    # ⛔ 模型读 cache/relay_review/latest.json（32 日归档样本），样本缺失就整体跳过、不硬编数字。
+    if os.environ.get("ENABLE_RELAY_FORECAST", "1").lower() not in {"0", "false", "off"}:
+        try:
+            from core.relay_forecast import annotate as annotate_relay_forecast
+            _fc_rows = payload["relay"] + payload["watch"]
+            annotate_relay_forecast(_fc_rows, _market_max_boards)
+            _fc = [r.get("forecast") or {} for r in _fc_rows]
+            diagnostics["relay_forecast"] = {
+                "total": len(_fc_rows),
+                "scored": sum(1 for f in _fc if f.get("gap_median") is not None),
+                "wait": sum(1 for f in _fc if f.get("verdict") == "可等"),
+                "watch": sum(1 for f in _fc if f.get("verdict") == "只观察"),
+                "drop": sum(1 for f in _fc if f.get("verdict") == "放弃"),
+            }
+        except Exception as exc:  # noqa: BLE001
+            diagnostics["relay_forecast_error"] = type(exc).__name__
     out_path = out_path or (CACHE_DIR / f"candidates-{zt['date'] or 'latest'}.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

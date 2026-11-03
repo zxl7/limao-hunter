@@ -1,0 +1,11 @@
+[Unit]
+Description=Tick limao shadow pipeline every 30s (no push, isolated cache)
+
+[Timer]
+OnBootSec=150s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Unit=limao-shadow.service
+
+[Install]
+WantedBy=timers.target

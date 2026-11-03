@@ -1,0 +1,115 @@
+{
+  "msg_type": "interactive",
+  "card": {
+    "config": {"wide_screen_mode": true},
+    "header": {
+      "template": "red",
+      "title": {"tag": "plain_text", "content": "盘中猎手·增量 | 14:42 | 机器人·赛福天 +10.01% | 涨停41"}
+    },
+    "elements": [
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "**① 🎯 结论定调**\n**跌停一个下午从 4 只扩到 18 只——尾盘在结账，不是分歧。防守收工：不接反抽、不留新仓。**\n炸板 25 只、核按钮 8 只；跌停名单已从科技扩散到医药、军工、软件。"
+        }
+      },
+      {"tag": "hr"},
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "**② 📡 信号摘要**\n📉 情绪演变：<text_tag color='green'>2.8/10·分歧 → 1.8/10·退潮｜转差</text_tag>（涨跌 1248:3882→772:4727，创业板 -0.66%→-2.06%）\n🆕新0　🔥跃升0　↗持续10\n可买Top3：无。5 只候选全部封板，未封的 20cm 已在炸板池（弘景光电、众智科技、浙江世宝）。"
+        }
+      },
+      {"tag": "hr"},
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "**③ 🔥 题材与情绪核心**\n<text_tag color='red'>👑 市场总核心：上海九百 5天5板〔大消费〕｜加速</text_tag>\n第 5 板封得稳，身后最高只有 4 板（赛福天、多伦科技），依旧没有第二个能接棒的高度。"
+        }
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "<text_tag color='red'>机器人 涨停16只〔↗持续〕</text_tag>｜较上卡 -1，全场唯一还有厚度\n• <text_tag color='red'>赛福天 4天4板 +10.01%〔带领性►·突破性✗·唯一性✗〕</text_tag>　一字封，换手仅 2.27%\n• 横河精密 +20.00% 封住　<text_tag color='green'>弘景光电从 20% 掉到 +19.83%、浙江世宝炸板</text_tag>\n• 动因：宇树物理AI大会＋马斯克 Optimus 明年末交付；宇树盘中冲高 16% 后回落，摩根大通上调目标价"
+        }
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "大消费 涨停8只〔↗持续〕｜与上卡一致，上海九百一只在撑高度\n业绩增长 涨停5只〔↗持续〕｜较上卡 +1，青岛食品 2天2板，逐票看三季报"
+        }
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "📌 依据：唯一性强（上海九百 5天5板全场最高，身后最高 4 板）；带领性中（机器人 16 只封板仍第一，但尾部已掉队）；突破性弱（机器人概念今日流出居前，全场无新题材接棒）。\n📌 明日看点：赛福天一字板明天能否开出换手，是机器人这条线最后的分水岭；大消费若丢了上海九百，全场高度归零。"
+        }
+      },
+      {"tag": "hr"},
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "**④ 📡 核心标的**\n<text_tag color='red'>润建股份 +10.00% 现价56.96〔云计算数据中心·7天4板〕</text_tag>\n<text_tag color='red'>多伦科技 +10.06% 现价9.85〔机器人·4天4板〕</text_tag>\n<text_tag color='red'>襄阳轴承 +10.03% 现价16.01〔机器人〕</text_tag>\n<text_tag color='red'>宏明电子 +20.00% 现价102.10〔被动元件〕</text_tag>\n<text_tag color='red'>科瑞思 +20.00% 现价67.37〔资产重组·2天2板〕</text_tag>"
+        }
+      },
+      {"tag": "hr"},
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "**⑤ 💰 板块资金流向**"
+        }
+      },
+      {
+        "tag": "div",
+        "fields": [
+          {"is_short": true, "text": {"tag": "lark_md", "content": "<text_tag color='red'>电机 +7.0亿</text_tag>"}},
+          {"is_short": true, "text": {"tag": "lark_md", "content": "<text_tag color='green'>人工智能 -116.1亿</text_tag>"}},
+          {"is_short": true, "text": {"tag": "lark_md", "content": "<text_tag color='red'>股份制银行 +6.4亿</text_tag>"}},
+          {"is_short": true, "text": {"tag": "lark_md", "content": "<text_tag color='green'>半导体概念 ⭐ -115.0亿</text_tag>"}},
+          {"is_short": true, "text": {"tag": "lark_md", "content": "<text_tag color='red'>银行 +5.4亿</text_tag>"}},
+          {"is_short": true, "text": {"tag": "lark_md", "content": "<text_tag color='green'>电子 -113.7亿</text_tag>"}},
+          {"is_short": true, "text": {"tag": "lark_md", "content": "<text_tag color='red'>冰雪经济 +4.6亿</text_tag>"}},
+          {"is_short": true, "text": {"tag": "lark_md", "content": "<text_tag color='green'>华为概念 -110.8亿</text_tag>"}},
+          {"is_short": true, "text": {"tag": "lark_md", "content": "<text_tag color='red'>激光雷达 +4.4亿</text_tag>"}},
+          {"is_short": true, "text": {"tag": "lark_md", "content": "<text_tag color='green'>机器人概念 ⭐ -87.6亿</text_tag>"}}
+        ]
+      },
+      {"tag": "hr"},
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "**⑥ 🧠 AI综合研判**\n① 主线定性：\n<text_tag color='purple'>机器人｜⭐确定性最强主线</text_tag>，但它今天是「龙头锁死、尾部散架」——赛福天一字封死换手只有 2.27%，弘景光电与浙江世宝却从涨停位掉下来，钱在往 2 板低位群切。\n<text_tag color='blue'>大消费｜高度还在、扩散停滞</text_tag>；<text_tag color='yellow'>业绩增长｜逐票看三季报，不是产业主线</text_tag>。"
+        }
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "② 资金与情绪：\n钱从科技宽基（人工智能、半导体、电子）成批撤进银行、电机与红利，指数靠银行托、题材靠机器人低位顶上，两套逻辑各有各的钱，互不接力。"
+        }
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": "③ 风险与纪律：\nA. 杀跌已从科技扩散到医药、军工、软件，尾盘任何反抽都不接。\nB. 一字板锁得越死，明天开盘的换手越是生死线，别把今天的封板当成明天的确定性。\nC. 未封的 20cm（弘景光电、众智科技、浙江世宝）今天全在炸板池，明日不追这些价位。\nD. 明日美联储议息，会前高估值科技难有像样反弹，减仓优先于换票。"
+        }
+      },
+      {
+        "tag": "note",
+        "elements": [
+          {"tag": "lark_md", "content": "📡 选股宝+东财+猎手 | 14:42 | AI盘中诊断\n⚠️ 本报告基于公开信息分析，投资需谨慎"}
+        ]
+      }
+    ]
+  }
+}

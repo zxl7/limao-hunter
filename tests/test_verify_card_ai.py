@@ -15,6 +15,28 @@ bc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bc)
 
 
+
+# ── 分层隔离：本文件只测「AI 判断行 / 个股级内容」────────────────────────────────────
+# ⛔ 2026-10-21：`VERIFY_CARD_LEAN`（收紧段取舍）是**另一层**开关，
+#    与本文所测维度无关。不隔离会让本文件的断言随 lean 默认值漂移
+#    （实测：lean 默认开启后有 5 例因「整段不再渲染」而假红）。
+#    lean 自己的契约在 `tests/test_verify_card_lean.py`。
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _isolate_lean(monkeypatch):
+    monkeypatch.setenv("VERIFY_CARD_LEAN", "0")
+    # ⛔ 2026-10-21：`VERIFY_CARD_HIDE`（整块不要）会把卡头汇总行一起隐藏，而本文件
+    #    有 4 例断言卡头「AI 买入信号 N」（买入口径契约）→ 必须显式打开。
+    monkeypatch.setenv("VERIFY_CARD_HIDE", "")
+    # ⛔ 2026-10-21：`VERIFY_CARD_UNIFY_MECH`（量价并入 AI 判定）是**第四层**，
+    #    会把机械段从「逐票完整展示」改成「一行口径 + 标题行胶囊」。本文件测的是
+    #    AI 判断行 / 历史基因 / 点评渲染，与「量价放哪」无关 —— 不隔离会让断言随融合默认值假红。
+    #    融合契约在 `tests/test_verify_card_lean.py`。
+    monkeypatch.setenv("VERIFY_CARD_UNIFY_MECH", "0")
+
+
 def _rec(code, name, status, gap):
     return {"code": code, "name": name, "bucket_label": "高标/题材核心",
             "theme": "大消费", "industry_sector": "一般零售",
@@ -116,6 +138,40 @@ def test_verify_card_reject_section_has_gene_and_ai(monkeypatch, tmp_path):
     assert "其余没达标" in s
     assert "📈 历史基因" in s and "近一年" in s      # 2026-09-10 白话化：近250日→近一年
     assert "🤖 AI 昨日判断：回避" in s and "首板魔咒" in s
+
+
+def test_theme_resonance_tags_follow_linkage_rollout(monkeypatch):
+    """共振只在卡面灰度开放后露出；sidecar 留痕不能改变已有卡片。"""
+    row = {
+        "theme_resonance_facts": {
+            "schema": "theme_resonance_facts_v1",
+            "status": "confirmed",
+        },
+    }
+    monkeypatch.setenv("THEME_LINKAGE_ROLLOUT_STAGE", "sidecar_record")
+    assert "板块共振已确认" not in " ".join(t for t, _ in bc._candidate_tags(row))
+
+    monkeypatch.setenv("THEME_LINKAGE_ROLLOUT_STAGE", "card_explain")
+    tags = dict(bc._candidate_tags(row))
+    assert "板块共振已确认" not in tags
+    assert tags["板块共振待复核"] == "neutral"
+
+
+def test_resonance_does_not_hide_legacy_linkage_tags(monkeypatch):
+    monkeypatch.setenv("THEME_LINKAGE_ROLLOUT_STAGE", "card_explain")
+    row = {
+        "theme_has_sector_effect": True,
+        "theme_name": "机器人",
+        "theme_mates_cnt": 3,
+        "theme_resonance_facts": {
+            "schema": "theme_resonance_facts_v1",
+            "status": "contradicted",
+        },
+    }
+    tags = dict(bc._candidate_tags(row))
+    assert tags["题材板块·机器人3家涨停"] == "purple"
+    assert tags["板块本次净流出"] == "green"
+    assert "板块资金背离" not in tags
 
 
 def test_boards_txt_and_stock_label():
@@ -436,23 +492,25 @@ def test_verify_card_buy_signal_uses_ai_caliber(monkeypatch, tmp_path):
     card = bc.build_verify_card(_vr_buys("2099-03-02", recs, 3))
     s = _text(card)
     assert "AI 买入信号" in s and ">1<" in s                     # AI 口径 = 1
-    assert "（机械量价参考 3 只）" in s                                # 机械口径降为灰字参考
-    assert "📊 机械量价参考（仅作核对，不构成 AI 买入）" in s                              # ✅ 段明确标注口径
+    assert "（量价够格 3 只）" in s                                  # 量价参考降为灰字（2026-10-21 去内部术语）
+    assert "📊 量价够格的票（仅作参考，不等同于今天的买入安排）" in s    # ✅ 段明确标注（去内部术语）
     assert "达标买入信号" not in s                                 # 旧标题不再出现
     assert "AI 只买1只·精选" in card["title"]                       # 定调同口径
 
 
 def test_verify_card_buy_signal_falls_back_without_ai_view(monkeypatch, tmp_path):
-    """AI 无判断（ai_view 缺失）→ 回退机械口径（诚实降级·不编造 AI 数字）。"""
+    """AI 无判断（ai_view 缺失）→ 回退量价（诚实降级·不编造 AI 数字）。"""
     monkeypatch.setattr(bc, "_core_reversal_block", lambda: None)
     monkeypatch.setattr(bc, "_nav_drawdown_block", lambda m: None)
     monkeypatch.setattr(bc, "ROOT", tmp_path / "wealth_code")
     recs = [_rec("000993", "闽东电力", "buy", 1.0), _rec("000823", "超声电子", "buy", 0.5)]
     card = bc.build_verify_card(_vr_buys("2099-03-03", recs, 2))
     s = _text(card)
-    assert "AI 买入信号" not in s and "机械达标" not in s
+    # ⚠️ 回退路径的段标题本身叫「✅ 量价够格的票」→ 断言不能写 `"量价够格" not in s`，
+    #    要排的是**卡头括号形式**「（量价够格 N 只）」——那是 AI 口径的标注位。
+    assert "AI 买入信号" not in s and "（量价够格" not in s
     assert "买入信号" in s and ">2<" in s
-    assert "达标买入信号" in s and "机械参考" not in s               # 旧行为原样
+    assert "量价够格的票" in s and "量价参考" not in s               # 旧行为原样（去内部术语）
     assert "个别达标·精选" in card["title"]                         # 定调仍按机械只数(2)
 
 
@@ -466,14 +524,14 @@ def test_verify_card_ai_caliber_empty_participate(monkeypatch, tmp_path):
     monkeypatch.setattr(bc, "ROOT", tmp_path / "wealth_code")
     card = bc.build_verify_card(_vr_buys("2099-03-04", [_rec("000993", "闽东电力", "buy", 1.0)], 1))
     s = _text(card)
-    assert "AI 买入信号" in s and ">0<" in s and "（机械量价参考 1 只）" in s
+    assert "AI 买入信号" in s and ">0<" in s and "（量价够格 1 只）" in s
     assert "AI 空仓·观望" in card["title"]
     hit = [b for b in _PLAN_BAD if b in s]
     assert hit == [], f"AI 口径卡残留术语: {hit}"
 
 
 def test_ai_caliber_switch_off_restores_old(monkeypatch, tmp_path):
-    """开关 AI_CALIBER_BUY_SIGNAL=False → 一键回退旧行为（机械口径），AI 视图照常渲染。"""
+    """开关 AI_CALIBER_BUY_SIGNAL=False → 一键回退旧行为（量价），AI 视图照常渲染。"""
     monkeypatch.setattr(bc, "_core_reversal_block", lambda: None)
     monkeypatch.setattr(bc, "_nav_drawdown_block", lambda m: None)
     d = tmp_path / "cache"
@@ -484,9 +542,9 @@ def test_ai_caliber_switch_off_restores_old(monkeypatch, tmp_path):
     card = bc.build_verify_card(_vr_buys("2099-03-05", [_rec("000993", "闽东电力", "buy", 1.0),
                                                        _rec("000823", "超声电子", "buy", 0.5)], 2))
     s = _text(card)
-    assert "AI 买入信号" not in s and "（机械达标" not in s
+    assert "AI 买入信号" not in s and "（量价够格" not in s
     assert "买入信号" in s and ">2<" in s
-    assert "达标买入信号" in s
+    assert "量价够格的票" in s
     assert "个别达标·精选" in card["title"]                         # 回退后定调按机械只数(2)
 
 

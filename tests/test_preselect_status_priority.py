@@ -161,7 +161,11 @@ def test_pipeline_wires_before_selection_and_reuses_frozen_themes():
     src = inspect.getsource(pipeline_eod.run_eod)
     assert src.index("build_preselect_context(") < src.index("select_relay_watch(scored")
     assert "comparison=comparison" in src
-    assert "_theme_map_all if comparison is not None" in src
+    # P0（2026-10-18 用户「按顺序处理」）：题材映射**一律复用当日快照** `_theme_map_all`。
+    # 旧断言锁的是「comparison 非空才复用」，新实现更强：无论是否预选，候选回填都从
+    # 同一份快照取 —— 否则同一文件里 pool 与候选题材不同源（10-16 实证结果漂移）。
+    assert "_theme_map_all[_c]" in src
+    assert "ThemeFetcher().for_codes(" not in src, "⛔ 禁再二次实时抓（会与 pool 不同源）"
     assert "if comparison is None:\n        enrich_payload" in src
 
 

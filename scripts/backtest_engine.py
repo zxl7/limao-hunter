@@ -142,18 +142,37 @@ def find_prediction_text(d: str) -> dict:
             raw = p.read_text(encoding="utf-8")
         except Exception:
             continue
-        # 盘前预测分："预判 7-8/10" / "预测 5/10" / "预判 5~6/10"
+        # ① 严格口径（优先）："预判 7-8/10" / "预测 5/10" / "预判 5~6/10"
         m = re.search(r"[预前][判测]\s*(\d+(?:\.\d+)?)\s*[~\-—至]\s*(\d+(?:\.\d+)?)\s*/\s*10", raw)
         if m:
             lo, hi = float(m.group(1)), float(m.group(2))
             result["predict_lo"], result["predict_hi"] = lo, hi
             result["predict_mid"] = round((lo + hi) / 2, 2)
+            result["parse_mode"] = "strict_range"
         m2 = re.search(r"[预前][判测]\s*(\d+(?:\.\d+)?)\s*/\s*10", raw)
         if m2 and "predict_mid" not in result:
             v = float(m2.group(1))
             result["predict_mid"] = v
             result["predict_lo"] = result["predict_hi"] = v
-        if result:
+            result["parse_mode"] = "strict_single"
+        # ② ⛔ 2026-10-27 实测结论：**不做「情绪 X/10」宽松兜底**。
+        #    盘前卡里确实有「情绪1.0/10冰点」这类数字（全库 20 处），但逐条核语境后：
+        #    含前瞻词（明日/次日/预判）**0 处**，含回顾词（日期/昨日/收盘/轨迹）5 处，
+        #    其余 15 处是「退潮确认：情绪2.4/10」「情绪4.5/10修复(连续第2日…)」——
+        #    全部在描述**昨日收盘的实际情绪**，没有一个是在预测明日。
+        #    若放宽正则当成预测值，等于拿「昨天的实际」去减「今天的实际」→ 凭空造出
+        #    一条系统性偏差曲线，直接污染 R3/P1。宁可少算，不可错算。
+        #    → 根治在 P2：盘前卡落 `sentiment_predict` 结构化字段（见 架构/ 待办）。
+        #    此处只做**识别并标记**，供卡面说人话，不参与计算。
+        if "predict_mid" not in result:
+            m3 = re.search(r"(?:情绪|温度|分数)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(?:[~\-—至]\s*(\d+(?:\.\d+)?)\s*)?/\s*10", raw)
+            if m3:
+                result["rejected_loose_value"] = float(m3.group(1))
+                result["reject_reason"] = "「情绪X/10」为昨日实际分（回顾语境），非明日预判，不采用"
+        if result.get("predict_mid") is not None:
+            result["source"] = pat
+            break
+        if result.get("rejected_loose_value") is not None:
             result["source"] = pat
             break
     return result
@@ -179,6 +198,34 @@ def actual_sentiment(d: str) -> float | None:
 
 # ---------------- 回测指标 ----------------
 
+def _vacuous_reason(settle_date: str) -> str | None:
+    """当日「零参与」口径（2026-10-27 新增）——把「真空仓」从「数据缺失」里剥出来。
+
+    背景：34 个回测日里候选命中 19 天不可算，其中 10 天是 `pool_call.participate=[]`
+    （防守/冰点/买不进 → 零成交 → nav 本来就不该写账）。旧实现一律记
+    「nav 无记录」，与真正的链路断（候选文件缺失 / 有票无结算）混为一谈，
+    导致 P4 天天假阳性、R2 样本永远凑不齐。
+
+    ⛔ 只认「字段存在且为空列表」这一种形态：`participate=None`（老版本无此字段）
+       必须落回原判，不许猜。
+    """
+    p = WC_CACHE / f"pool_call-{settle_date}.json"
+    if not p.exists():
+        return None
+    try:
+        j = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    meta = j.get("meta") or {}
+    part = meta.get("participate")
+    if part is None:
+        part = j.get("participate")
+    if isinstance(part, list) and len(part) == 0:
+        stance = meta.get("stance") or j.get("stance") or "?"
+        return f"当日零参与（stance={stance}），nav 无账可写 → 真空仓，非数据缺口"
+    return None
+
+
 def backtest_candidate_hit(rec_date: str, settle_date: str, nav_rows: list) -> dict:
     """A. 候选池命中率：找 nav 账本里 recommendation_date==rec_date 的结算记录。"""
     rec = None
@@ -188,7 +235,11 @@ def backtest_candidate_hit(rec_date: str, settle_date: str, nav_rows: list) -> d
             if rec is None or r.get("trade_date", "") > rec.get("trade_date", ""):
                 rec = r
     if not rec:
-        return {"available": False, "reason": f"nav 无 recommendation_date={rec_date} 记录"}
+        vac = _vacuous_reason(settle_date)
+        if vac:
+            # 真空仓：available 仍为 False（无样本可算命中率），但原因可裁决、不计缺口
+            return {"available": False, "status": "vacuous", "reason": vac}
+        return {"available": False, "status": "gap", "reason": f"nav 无 recommendation_date={rec_date} 记录"}
     avg = rec.get("avg_return_pct")
     stocks = rec.get("stocks", [])
     n = len(stocks)
@@ -250,14 +301,23 @@ def backtest_range_hit(rec_date: str, settle_date: str, cand: dict, auction: dic
 
 
 def backtest_sentiment_align(rec_date: str) -> dict:
-    """C. 情绪分对齐：盘前预测分 vs 当日收盘实际分。"""
+    """C. 情绪分对齐：盘前预测分 vs 当日收盘实际分。
+
+    ⛔ 2026-10-27：明确区分「盘前卡没写预测分」与「解析器坏了」——
+       前者是契约缺失（应补结构化字段），后者是 bug。旧实现一律 available=False 无从分辨。
+    """
     pred = find_prediction_text(rec_date)
     actual = actual_sentiment(rec_date)
-    if not pred or actual is None:
-        return {"available": False}
     mid = pred.get("predict_mid")
     if mid is None:
-        return {"available": False}
+        reason = pred.get("reject_reason") or (
+            "盘前卡无「预判/预测 X/10」预测分（契约缺失，需落 sentiment_predict 结构化字段）"
+        )
+        return {"available": False, "status": "contract_missing", "reason": reason,
+                "candidates_found": pred.get("rejected_loose_value")}
+    if actual is None:
+        return {"available": False, "status": "actual_missing",
+                "reason": f"{rec_date} 实际情绪分不可得（summary_5d 已滚出窗口 / feedback_matrix 无当日）"}
     diff = round(mid - actual, 2)
     return {
         "available": True,

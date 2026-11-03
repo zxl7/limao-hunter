@@ -1,0 +1,15 @@
+[Unit]
+Description=Limao data pipeline (server-side producer, replaces Mac pulse_fetcher)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__ROOT__/current
+Environment=LIMAO_ROOT=__ROOT__/current
+Environment=LIMAO_PY=__PY__
+Environment=LIMAO_LOG_DIR=__ROOT__/logs
+# ⛔ 影子模式：只产数据不推送。验证通过后改成 0 并同时停掉 Mac 的 fetcher
+Environment=SHADOW=1
+Environment=TZ=Asia/Shanghai
+ExecStart=/bin/bash /home/ubuntu/limao/remote_pipeline.sh
+TimeoutStartSec=180

@@ -24,7 +24,10 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
+
+from core import front_core as _front_core
 
 # ============================================================================
 # P2-9 分池校准常量（2026-08-17 用户"情绪核心"战法回标）
@@ -84,6 +87,101 @@ ICE_FREEZE_RELAY = False
 HISTORICAL_RELAY_FACTOR_ENABLED = True
 HISTORICAL_RELAY_FACTOR_MAX = 7.0
 # ============================================================================
+# P2 · 新方向首板独立观察槽（2026-10-18 用户「按顺序处理」）
+# ----------------------------------------------------------------------------
+# 【治什么】用户 10-16 原话：「真正的高度要看冰山冷热4进5、新华文轩3进4；新方向里
+#   军工的长城军工、低空的万丰奥威与金盾股份是最强的首板接棒候选」——但选股里
+#   首板只能靠 relay 的 relaxed/broad 兜底、或在 watch 8 位里跟题材内票抢位置
+#   （10-16 万丰奥威排第 9 被 watch 容量截断，直接消失）。
+#   首板 ≠ 能进接力池（1进2 有容量/raw 硬门槛，不放松），但**「新方向刚冒头」需要
+#   一个不被容量挤掉的固定观察位**。
+#
+# 【做法】relay / watch 之外**独立第三块** `new_direction_first_board`：
+#   · boards == 1（首板）且未进 relay/watch
+#   · core_theme 有效（非空/其他/—，即真提炼出了方向）
+#   · 该题材今日涨停家数 ≤ NEW_DIRECTION_MAX_THEME_MATES（尚未成梯队 = 还是"方向"）
+#   · 按 raw_score 取前 NEW_DIRECTION_FIRST_BOARD_SLOTS 只
+#   ⛔ 不占接力名额、不改 relay/watch 任何一位、不参与买入裁决（纯观察）。
+# ⛔ 可逆：ENABLE_NEW_DIRECTION_FIRST_BOARD=0 → 关闭（旧行为，无第三块）。
+# ============================================================================
+NEW_DIRECTION_FIRST_BOARD_SLOTS = 3
+NEW_DIRECTION_MAX_THEME_MATES = 3
+_INVALID_THEMES = {"", "其他", "—", "-", "无", "未知"}
+# ============================================================================
+
+
+def new_direction_first_board_enabled() -> bool:
+    """P2 新方向首板观察槽开关（默认开；ENABLE_NEW_DIRECTION_FIRST_BOARD=0 回旧行为）。"""
+    return os.environ.get("ENABLE_NEW_DIRECTION_FIRST_BOARD", "1") not in ("0", "false", "False", "")
+
+
+def _theme_mate_count(cand: dict[str, Any]) -> int | None:
+    """题材内涨停家数（优先 theme_mates_cnt，兜底 sector_mates_cnt）；无数据 → None。"""
+    for k in ("theme_mates_cnt", "sector_mates_cnt"):
+        v = cand.get(k)
+        if v is None or v == "":
+            continue
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _is_new_direction(cand: dict[str, Any], max_theme_mates: int) -> bool:
+    """「新方向」判据：题材尚未成梯队（家数少）或梯队健康度低。
+
+    ⛔ 无数据时不猜——家数与梯队健康度都缺 → 判 False（不编造"新方向"）。
+    """
+    mates = _theme_mate_count(cand)
+    if mates is not None:
+        return mates <= max_theme_mates
+    lh = cand.get("ladder_health")
+    if lh is None or lh == "":
+        return False
+    return _to_num(lh, 0.0) <= 3.0
+
+
+def select_new_direction_first_board(
+    candidates: list[dict[str, Any]],
+    *,
+    exclude_codes: set[str] | None = None,
+    slots: int = NEW_DIRECTION_FIRST_BOARD_SLOTS,
+    max_theme_mates: int = NEW_DIRECTION_MAX_THEME_MATES,
+) -> list[dict[str, Any]]:
+    """新方向首板独立观察槽（P2 · 纯观察·不占接力名额）。
+
+    入选：boards==1 ∧ 未进 relay/watch ∧ core_theme 有效 ∧ 题材未成梯队。
+    排序：raw_score desc；截 slots。
+
+    返回的是**入参行的浅引用**（不回写、不改 relay/watch 任何一位）；调用方自行加
+    bucket/label 标记。⛔ 本名单只解决"新方向首板看不见"，不构成买入依据。
+    """
+    ex = {str(c) for c in (exclude_codes or set())}
+    picked: list[dict[str, Any]] = []
+    for c in candidates or []:
+        if not isinstance(c, dict):
+            continue
+        code = str(c.get("code") or "")
+        name = str(c.get("name") or "")
+        if not code or not name or code in ex:
+            continue
+        if code.startswith("688") or "ST" in name.upper():
+            continue
+        if _to_num(c.get("boards"), 1) != 1:
+            continue
+        if str(c.get("core_theme") or "").strip() in _INVALID_THEMES:
+            continue
+        if not _is_new_direction(c, max_theme_mates):
+            continue
+        picked.append(c)
+
+    def _score(r: dict[str, Any]) -> float:
+        v = r.get("raw_score")
+        return _to_num(v if v is not None else r.get("_raw"))
+
+    picked.sort(key=_score, reverse=True)
+    return picked[:max(0, int(slots))]
 
 
 def _clamp(v: float, lo: float = 0.0, hi: float = 100.0) -> float:
@@ -217,6 +315,12 @@ def compute_raw_score(cand: dict[str, Any], env: dict[str, Any], pulse: dict[str
         historical_relay_factor = 0.0
     historical_relay_factor = max(-HISTORICAL_RELAY_FACTOR_MAX, min(HISTORICAL_RELAY_FACTOR_MAX, historical_relay_factor))
 
+    # —— 9.6) 前排核心分（2026-10-21 用户贴 92科比 定调·`core/front_core`）——
+    # 补的正是系统原先「只在卡面展示、没进选股」的三块：筹码结构、主力资金回流、封板加速。
+    # ⛔ 上限 ±6，小于高度档（+8）与历史晋级（±7）：同高度里比谁更靠前，不许顶掉空间龙。
+    front_core = _front_core.score(cand)
+    front_core_bonus = _to_num(front_core.get("bonus"), 0.0)
+
     # —— 10) market_gate_adjust（开仓闸门：环境周期）——
     market_gate_adjust = {"risk_on": 2.0, "neutral": 0.0, "risk_off": -5.0}.get(regime, 0.0)
 
@@ -253,7 +357,8 @@ def compute_raw_score(cand: dict[str, Any], env: dict[str, Any], pulse: dict[str
         + opportunity_score * 0.02
     )
     raw_score = _clamp(
-        weighted + identity_edge + height_breakout_bonus + historical_relay_factor + market_gate_adjust + tide_adjust
+        weighted + identity_edge + height_breakout_bonus + historical_relay_factor
+        + front_core_bonus + market_gate_adjust + tide_adjust
     )
 
     return {
@@ -268,6 +373,11 @@ def compute_raw_score(cand: dict[str, Any], env: dict[str, Any], pulse: dict[str
         "identity_edge": round(identity_edge, 2),
         "height_breakout_bonus": round(height_breakout_bonus, 2),
         "historical_relay_factor": round(historical_relay_factor, 2),
+        # 前排核心（92科比 口径）·子分留痕供卡面/复盘解释，⛔ 不进四档资格
+        "front_core_score": _to_num(front_core.get("score"), 50.0),
+        "front_core_bonus": round(front_core_bonus, 2),
+        "front_core_subs": front_core.get("subs") or {},
+        "front_core_facts": front_core.get("facts") or {},
         "history_relay_prob": cand.get("history_relay_prob"),
         "history_relay_samples": int(_to_num(cand.get("history_relay_samples"), 0)),
         "market_gate_adjust": round(market_gate_adjust, 2),
@@ -519,13 +629,16 @@ def _is_lone_lowboard(cand: dict[str, Any]) -> bool:
     return _to_num(cand.get("boards"), 1) <= LONE_LOWBOARD_MAX and lone
 
 
-def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse: dict[str, Any] | None, ai: dict[str, Any] | None, *, comparison=None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], str]:
+def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse: dict[str, Any] | None, ai: dict[str, Any] | None, *, comparison=None, first_board_out: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], str]:
     """
     faithful §4.4 四档接力选择 + 观察池生成。
 
     返回 (relay, watch, diagnostics, selection_mode)。
     relay/watch 元素为原始 pipeline_eod 候选（带 raw_score / relay_rank / bucket），
     不含 tactics 中间字段，供 pipeline_eod 继续回填 dim_panel/expectation/narrative。
+
+    `first_board_out`（P2·2026-10-18）：传入 list 则**额外**填充「新方向首板独立观察槽」，
+    ⛔ 不占 relay/watch 任何名额、不改变二者内容；不传 = 旧行为（无第三块）。
     """
     from copy import deepcopy
     from core import leader_cycle
@@ -556,10 +669,15 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
         """龙头优先：先锁定题材第一，再在同级比较综合质量。
 
         此键只决定 relay/watch 的展示和执行优先级，不改变四档入池资格、AI 预案或量化权重。
+
+        P3（2026-10-18）：第二位插入 `review_bonus`（复盘推演倾斜 ±1.2）。
+        ⛔ 刻意放在"板块龙"之后：复盘只能调整**同一识别度层级内**的先后，
+           不能把复盘点赞的跟风票顶到板块龙前面，也不能改 raw_score / 入池资格。
         """
         cand = row.get("_cand") if isinstance(row.get("_cand"), dict) else {}
         return (
             float(bool(cand.get("is_sector_dragon"))),
+            _to_num(cand.get("review_bonus")),
             _to_num(row.get("lbc")),
             _to_num(cand.get("carry_cnt")),
             _to_num(cand.get("theme_mates_cnt")),
@@ -639,6 +757,22 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
     relay = [_restore(m) for m in relay_mapped]
     watch = [_restore(m) for m in watch_mapped]
 
+    # P2（2026-10-18 用户「按顺序处理」）：**新方向首板独立观察槽**——relay/watch 之外第三块。
+    # 治「首板只能靠 relaxed/broad 兜底、或在 watch 8 位里被题材内票挤掉」
+    # （实证 10-16：万丰奥威 watch 排第 9 被容量截断 → 复盘点名、选股消失）。
+    # ⛔ 只填外部容器，relay/watch 一位不动、不占名额、不参与买入裁决。
+    if first_board_out is not None and new_direction_first_board_enabled():
+        _used_codes = {str(x.get("code") or "") for x in (relay + watch)}
+        _first_board = select_new_direction_first_board(
+            [_restore(m) for m in by_raw], exclude_codes=_used_codes
+        )
+        for _i, _row in enumerate(_first_board, start=1):
+            _row["bucket"] = "new_direction"
+            _row["bucket_label"] = "新方向首板"
+            _row["new_direction_rank"] = _i
+            _row["new_direction_note"] = "首板·题材未成梯队（独立观察槽·不占接力名额）"
+        first_board_out.extend(_first_board)
+
     for idx, it in enumerate(relay, start=1):
         it["relay_rank"] = idx
         it["leader_preference_rank"] = idx
@@ -684,6 +818,8 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
         "one_to_two_eligible": sum(1 for m in mapped if _relay_one_to_two_ok(m)),
         "relay_count": len(relay),
         "watch_count": len(watch),
+        # P2（2026-10-18）：新方向首板独立观察槽条数（不占 relay/watch 名额）
+        "new_direction_first_board_count": len(first_board_out or []),
         "selection_mode": mode,
         "relay_feedback": env.get("relay_feedback"),
         "mean_raw_score": round(sum(_to_num(c.get("raw_score")) for c in scored) / max(1, len(scored)), 2),

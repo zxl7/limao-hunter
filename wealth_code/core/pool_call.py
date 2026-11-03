@@ -21,17 +21,19 @@
   ① 无竞价数据          → 观察（诚实·不是放弃）
   ② 竞价 > 5% 用户硬线  → 放弃（买不到）
   ③ 盘后预案 = 回避     → 放弃（昨日的预案就是不看它）
-  ④ 低于预期区间下沿    → 放弃（不及预期）
-  ⑤ 没红开（gap ≤ 0）   → 观察
-  ⑥ 红开但量能不足      → 观察（无量的高开＝诱多）
+  ④ 低于预期区间下沿    → 放弃（不及预期）        ← 🎯 最高板低开>3% 例外放行（2026-11-02）
+  ⑤ 没红开（gap ≤ 0）   → 观察                   ← 🎯 同上唯一例外
+  ⑥ 红开但量能不足      → 观察（无量的高开＝诱多）  ← 🎯 未破地板时降半仓放行（2026-11-02）
   ⑦ 同线核心已断板的跟风 → 观察（跟风闸·不占名额）
   ⑧ 所属方向资金失血     → 观察（方向净流出 ≥30 亿·不占名额）        ← 土壤
   ⑨ 位置高 + 二波反抽    → 观察（断板 ≥3 个交易日后重启 ∧ 上一波最高板 ≥3·不占名额）← 位置
   ⑨b 老龙复燃           → 观察（炒过的老票曾 ≥2 连板 ∧ 断板 ≥5 交易日 ∧ 复燃首日仅首板·不占名额）← 老龙
   ⑩ 前一日派发特征       → 观察（换手大 ∧ 封单薄 ∧ 封得晚·三条全中·不占名额）← 盘口
   ⑪ 其余                → 候选
-  候选先按「地位 → 带动 → 连续性 → 竞争身位」，再沿用同线核心、预案/机械强龙等旧排序键，取前 N 只 → 参与；
-  其余候选 → 观察（附「池内今天只买前 N 只」）。
+  候选先按「**全市场最高板** → 地位 → 带动 → 连续性 → 竞争身位」，再沿用同线核心、预案/机械强龙
+  等旧排序键，取前 N 只 → 参与；其余候选 → 观察（附「池内今天只买前 N 只」）。
+  🎯 身位档 2026-11-02 起**参与排序**（此前只拦错不改选）：31 个交易日 / 218 个可执行样本
+     实测，只改这一个排序键，验证段日胜率 46.2%→61.5%、日均 −0.09%→+2.25%。
   ⛔ ⑦~⑩ 的判据全部来自**前一交易日收盘**（09:25 时点已可得），不看今日盘中——所以它们能
      在竞价落地的那一刻就生效，而不是收盘后才后悔（2026-10-08 回撤教训）。
   ⚠️ ⑦~⑩ 的先后＝「宏观到微观」：板块有没有钱（⑧）→ 这票在什么位置（⑨ 高位二波 / ⑨b 老龙复燃）
@@ -67,6 +69,13 @@ if str(ROOT) not in sys.path:
 
 from core import ai_caliber as _ac                      # noqa: E402
 from core import defense_gate as _dg                    # noqa: E402
+# 前排/后排身位（2026-10-21 用户贴 92科比 定调·「后排接力严格要谨慎」）：
+# 只做「同线谁更靠前」的纯判定，⛔ 不打分、不改阈值。
+from core import front_core as _fc                      # noqa: E402
+# 锚点判读（2026-10-21）：昨日大将军的今日竞价态度 → 这条线能不能出手。
+from core import anchor_call as _ac2                    # noqa: E402
+# 周期四阶段 + 中位股（2026-10-21 学 92科比）：只判「这只票的位置该不该碰」。
+from core import cycle_phase as _cp                     # noqa: E402
 # 早盘接力·动态仓位（2026-10-13 用户需求）：名额的最终向下裁断唯一判据源。
 # ⛔ 不在此处另写一套强弱/仓位逻辑——只消费 relay_position 的方案（与卡面/决策层同源）。
 from core import relay_position as _rp                   # noqa: E402
@@ -123,6 +132,39 @@ CORE_GATE_MIN_GAP = 2
 # ⛔ 可逆：False → 回到只看「板数差 ≥2 + 核心已断板」。
 POOL_CALL_LINE_CONSISTENCY_GATE = True
 
+# ── 🚧 后排接力闸（2026-10-21 用户「后排接力严格要谨慎！很有可能没有溢价！」+ 92科比贴图）──
+# 用户原话：「选票，往前排核心选」「看高做低，做高看低」「后排接力严格要谨慎！很有可能没有溢价！」
+# 与上面「跟风闸」的分工（⛔ 不是重复）：
+#   · 跟风闸：只在「同线核心**已断板**」时拦 —— 治的是「核心不在池内、系统只能按单票分排」；
+#   · 后排闸：**不等核心断板**。同线只要还有比它靠前的票在，它就是后排 —— 治的是
+#     「溢价先被前排吃掉，后排竞价看着达标其实接的是最后一棒」。
+# 分档（池内板数排名 `line_rank`，见下方 _line_rank）：
+#   · 前排（本条线最靠前 / line_is_core）→ 放行，正常参与名额竞争；
+#   · 次排（line_rank == 2，或池外核心只高 1 板）→ 需**量能确认**（竞价额 ≥ 计划需求）；
+#   · 后排（line_rank ≥ 3，或池外核心高出 ≥2 板）→ 同样必须量能确认，且**排序永远让给前排**
+#     （见 `_key` 的首位身位档）—— 名额有限时先给前排，只有前排填不满、且它自己放量，
+#     才轮得到后排。
+# ⛔ 不另设 gap 上限：5% 是用户唯一硬线（`ai_caliber.USER_ENTRY_MAX_GAP_PCT`，卡面/账本同源），
+#   后排闸再加一条 3% 会造成「卡面说没买到、账本记买到」的三方打架（09-14 闽东电力教训）。
+# ⛔ 可逆：`POOL_CALL_BACKROW_GATE = False` → 逐字回到「跟风闸单闸」的旧行为。
+POOL_CALL_BACKROW_GATE = True
+BACKROW_MIN_VOL_RATIO = 1.0       # 次排/后排要求 竞价额 / 计划需求 ≥ 该值（＝放量确认）
+
+# ── ⚓ 锚点闸（2026-10-21 用户口述「次日只需做好锚点的对比与观察」）────────────────
+# 体系：昨天收盘用**涨停时间**定出每条线的大将军（`core/anchor_call.pick_general`）→
+#   今天 09:25 只看这只怎么开（一字/大高开/强开/平开/破预期）→ 决定这条线今天能不能出手。
+# 本闸只做**最强否决**一件事：
+#   · 锚点破预期（低开超 1% 或低于昨日预期下沿）→ 该线其它票一律不占名额；
+#   · 锚点只是低开（0~-1%）→ 同样先看，等它回红盘。
+#   · 锚点一字/大高开（买不到）→ **不拦**，那是「打隔壁」场景（与后排闸同一口径）。
+# ⛔ 缺锚点数据（核心不在涨停池 / 已断板 / 没报价）→ **不裁决**，诚实降级不猜。
+POOL_CALL_ANCHOR_GATE = True
+POOL_CALL_ANCHOR_MIN_GAP = -1.0
+
+# ── 🎯 中位股闸（2026-10-21 学 92科比 §5.1「要么做高，要么做低，中间不要碰」）──────────
+# 中位 = 既有不了最高板的地位，也没低位的性价比。只在市场高度 ≥5 板时才存在中位区。
+# ⛔ 可逆：`POOL_CALL_MIDBOARD_GATE=False` → 恢复旧行为。
+POOL_CALL_MIDBOARD_GATE = True
 # ── 🛡️ 买入前防守闸门（2026-10-08 大幅回撤经验固化·见 core/defense_gate.py）──────
 # 实证：10-08 只买两只（襄阳轴承 −5.85% / 南华生物 −8.18%，平均 −7.02%，净值 1.058→0.984）。
 # 两只票在**前一日收盘**就同时具备「换手 >15% + 封单/流通 <2% + 10:00 后才封板」三条特征，
@@ -139,6 +181,111 @@ POOL_CALL_DEFENSE_SECTOR_DRAIN = True
 POOL_CALL_DEFENSE_POSITION = True
 POOL_CALL_DEFENSE_OLD_DRAGON = True
 POOL_CALL_DEFENSE_ENV = True
+# 🧊 2026-10-27 用户定（原话「只观察，行情差没有必要强行接力」）：
+#    **全市场最高板 + 封单极薄 → 只观察、不占名额**（能看不能买）。
+#    与盘后 `pipeline_eod.demote_thin_seal_top` 同一判据、同一阈值（封单/流通 <2%，
+#    复用 `defense_gate.DIST_SEAL_RATIO_MAX`）：盘后先把它从接力池降进观察池，
+#    这里做第二道保险——防它被别的路径（旧数据/手工重排）又捡回买单队列。
+#    `POOL_CALL_THIN_SEAL_TOP=False` 单独回退本闸（不影响其余防守判据）。
+POOL_CALL_THIN_SEAL_TOP = True
+
+# 🐉 2026-10-27 用户定（原话「推的票 必须是板块龙一」）：
+#    **只有板块龙一能买**；龙二/跟风一律 watch（不占名额、不下买单）。
+#    判据来源 = 盘后 `core.sector_leader` 回填的 `dragon_rank`（单一源），
+#    ⛔ 本闸不自己重算强弱 —— 9:25 只认盘后定好的身位，防「盘后漏标 / 旧候选文件」漏过去。
+#    与 ⑪ 后排闸的分工：⑪ 只在「前排还在板且买得到」时拦；本闸**无条件拦非龙一**
+#    （前排买不到也不拿跟风顶替 —— 用户「行情差没必要强行接力」）。
+#    `POOL_CALL_DRAGON_GATE=False` 单独回退本闸。
+POOL_CALL_DRAGON_GATE = True
+
+# ⑩e 四条件闸的裁决层拦截（2026-10-27 用户「一定要题材龙+情绪OK+量能+梯队…没有就空！！」）。
+# 盘后 `apply_high_win_gate` 已把四条件不全的票移出接力池并打 `high_win_gate=[...]` 标；
+# 这里二次拦截，⛔ 防「同日重跑 / 旧存档 / 人工塞票」绕回买入。
+# `POOL_CALL_HIGH_WIN_GATE=False` 单独回退本闸。
+POOL_CALL_HIGH_WIN_GATE = True
+
+# ⑪b 🥇 身位闸（2026-11-02「高胜率优先」立项·默认关·等回放验收）
+#   依据＝红开可买口径（0<gap≤5%，现行「不接低开」纪律下真正能下单的子集）按身位分组：
+#       最高板  n=9  胜率 66.7% / 均 +1.83%
+#       差1板   n=10 胜率 60.0% / 均 +0.14%
+#       差≥2板  n=58 胜率 39.7% / 均 −1.37%
+#   ⛔ 关键：**封板质量救不了后排**。差≥2板里封板强（≥3 因子）那批红开可买胜率只有
+#      28.6% / 均 −2.69%（n=7）——封得好换来的高开被市场砍掉，能成交的本身就是弱样本。
+#   ⛔ 与 ⑪ 后排闸分工：⑪ 管「有前排可买却买小弟」；本闸管「这条线连前排都没有，它自己就是后排」。
+#   ⛔ 空池是合法结果（用户「没有就空」）。缺 `market_max_boards` → 不裁决（不猜）。
+# ⚠️ 证据强度（务必如实看）：31 日真实链路回放里它只砍掉 **1 笔**（11-02 中电港 1 板
+#    +0.05% 开 → −0.44%），日胜率 63.6%→70.0%、日均 +2.79%→+3.11%、中位 +2.01%→+3.40%。
+#    **增量仅 1 天，不足以单独称「已验证」**；真正的证据基础是纸面 58 个后排可成交样本
+#    （胜率 39.7%）。两处方向一致才开，单看回放不敢开。
+POOL_CALL_LEADER_ONLY = True
+LEADER_ONLY_MAX_GAP = 2        # 身位差 ≥ 此值判后排（0/1 板内仍可买）
+
+# ⑪c 🔮 预测档闸（2026-11-02 与选股卡共用同一模型 `core.relay_forecast`·默认关）
+#   盘后选股卡算好 `forecast` 落进候选文件，本层只透传并在买入理由里带上「这档历史胜率」。
+#   本闸只额外拦一类**历史崖位**：boards ≥ 6 且该档晋级率 < 25%（6进7 实测 12.5%、n=8）。
+#   ⛔ 不拦「放弃」档 —— 那等于身位后排，⑪b 已经拦过，同一件事不判两次。
+#   ⛔ 不拦「只观察」的非崖位情形 —— 那多半是「样本不足」，是不知道，不是不行。
+#   ⛔ 缺 `forecast`（旧候选文件 / 模型样本缺失）→ 一律放行，不裁决。
+# ⚠️ 默认关的理由：31 日回放里崖位日是稀有事件（6 板一年出现几次），
+#    **现状样本不足以证明放开或收紧**，故只留代码 + 逐笔留痕，等真实触发 ≥3 次再复议。
+POOL_CALL_FORECAST_GATE = False
+FORECAST_CLIFF_BOARDS = 6
+FORECAST_CLIFF_PROMO_MAX = 25.0
+
+# 🧊 冰点解冻（2026-10-28 用户「冰点日若开盘后情绪转好 可以出手」）。
+#   盘后 `apply_high_win_gate` 把冰点日的票**冻结**（`frozen` + `unfreeze_on`）而非判死；
+#   这里在 09:25 用 `core.market_open` 的竞价回暖读数决定是否放行。
+#
+#   ⛔ 只解冻「市场级条件」缺失（= 情绪）。缺失项里只要掺一个个股级硬伤
+#      （题材龙 / 量能 / 梯队）就**不解冻** —— 集合竞价回暖救不了量能不足或身位不对的票。
+POOL_CALL_ICE_UNFREEZE = True
+# `high_win_gate` 里视为「市场级」的条件名，必须与
+# `pipelines.pipeline_eod.HIGH_WIN_MARKET_LEVEL` 保持一致（此处不 import 管道层：
+# core 不得反向依赖 pipelines）。
+POOL_CALL_MARKET_LEVEL = ("情绪",)
+
+# 🧊 回暖豁免名额：`stance=hibernate` 时名额为 0，`open_relief` 本已把它放宽到 1，
+#   但紧随其后的环境防守腿 `level=block` 又会把名额压回 0 —— 回暖信号被自己的防守腿掐死
+#   （10-08 实证：market_open_relief=True、defense 5 条命中 block → effective_quota=0）。
+#   本开关让「竞价回暖」在 block 时仍保底 1 只。
+#   `POOL_CALL_OPEN_RELIEF_OVERRIDE=False` 单独回退。
+POOL_CALL_OPEN_RELIEF_OVERRIDE = True
+
+# ── 🎯 高胜率优先三开关（2026-11-02 用户「打开！高胜率优先！可以自己迭代，有序优化」）──
+# 依据：`scripts/relay_winrate.py`（31 个交易日 · 218 个**可执行**样本口径）。
+# ⛔ 口径铁律：统计必须排除「高开>5%」（用户 5% 硬线，实际不成交）。混进去会把
+#    「封板质量好」算成亏钱（那批 −2.64% 全是**买不到**的样本在记账），
+#    得出「封板越差越好」的错误结论。三条开关全部可逆，改一个常量即可回退。
+#
+# ① 身位优先（唯一在验证段同向且为正的排序改动）
+#   同一批样本、同样名额=2，只改排序：
+#     板数优先（原）：训练段 72.2%/日均+1.93% → 验证段 46.2%/日均 −0.09%
+#     身位优先（新）：训练段 83.3%/日均+3.15% → 验证段 61.5%/日均 +2.25%
+#   单看「最高板」这一档本身：n=20 胜率 65.0%（下界 43.3%）、验证段 63.6%。
+#   `POOL_CALL_TOP_BOARD_PRIORITY=False` 回退（排序立即恢复「地位→预案→板数」）。
+POOL_CALL_TOP_BOARD_PRIORITY = True
+
+# ② 低开例外（**只对最高板**，⛔ 绝不可推广）—— ⚠️ 默认**关闭**
+#   纸面统计：「最高板 ∧ 低开>3%」n=7 胜率 71.4%/均 +5.02%（验证段 n=5 胜 60%/均 +3.94%）。
+#   但真实链路回放（`scripts/pool_call_replay.py`·31 个交易日）只触发 **1 天**：
+#   10-22 东安动力 4 板低开 −5.5% → 当日 −4.73%（旧口径当天不买）。
+#   → 纸面 n=7 与实盘 n=1 冲突时，信实盘。⛔ 保持 False，等真实触发样本 ≥10 次再复议。
+#   三道锁不变（只认最高板 / 半仓 / 不额外放号），开之前先改下面这个常量。
+#   ⛔ 反例（永远不覆盖）：放宽到「身位差≥2板」的同类规则 n=45 全样本胜率 51.1%
+#      但**验证段只有 29.2%** —— 典型过拟合。
+POOL_CALL_LOW_OPEN_TOP_EXCEPTION = False
+LOW_OPEN_TOP_GAP_MAX = -3.0        # 低开幅度上限（%）＝跌超 3% 才算
+LOW_OPEN_TOP_POSITION = 0.5        # 该场景仓位上限（半仓试错）
+
+# ③ 量能门软化：竞价量不足从「直接否决」降为「压仓位放行」—— ⚠️ 默认**关闭**
+#   纸面统计：被量能门跳过的机会若照买平均 +0.53%/胜率 61.5%（n=13）。
+#   但真实链路回放更硬：开它 → 4 天名单被改，日均 **2.79% → 1.30%**。最典型 10-21：
+#   量能不足的 2 板科森科技被放进来，按板数顶掉 1 板南威软件（当日 +9.27%），换成 −2.04%。
+#   → 「量不够」这个门在实盘是在救钱，不是在挡机会。⛔ 保持 False。
+#   `POOL_CALL_VOLUME_SOFT=False` 即恢复「量不够即观察」（现行默认）。
+POOL_CALL_VOLUME_SOFT = False
+VOLUME_HARD_RATIO = 0.35           # 地板：低于计划需求的 35% 才算真没量
+VOLUME_SOFT_POSITION = 0.5         # 量能不足时的仓位上限
 
 MISSING = "—"
 
@@ -369,16 +516,29 @@ def _is_mech_leader(it: dict[str, Any]) -> bool:
 
 def _mech_leader_note(it: dict[str, Any]) -> str:
     """机械强龙依据，供冻结结果与展示读取；不使用内部英文枚举。"""
+    # ⛔ 只讲事实、不带系统术语（对外产品）：几点封的 / 带动几家
     parts: list[str] = []
-    if _candidate_int(it, "relay_rank") == 1:
-        parts.append("接力池第1")
     fbt = "".join(ch for ch in str(it.get("fbt") or "") if ch.isdigit())
     if len(fbt) >= 4 and int(fbt[:4]) <= MECH_LEADER_SECOND_BOARD_MAX_FBT:
-        parts.append(f"{fbt[:2]}:{fbt[2:4]}秒板")
+        parts.append(f"{fbt[:2]}:{fbt[2:4]} 封板")
     carry = _candidate_int(it, "carry_cnt")
     if parts and carry >= MECH_LEADER_MIN_CARRY:
         parts.append(f"带动{carry}家")
     return "·".join(parts)
+
+
+def _cycle_info() -> dict[str, Any]:
+    """周期位置摘要（写进 meta 留痕用）。⛔ 只读、不参与任何裁决；失败返回 {}."""
+    try:
+        ph = _cp.phase_of()
+        if not ph or ph.get("phase") in (None, "", _cp.PHASE_UNKNOWN):
+            return {}
+        return {"phase": ph.get("phase"), "label": ph.get("label"),
+                "confidence": ph.get("confidence"), "date": ph.get("date"),
+                "position": (ph.get("position") or {}).get("level"),
+                "play": ph.get("play")}
+    except Exception:
+        return {}
 
 
 def call_pool(candidates: dict[str, Any] | None,
@@ -393,6 +553,7 @@ def call_pool(candidates: dict[str, Any] | None,
              zt_series: dict[str, list[tuple[str, int]]] | None = None,
              zt_days: list[str] | None = None,
              relay_plan: dict | None = None,
+             market_max_boards: int | None = None,
              enabled: bool | None = None) -> dict[str, Any]:
     """9:25 池内裁决 → 今天买哪只（**唯一判据源**）。
 
@@ -408,6 +569,9 @@ def call_pool(candidates: dict[str, Any] | None,
       zt_series / zt_days = 逐票涨停序列 + 交易日历（`defense_gate.load_zt_series`）；二者
                     都缺省（None）才按 `candidates.date` 自动加载——位置闸用。
                     显式传任一（含空）即视为「调用方自带数据」，不再读盘（测试隔离用）
+      market_max_boards = 市场最高板（昨日收盘口径·中位股闸的参照系）。
+                    缺省 → 读 `candidates.environment.max_boards`，再缺 → 用 `zt_rows` 现算；
+                    ⛔ 不从磁盘兜底读（防测试吃生产文件）。三者都缺 → 中位闸不裁决。
       enabled    = 覆盖开关（测试用）；None → 读模块常量 `POOL_CALL_ENABLED`
 
     返回：
@@ -431,7 +595,11 @@ def call_pool(candidates: dict[str, Any] | None,
     # 昨日空仓不是绝对封死：只有整批昨涨停股的 09:25 红开、连板红开、竞价量能
     # 同时转强，才放宽为 1 只。缺全市场冻结快照或任何一项不达标，保持原名额。
     open_read = market_open if isinstance(market_open, dict) else {}
-    open_relief = bool(_stance == "hibernate" and open_read.get("ready"))
+    # `_open_warm` = 今晨竞价回暖这个**事实**本身（与 stance 无关）：
+    #   昨涨停整体红开 ≥55% + 连板红开 ≥60% + 竞价量能不萎缩，三项同达标才为真。
+    #   `open_relief` 只是它在 hibernate 下的名额用法（0 → 1）。
+    _open_warm = bool(open_read.get("ready"))
+    open_relief = bool(_stance == "hibernate" and _open_warm)
     effective_quota = 1 if open_relief else quota
 
     # ── 🛡️ 环境防守腿（defense_gate ①·2026-10-08 经验）──────────────────────
@@ -447,7 +615,16 @@ def call_pool(candidates: dict[str, Any] | None,
             env_read = {"level": "normal", "hits": [], "hit_count": 0, "notes": [],
                         "error": str(e)}
         if env_read.get("level") == "block":
-            effective_quota = 0
+            # 🧊 回暖豁免（2026-10-28）：昨收环境差是**真结论**（block 不动），但今晨竞价
+            #   已集体回暖 → 名额不归零，保底 1 只。⛔ 只覆盖到 1，不恢复原名额。
+            #   10-08 实证：relief=True、defense 5 条命中 block → 名额被压回 0，回暖白读。
+            if bool(POOL_CALL_OPEN_RELIEF_OVERRIDE and _open_warm):
+                effective_quota = 1
+                env_read = {**env_read, "relief_override": True,
+                            "relief_note": ("环境命中 ≥3 条本应不主动买，"
+                                            "但今晨竞价回暖 → 只放 1 只试错")}
+            else:
+                effective_quota = 0
         elif env_read.get("level") == "defensive":
             effective_quota = min(effective_quota, _dg.DEFENSIVE_QUOTA_CAP)
 
@@ -461,7 +638,10 @@ def call_pool(candidates: dict[str, Any] | None,
         effective_quota = _rp.refine_effective_quota(effective_quota, relay_plan)
 
     cands: list[dict[str, Any]] = []
-    for k in ("relay", "watch"):
+    # 🐣 低位池（2026-10-27）：与 relay/watch **同池裁决、共享名额**。
+    #    ⛔ 板数天然最低 → 排在接力池之后，只有前排被防守闸拦掉/名额空出来才轮到；
+    #    ⛔ 不动任何既有闸的门槛（后排闸照常拦「有前排可买的小弟」，这正是用户纪律）。
+    for k in ("relay", "watch", "low_pool"):
         cands.extend([c for c in (candidates or {}).get(k) or [] if isinstance(c, dict)])
     _seen: set[str] = set()
     pool: list[dict[str, Any]] = []
@@ -508,11 +688,70 @@ def call_pool(candidates: dict[str, Any] | None,
     for c in pool:
         _by_line.setdefault(line_family(c), []).append(c)
     _line_rank: dict[str, int] = {}
+    _line_max_boards: dict[str, int] = {}     # 本线池内最高板（身位判定的参照系之一）
     for fam, arr in _by_line.items():
-        for i, c in enumerate(sorted(arr, key=lambda x: -(int(x.get("boards") or 0)
-                                                          if str(x.get("boards") or "0").isdigit()
-                                                          else 0))):
+        def _bd(x: dict[str, Any]) -> int:
+            v = x.get("boards")
+            return int(v) if v is not None and str(v).strip().isdigit() else 0
+        _line_max_boards[fam] = max([_bd(x) for x in arr] or [0])
+        for i, c in enumerate(sorted(arr, key=lambda x: -_bd(x))):
             _line_rank[str(c.get("code"))] = i + 1
+
+    # ── 📏 市场高度（中位股闸的参照系）────────────────────────────────────
+    # ⛔ 只认「传入的数据」：`market_max_boards` 显式参数 → `candidates.environment.max_boards`
+    #    → `zt_rows`（调用方给的涨停池）→ 缺失则不裁决。
+    #    ⚠️ 刻意**不从磁盘兜底读** `zt_history`：那会让测试偷偷吃到生产文件
+    #    （2026-10-21 实测踩坑：test_defense_gate 5 例因读到真实 zt_2026-09-30.json 而失败），
+    #    违反「显式传参即隔离」的既有约定。
+    #    口径必须是**昨日收盘**的高度（中位股判的是昨天这只票在板位分布的哪个位置）。
+    _market_max_boards: int | None = None
+    try:
+        if market_max_boards is not None:
+            _market_max_boards = int(market_max_boards)
+    except (TypeError, ValueError):
+        _market_max_boards = None
+    if _market_max_boards is None:
+        # 🧊 2026-10-27：盘后 eod 落盘的当日最高板（`candidates.market_max_boards`）优先，
+        #    与「最高板 + 极薄封单只观察」判据同源同值，⛔ 不让裁决层另算一套高度。
+        try:
+            _cmb = (candidates or {}).get("market_max_boards")
+            if _cmb is not None:
+                _market_max_boards = int(_cmb)
+        except (TypeError, ValueError):
+            _market_max_boards = None
+    if _market_max_boards is None:
+        _env_mb = (candidates or {}).get("environment") or {}
+        try:
+            if _env_mb.get("max_boards") is not None:
+                _market_max_boards = int(_env_mb["max_boards"])
+            elif _env_mb.get("now_max_boards") is not None:
+                _market_max_boards = int(_env_mb["now_max_boards"])
+        except (TypeError, ValueError, KeyError):
+            _market_max_boards = None
+    if _market_max_boards is None and zt_rows:
+        _bs = []
+        for _r in zt_rows:
+            try:
+                _bs.append(int(_r.get("boards") or _r.get("lbc") or 0))
+            except (TypeError, ValueError, AttributeError):
+                continue
+        _market_max_boards = max(_bs) if _bs else None
+
+    # ── ⚓ 每条线的锚点（昨日大将军＝同线核心）今日态度 ─────────────────────
+    # 只在「核心仍在涨停池（未断板）」时才算锚点：已断板的核心今天不是涨停股，
+    # 它今天怎么开说明不了这条线的强弱，硬当锚点会误杀（10-21 传媒线 新华传媒 已断板）。
+    _anchors: dict[str, dict[str, Any]] = {}
+    if POOL_CALL_ANCHOR_GATE:
+        for fam, lc in line_cores.items():
+            if not isinstance(lc, dict) or not lc.get("code"):
+                continue
+            if lc.get("broken"):
+                continue
+            code = str(lc.get("code"))
+            read = _ac2.anchor_read(qs.get(code), code=code,
+                                    expected_range=(lc.get("expectation") or {}).get("expected_range"))
+            _anchors[fam] = {"code": code, "name": lc.get("name"),
+                             "boards": lc.get("boards"), **read}
 
     # ── 逐票裁决 ──────────────────────────────────────────────────────────
     marks: dict[str, dict[str, Any]] = {}
@@ -543,19 +782,41 @@ def call_pool(candidates: dict[str, Any] | None,
             "code": code, "name": name, "gap_pct": gap, "zone": zone, "bias": bias,
             "amount_yi": amt, "need_yi": need if isinstance(need, (int, float)) else None,
             "theme_name": fam, "boards": boards, "line_is_core": is_core,
+            # ⛔ 2026-10-21 22:45：补 `last_date`（核心最后涨停日）—— 卡面必须能说清
+            #    「断了多久」。断 1 天（昨天刚断）和断 5 天（早就凉了）是两件事。
             "line_core": ({"code": lc.get("code"), "name": lc.get("name"),
-                           "boards": lc.get("boards"), "broken": bool(lc.get("broken"))}
+                           "boards": lc.get("boards"), "broken": bool(lc.get("broken")),
+                           "last_date": lc.get("last_date")}
                           if lc and not is_core else None),
             "line_rank": _line_rank.get(code),
+            "line_max_boards": _line_max_boards.get(fam),
+            # 🎯 身位（2026-11-02）：距全市场最高板还差几板。0=就是最高板。
+            #    缺失（market_max_boards 拿不到 / 本票板数未知）→ None，⛔ 不猜、不当最高板。
+            "gap_to_top": ((int(_market_max_boards) - boards_i)
+                           if _market_max_boards and boards_i else None),
+            "market_max_boards": int(_market_max_boards) if _market_max_boards else None,
             # 只读候选事实，在本函数末端的名额排序消费；不改变任何竞价/风险短路规则。
             "mechanical_leader": mechanical_leader,
             "mechanical_leader_note": mechanical_leader_note or None,
             "leader_role": role_of(c),
             "leader_evidence": c.get("leader_evidence") or {},
+            # 🐉 龙头身份（2026-10-21 P2）：由 leader_cycle 认定好后透传，卡面只读标签。
+            #    缺失（旧候选文件）→ None，卡面不显示标签（⛔ 不现场重算，防两处口径打架）。
+            "dragon_confirm": c.get("dragon_confirm") if isinstance(c.get("dragon_confirm"), dict) else None,
+            # 🔍 池外龙头校验（2026-10-21）：盘后建池的判定，一路透传到卡面。
+            #    ⛔ 缺就 None（旧候选文件）→ 卡面 `_outpool_badge` 不标，不猜。
+            "line_tier_outpool": c.get("line_tier_outpool"),
+            "line_tier_why": c.get("line_tier_why"),
+            "line_top": c.get("line_top"),
+            "line_tops": c.get("line_tops"),
             "carry_cnt": c.get("carry_cnt"),
             "relay_stage": c.get("relay_stage"),
             "relay_mood": c.get("relay_mood"),
             "n_plus_n": c.get("n_plus_n"),
+            # 板块联动事实只透传；判定放在量能后、锚点前，保持“先确认本票可交易，
+            # 再判昨日结构 × 今早同方向承接”的顺序。
+            "linkage_facts": c.get("linkage_facts"),
+            "linkage_discipline": c.get("linkage_discipline"),
         }
         # 封板质量读数（只读·审计/卡面用）：**在短路链之前**算出，被前几道闸拦下的票也留痕
         if POOL_CALL_DEFENSE_GATE:
@@ -563,6 +824,22 @@ def call_pool(candidates: dict[str, Any] | None,
                 base["seal_quality"] = _dg.seal_quality(c)
             except Exception:
                 pass
+
+        # 🔮 次日开盘推测接进竞价裁决（2026-11-02 用户「两张卡结合，不要新开链路」）：
+        #   盘后选股卡已把 `forecast`（明早大概率开在几个点／几成概率买不到）写进候选文件，
+        #   本层**只透传 + 拿实测开盘去查「这档历史胜率」**，⛔ 不现场重算模型
+        #   （重算会出现「盘后卡说一套、竞价卡说另一套」的两套口径）。
+        # ⛔ 变量名不能叫 `_fc`：本模块第 74 行已把 `front_core` 导入为 `_fc`，
+        #    同名会把 `front_core.row_tier` 覆盖掉（2026-11-02 实测 AttributeError）。
+        _fcst = c.get("forecast") if isinstance(c.get("forecast"), dict) else None
+        if _fcst and not _fcst.get("error"):
+            base["forecast"] = _fcst
+            base["forecast_verdict"] = _fcst.get("verdict")
+            try:
+                from core.relay_forecast import band_win_for
+                base["forecast_band"] = band_win_for(c, gap)
+            except Exception:                                # noqa: BLE001
+                base["forecast_band"] = None
 
         # ① 无竞价数据
         if gap is None:
@@ -579,23 +856,46 @@ def call_pool(candidates: dict[str, Any] | None,
             marks[code] = {**base, "view": "skip",
                            "reason": "昨天做预案时就把它划成回避 → 今天不买"}
             continue
+        # 🎯 低开例外（2026-11-02·只对全市场最高板）
+        #   「最高板 ∧ 低开>3%」是全交叉里唯一显著为正的一组（n=7 胜 71.4%/均 +5.02%，
+        #   验证段 n=5 胜 60%）。样本小 → 三道锁（只认最高板 / 半仓 / 不额外放号）。
+        #   ⛔ 不覆盖「身位差≥1板」：同型规则在验证段只有 29.2%，属过拟合。
+        _lo_top = bool(
+            POOL_CALL_LOW_OPEN_TOP_EXCEPTION
+            and isinstance(gap, (int, float))
+            and float(gap) <= LOW_OPEN_TOP_GAP_MAX
+            and base.get("gap_to_top") == 0
+        )
         # ④ 低于预期
-        if zone == "below":
+        if zone == "below" and not _lo_top:
             marks[code] = {**base, "view": "skip",
                            "reason": f"今天开在 {gap:+.2f}%，低于昨天的预期 → 放弃不接"}
             continue
         # ⑤ 没红开
-        if gap <= 0:
+        if gap <= 0 and not _lo_top:
             marks[code] = {**base, "view": "watch",
                            "reason": f"开在 {gap:+.2f}%，没红开 → 今天先看，不买"}
             continue
+        if _lo_top:
+            base["low_open_top"] = True
+            base["position_cap"] = LOW_OPEN_TOP_POSITION
         # ⑥ 红开但没量（诱多典型）——与 `ai_caliber.decide` 同一量能门
         if (isinstance(amt, (int, float)) and isinstance(need, (int, float)) and need > 0
                 and amt < float(need) * _ac.VOLUME_WEAK_RATIO):
-            marks[code] = {**base, "view": "watch",
-                           "reason": (f"开在 {gap:+.2f}% 是红的，但竞价只有 {float(amt):.2f} 亿、"
-                                      f"量不够（要 {float(need):.2f} 亿）→ 像诱多，先看")}
-            continue
+            _floor = float(need) * VOLUME_HARD_RATIO
+            if POOL_CALL_VOLUME_SOFT and float(amt) >= _floor:
+                # 量偏弱但没到「真没量」的地板 → 不否决，压半仓试错（2026-11-02 用户「高胜率优先」）
+                base["volume_soft"] = True
+                base["position_cap"] = min(float(base.get("position_cap") or 1.0),
+                                            VOLUME_SOFT_POSITION)
+                base["volume_soft_note"] = (
+                    f"竞价 {float(amt):.2f} 亿只到计划 {float(need):.2f} 亿的"
+                    f"{float(amt) / float(need) * 100:.0f}%，量偏弱 → 只半仓试错")
+            else:
+                marks[code] = {**base, "view": "watch",
+                               "reason": (f"开在 {gap:+.2f}% 是红的，但竞价只有 {float(amt):.2f} 亿、"
+                                          f"量不够（要 {float(need):.2f} 亿）→ 像诱多，先看")}
+                continue
         # 昨日同路径晋级、溢价与失败核按钮都偏弱时，须用足计划量能确认；缺量不放行。
         if c.get("relay_mood") == "pressured" and (
                 not isinstance(amt, (int, float)) or not isinstance(need, (int, float))
@@ -603,6 +903,57 @@ def call_pool(candidates: dict[str, Any] | None,
             marks[code] = {**base, "view": "watch",
                            "reason": "这一路接力昨天反馈偏弱，今天竞价量没达到计划要求 → 先看，不买"}
             continue
+        # ⑥a 🧲 板块联动纪律（2026-10-22）：低板独苗不能因本票量价达标就直接买。
+        #    只在完整涨停池已确认“昨日独苗”时生效；今早同题材成员没报价是 unknown，
+        #    不能偷换成“板块0红开”。soft 默认只拦 1~2 板；strict 才扩展至高标。
+        try:
+            from core.sector_support import compute_support
+            from core.theme_linkage import apply_auction_gate
+            # qs 是全池竞价报价，成员代码来自昨日完整涨停池；在此现算确保池内裁决
+            # 与机械信号使用同一批 09:25 报价，而不是依赖一份可能缺失的外部 map。
+            _link_support = compute_support(c, qs)
+            _link = apply_auction_gate(c, _link_support)
+        except Exception:
+            _link_support = None
+            _link = {"block": False}
+        base["sector_support"] = _link_support
+        base["linkage_discipline"] = _link
+        if _link.get("block"):
+            marks[code] = {**base, "view": "watch", "linkage_gate": True,
+                           "reason": f"开在 {gap:+.2f}% 达标，但{_link.get('note')} → 今天先看，不买"}
+            continue
+        # ⑥b ⚓ 锚点闸（2026-10-21 用户「次日只需做好锚点的对比与观察」）：
+        #   这条线的锚点（昨日大将军）今天开成什么样，直接决定这条线还能不能出手。
+        #   ⛔ 顺序上紧贴量能之后、跟风闸之前：先确认「这条线今天整体是强是弱」，
+        #     再谈「这只票在这条线里排第几」——反过来会拿个股强度盖住线路走坏。
+        _anc = _anchors.get(fam) if POOL_CALL_ANCHOR_GATE else None
+        if _anc and _anc.get("code") != code:
+            base["line_anchor"] = {k: _anc.get(k) for k in ("code", "name", "boards",
+                                                            "attitude", "label", "gap", "note")}
+            _att = str(_anc.get("attitude") or "")
+            if _att in (_ac2.ATT_BREAK, _ac2.ATT_WEAK):
+                # 锚点破预期 / 低开 → 这条线今天不占名额（最强否决，只看它自己能不能拉回来）
+                marks[code] = {**base, "view": "watch", "anchor_gate": True,
+                               "reason": (f"开在 {gap:+.2f}% 达标，但这条线的锚点"
+                                          f"{_anc.get('name')}今天{_anc.get('label')}"
+                                          f"（{_anc.get('gap'):+.2f}%）→ 前排态度坏了，"
+                                          f"这条线今天先别碰")}
+                continue
+            if _att == _ac2.ATT_FLAT:
+                # 平开＝前排还没表态。⛔ 不硬拦（平开太常见，全拦会把系统打成常年空仓），
+                #   只留痕：卡面标「前排平开·未表态」，出手与否交给量能/身位两道闸。
+                base["anchor_flat"] = True
+        # ⑥c 🎯 中位股闸（2026-10-21 学 92科比：「要么做高，要么做低，中位股不要碰」）
+        #   中位＝既没有最高板的地位确定性，也没有低位的性价比，两头不靠。
+        #   ⛔ 只在市场高度 ≥5 板时才存在中位区（`cycle_phase.mid_band`）；高度不够时不裁决，
+        #     否则会把整条线砍光（今天最高 4 板 → 本闸不生效）。
+        if POOL_CALL_MIDBOARD_GATE:
+            _mh = _market_max_boards
+            if _cp.is_mid_board(boards_i, _mh):
+                marks[code] = {**base, "view": "watch", "midboard_gate": True,
+                               "reason": (f"开在 {gap:+.2f}% 达标，但"
+                                          f"{_cp.mid_board_note(boards_i, _mh)}")}
+                continue
         # ⑦ 🐣 跟风闸（2026-09-21 用户抓包）：同线核心板数高出 ≥2 且已断板 → 不占名额
         #   ⊕ 归并一致性守卫（2026-10-12 传媒事故）：候选 core_theme 归线 与 sector 归线矛盾
         #     → 归并可疑 → ⛔ 不硬拦（防一次归并错误就整条误杀）。
@@ -686,7 +1037,159 @@ def call_pool(candidates: dict[str, Any] | None,
                            "reason": (f"开在 {gap:+.2f}% 达标了，但{dist['note']} "
                                       f"→ 今天先看，不买")}
             continue
-        # ⑪ 候选买入
+        # ⑩c 🧊 最高板 + 极薄封单闸（2026-10-27 用户「只观察，行情差没有必要强行接力」）
+        #   实证：上海九百(600838) 10-27 是 5 板、全市场唯一高度，但封单只占流通 0.24%。
+        #   「最高板」意味着位置最高，「封单最薄」意味着没人愿意垫在后面接 —— 两条同时成立，
+        #   缩量 + 情绪 1.8 分的日子再去接力，赔率极差。判据与盘后降级同源同阈值。
+        #   ⛔ 缺封单占比（拿不到流通市值）→ 不裁决（不编造、不误拦）。
+        if POOL_CALL_THIN_SEAL_TOP and _market_max_boards:
+            _ts_boards = boards_i
+            _ts_ratio = c.get("seal_ratio_pct")
+            if not isinstance(_ts_ratio, (int, float)):
+                try:
+                    _ts_ratio = _dg.seal_quality(c).get("seal_ratio_pct")
+                except Exception:      # 守卫自身异常 → 保守放行，不因守卫误拦
+                    _ts_ratio = None
+            if (_ts_boards >= int(_market_max_boards)
+                    and isinstance(_ts_ratio, (int, float))
+                    and float(_ts_ratio) < _dg.DIST_SEAL_RATIO_MAX):
+                marks[code] = {**base, "view": "watch", "defense_gate": "thin_seal_top",
+                               "defense_detail": {"boards": _ts_boards,
+                                                  "market_max_boards": int(_market_max_boards),
+                                                  "seal_ratio_pct": round(float(_ts_ratio), 2)},
+                               "reason": (f"开在 {gap:+.2f}% 达标了，但它是今天最高 {_ts_boards} 板、"
+                                          f"封单只占流通 {float(_ts_ratio):.2f}% —— 位置最高又封得最薄，"
+                                          f"行情差没必要强行接力 → 今天只看，不买")}
+                continue
+        # ⑩d 🐉 板块龙一闸（2026-10-27 用户「推的票必须是板块龙一」）
+        #   `dragon_rank` 由盘后 `core.sector_leader` 定（单一源）。这里只认身位：
+        #     · 有板块且不是龙一 → 不买（`dragon_rank > 1`）
+        #     · 龙一自己买不进（一字/ST）→ 不买，且**不拿同线跟风顶替**
+        #   ⛔ 无板块（题材缺失 / 涨停独苗，`sector_has_mates=False` / rank=0）→ 不裁决，
+        #     沿用孤军与高标逻辑（缺数据≠不利证据）。
+        #   ⛔ 缺 `dragon_rank` 字段（旧候选文件）→ 不裁决（诚实降级，不误拦）。
+        if POOL_CALL_DRAGON_GATE:
+            _dr = c.get("dragon_rank")
+            _has_sector = c.get("sector_has_mates")
+            if isinstance(_dr, (int, float)) and int(_dr) > 0 and _has_sector is not False:
+                _dr_i = int(_dr)
+                _lead_nm = str(c.get("dragon_leader_name") or "") or "别人"
+                if _dr_i > 1:
+                    marks[code] = {**base, "view": "watch", "dragon_gate": "deputy",
+                                   "defense_detail": {"dragon_rank": _dr_i,
+                                                      "leader": _lead_nm,
+                                                      "leader_boards": c.get("dragon_leader_boards")},
+                                   "reason": (f"开在 {gap:+.2f}% 达标，但这条线的龙一是"
+                                              f"{_lead_nm}（{c.get('dragon_leader_boards') or '?'} 板），"
+                                              f"它是第{_dr_i}个身位 —— 只做龙一，跟风不追")}
+                    continue
+                if str(c.get("dragon_leader_block") or "") or str(c.get("dragon_gate") or "") == "leader_unbuyable":
+                    marks[code] = {**base, "view": "watch", "dragon_gate": "leader_unbuyable",
+                                   "reason": (f"它是这条线的龙一，但今天买不进（一字/ST）"
+                                              f"→ 不拿跟风顶替，这条线今天不做")}
+                    continue
+
+        # ⑩e 🎯 四条件闸（2026-10-27 用户「一定要题材龙+情绪OK+量能+梯队…没有就空！！」）
+        #    盘后 `apply_high_win_gate` 已按四条件把不合格票移出接力池并打标；
+        #    此处二次拦截，⛔ 防「同日重跑 / 旧存档 / 人工塞票」把被否的票捡回买。
+        if POOL_CALL_HIGH_WIN_GATE:
+            _hw = c.get("high_win_gate")
+            if isinstance(_hw, list) and _hw:
+                # 🧊 冰点解冻（2026-10-28 用户「冰点日若开盘后情绪转好 可以出手」）：
+                #   只缺**市场级**条件（情绪）且今晨竞价回暖 → 放行；掺个股级硬伤一律不放。
+                _market_only = all(str(x) in POOL_CALL_MARKET_LEVEL for x in _hw)
+                if bool(POOL_CALL_ICE_UNFREEZE and _market_only and open_read.get("ready")):
+                    base["unfrozen"] = "market_open"
+                    base["unfrozen_from"] = list(_hw)
+                else:
+                    marks[code] = {**base, "view": "watch", "high_win_gate": list(_hw),
+                                   "reason": f"四条件缺 {'/'.join(str(x) for x in _hw)} —— 今天不推"}
+                    continue
+
+        # ⑪ 🚧 后排接力闸（2026-10-21 用户「后排接力严格要谨慎！很有可能没有溢价！」）
+        #   放在最后一道：只有土壤(⑧)、位置(⑨b)、派发(⑩)都没问题的票，才轮到谈「它在
+        #   这条线里排第几」。⛔ 归因顺序不变，卡面先说真原因、最后才说身位。
+        #
+        #   触发条件（⛔ 刻意收窄，宁可不拦也不误杀——10-21 实证）：
+        #     「这条线的前排**还在**（核心未断板、也不是一字/超5%买不到），而系统却要买后排」
+        #   这才是 92科比「往前排核心选」真正针对的错——有前排可买却去买小弟。
+        #   若核心已断板 / 今天买不到 → 这条线没有可买的前排，后排就是唯一入口（用户
+        #   「买隔壁」场景），⛔ 不拦，只打标签。反例支撑：10-21 传媒线核心新华传媒已断板，
+        #   后排南威软件(首板)当日 +9.27%，硬拦会直接错过这只当天最大的肉。
+        if POOL_CALL_BACKROW_GATE:
+            _tier = _fc.row_tier(c, line_is_core=is_core,
+                                 line_max_boards=base.get("line_max_boards"),
+                                 line_rank=base.get("line_rank"),
+                                 boards=boards_i, core_boards=(lc or {}).get("boards"))
+            _lc_code = str((lc or {}).get("code") or "")
+            _lc_gap = _gap_of(qs.get(_lc_code)) if _lc_code else None
+            _lc_name = str((lc or {}).get("name") or "") or None
+            _core_gap_out = (isinstance(_lc_gap, (int, float))
+                             and _lc_gap > _ac.USER_ENTRY_MAX_GAP_PCT)
+            _core_broken = bool((lc or {}).get("broken"))
+            base["line_tier"] = _tier
+            base["line_core_gap"] = _lc_gap
+            # 只在「核心仍在板、且今天买得到」时才判后排有罪；缺核心数据 → 不裁决。
+            _front_available = bool(lc) and (not _core_broken) and (not _core_gap_out)
+            if _tier in (_fc.TIER_SECOND, _fc.TIER_BACK) and _front_available and _lc_ok:
+                _gap_bd = None
+                try:
+                    _gap_bd = int((lc or {}).get("boards") or 0) - boards_i
+                except Exception:
+                    _gap_bd = None
+                # 🐉 文案自洽（2026-10-27）：本票若是**当日板块龙一**，不能说它"跟风补涨"
+                #    —— 那是 `line_cores`（历史载体）判的 tier，与当日身位是两回事。
+                #    裁决结果不变（仍不买），只把话说对：龙一遇旧载体断板 = 整条线在换挡期。
+                _prem = _fc.premium_note(_tier, line_core_name=_lc_name, boards_gap=_gap_bd)
+                _is_dragon_today = _candidate_int(c, "dragon_rank") == 1
+                if _is_dragon_today:
+                    _prem = ("它是这条线今天的龙一，但上一波核心已经断板，"
+                             "整条线还在换挡——现在接等于赌换挡成功")
+                marks[code] = {**base, "view": "watch", "backrow_gate": True,
+                               "reason": (f"开在 {gap:+.2f}% 达标，但前排{_lc_name or '核心'}今天还在板、"
+                                          f"想买的话现在就能买；这只"
+                                          f"{_prem}"
+                                          f" → 有前排就别买小弟，先看")}
+                continue
+            if _tier in (_fc.TIER_SECOND, _fc.TIER_BACK) and lc:
+                # 买隔壁场景：不拦，但把「它只是隔壁」这件事留在盘面上（卡面用）
+                base["backrow_note"] = ("core_broken" if _core_broken else "core_unbuyable")
+        # ⑪b 🥇 身位闸（2026-11-02「高胜率优先」待回放验收·默认关）
+        #   依据：红开可买口径（0<gap≤5%）下按身位分组，**后排是唯一稳定为负的档**——
+        #     最高板   n=9  胜率 66.7% / 均 +1.83%
+        #     差1板    n=10 胜率 60.0% / 均 +0.14%
+        #     差≥2板   n=58 胜率 39.7% / 均 −1.37%
+        #   且**封板质量救不了后排**：差≥2板里封板强(≥3因子)的那批，红开可买胜率只有
+        #   28.6% / 均 −2.69%（n=7）——质量换来的高开被市场砍掉，剩下能成交的本身就是弱样本。
+        #   ⛔ 与前排闸（⑪）分工不同：⑪管「有前排可买却买小弟」，本闸管「这条线根本没前排，
+        #      连它自己都是后排」——后者是纯身位判断，不看前排是否还在板。
+        #   ⛔ 空池是**合法结果**（用户「没有就空」）；⛔ 缺 market_max_boards → 不裁决。
+        #   `POOL_CALL_LEADER_ONLY=False` 回退（后排照常参与名额竞争）。
+        if POOL_CALL_LEADER_ONLY and _market_max_boards and boards_i:
+            _gt_i = int(_market_max_boards) - boards_i
+            if _gt_i >= LEADER_ONLY_MAX_GAP:
+                marks[code] = {**base, "view": "watch", "leader_only_gate": True,
+                               "reason": (f"开在 {gap:+.2f}% 达标，但它是 {boards_i} 板、"
+                                          f"全市场最高 {int(_market_max_boards)} 板，"
+                                          f"身位差 {_gt_i} 板 —— 后排不做"
+                                          f"（这一档能买到时胜率只有 39.7%、平均亏 1.37%）")}
+                continue
+        # ⑪c 🔮 预测档闸（2026-11-02 与选股卡共用同一模型·默认关）
+        #   只拦一类：**历史崖位**——`boards ≥ 6` 且该档晋级率 < 25%（6进7 实测 12.5%、n=8）。
+        #   ⛔ 不拦「放弃」档：那一档＝身位后排，已由 ⑪b 身位闸负责，重复拦＝同一件事判两次。
+        #   ⛔ 不拦「只观察」的非崖位情形（多为「样本不足」，那是不知道，不是不行）。
+        #   ⛔ 缺 `forecast`（旧候选文件 / 模型样本缺失）→ 一律放行，不裁决。
+        if POOL_CALL_FORECAST_GATE and _fcst and not _fcst.get("error"):
+            _fb_boards = int(_fcst.get("boards") or 0)
+            _fb_promo = _fcst.get("promo_board")
+            if (_fb_boards >= FORECAST_CLIFF_BOARDS
+                    and isinstance(_fb_promo, (int, float))
+                    and _fb_promo < FORECAST_CLIFF_PROMO_MAX):
+                marks[code] = {**base, "view": "watch", "forecast_gate": True,
+                               "reason": (f"开在 {gap:+.2f}% 达标，但这已经是 {_fb_boards} 板——"
+                                          f"历史上到这一档只有 {_fb_promo}% 能再晋级 → 只观察")}
+                continue
+        # ⑫ 候选买入
         entries.append({**base, "view": "participate"})
         marks[code] = {**base, "view": "participate"}
 
@@ -707,9 +1210,18 @@ def call_pool(candidates: dict[str, Any] | None,
             x.get("bias") == BIAS_FOCUS
             or (ENABLE_MECH_LEADER_FUSION and bool(x.get("mechanical_leader")))
         )
+        # 🎯 身位档（2026-11-02 起**参与排序**·用户「高胜率优先」）
+        #    ⛔ 与 2026-10-21 的旧注释相反：那时因单日一个反例（南威软件 +9.27% 被
+        #    海正药业 +1.46% 顶掉）决定「身位只拦错、不改选」。现按 31 个交易日 / 218 个
+        #    可执行样本重测，结论翻过来：同批样本只改排序 → 验证段日胜率 46.2%→61.5%、
+        #    日均 −0.09%→+2.25%。单日反例抵不过 87 个验证样本的同向证据，故改。
+        #    仍然只加一档「是否全市场最高板」，不做更细的身位加权（防过拟合）。
+        _gt = x.get("gap_to_top")
+        is_top_board = 1 if (POOL_CALL_TOP_BOARD_PRIORITY and _gt == 0) else 0
         from core import leader_cycle
         priority = leader_cycle.status_key(x) if leader_cycle.ENABLE_STATUS_PRIORITY else ()
         return priority + (
+            is_top_board,                                # 🎯 全市场最高板优先（高胜率）
             1 if x.get("line_is_core") else 0,          # 同线最高板优先（核心 > 跟风）
             {"supportive": 1, "pressured": -1}.get(x.get("relay_mood"), 0),  # 同身份下看接力心态
             1 if plan_or_mech_leader else 0,              # focus 或机械强龙优先
@@ -730,22 +1242,43 @@ def call_pool(candidates: dict[str, Any] | None,
             marks[code] = {**e, "view": "watch",
                            "reason": "昨天定的是空仓待命 → 今天不主动买（有破例通道时另说）"}
             continue
+        # ⛔ 2026-10-21 用户「商业性项目，不要显示解释性质的语录」：
+        #    原句「（机械强龙：09:30秒板，与重点看同档优先）」是系统机制解释——
+        #    「机械强龙」「同档优先」都是内部排序术语，对外读者看不懂。
+        #    改成只讲**事实**：它几点封的、带动了几家 —— 读者自己就能判断强不强。
         _fusion_note = (
-            f"（机械强龙：{e.get('mechanical_leader_note')}，与重点看同档优先）"
+            f"（{e.get('mechanical_leader_note')}）"
             if (ENABLE_MECH_LEADER_FUSION and e.get("mechanical_leader")
                 and e.get("bias") != BIAS_FOCUS) else ""
         )
         _mood_note = ({"supportive": "（昨天同路径接力反馈转好）",
                        "pressured": "（昨天同路径反馈偏弱，今天竞价量已达计划）"}
                       .get(e.get("relay_mood"), ""))
+        # 🎯 2026-11-02：半仓场景要**说人话**说清「为什么只买一半」，卡面与账本共用同一句。
+        _half_note = ""
+        if e.get("low_open_top"):
+            _half_note = "（它是今天最高板、但低开超 3%，只买半仓试）"
+        elif e.get("volume_soft"):
+            _half_note = "（今天量能偏弱，只买半仓试）"
         if i < effective_quota:
             _open_note = "（昨涨停今早整体转强，空仓日只试这一只）" if open_relief else ""
+            # 🔮 2026-11-02：把「开在这个幅度、历史上赚不赚」直接写进买入理由——
+            #   这是选股卡那张「明早大概率开在 X%」在竞价卡上的落点，两张卡共用一套数字。
+            #   ⛔ 只报**实测档**的历史胜率，不报预测值（预测已经被实测替代）。
+            _band = e.get("forecast_band") or {}
+            _band_note = ""
+            if _band.get("n") and _band.get("win") is not None:
+                _band_note = (f"（这个开盘幅度历史上 {_band['n']} 次里 "
+                              f"{_band['win']:g}% 收涨、平均 {_band['avg']:+.2f}%"
+                              + ("，是这票最赚的一档" if (_band.get("win") or 0) >= 60 else "")
+                              + "）")
             marks[code] = {**e, "view": "participate", "quota_rank": i + 1,
                            "reason": (f"今天开在 {e['gap_pct']:+.2f}%，"
                                       f"没超 5% 上限、也没低于预期 → 买入"
+                                      + _band_note
                                       + ("（这条线里板数最高的那只）"
                                          if e.get("line_is_core") else "")
-                                      + _fusion_note + _mood_note + _open_note)}
+                                      + _fusion_note + _mood_note + _half_note + _open_note)}
         else:
             marks[code] = {**e, "view": "watch",
                            "reason": (f"今天开在 {e['gap_pct']:+.2f}% 也达标，"
@@ -778,6 +1311,29 @@ def call_pool(candidates: dict[str, Any] | None,
                        if v.get("defense_warn") or v.get("position_warn")],
             "sector_flow_boards": len(sector_flow),
             "zt_history_days": len(zt_days),
+            # 🚧 后排接力闸留痕（2026-10-21）：拦下了谁、谁因为核心买不到获得例外
+            "backrow": {
+                "enabled": bool(POOL_CALL_BACKROW_GATE),
+                "blocked": [c for c, v in marks.items() if v.get("backrow_gate")],
+                "tier": {c: v.get("line_tier") for c, v in marks.items() if v.get("line_tier")},
+                "relief": {c: v.get("backrow_relief") for c, v in marks.items()
+                           if v.get("backrow_relief")},
+            },
+            # ⚓ 锚点留痕（2026-10-21）：每条线昨天的锚点今天怎么开 + 全局判断
+            "anchor": {
+                "enabled": bool(POOL_CALL_ANCHOR_GATE),
+                "lines": _anchors,
+                "blocked": [c for c, v in marks.items() if v.get("anchor_gate")],
+                "flat": [c for c, v in marks.items() if v.get("anchor_flat")],
+                "market": _ac2.market_verdict([a.get("attitude") for a in _anchors.values()]),
+            },
+            # 🎯 中位股留痕（2026-10-21）：拦了谁 + 参照的市场高度
+            "midboard": {
+                "enabled": bool(POOL_CALL_MIDBOARD_GATE),
+                "market_max_boards": _market_max_boards,
+                "band": _cp.mid_band(_market_max_boards) if _market_max_boards else None,
+                "blocked": [c for c, v in marks.items() if v.get("midboard_gate")],
+            },
         },
         # 🎯 早盘接力·动态仓位（2026-10-13 用户需求）留痕：名额被动态方案裁断的结果
         "relay_position": (None if relay_plan is None else {
@@ -793,6 +1349,10 @@ def call_pool(candidates: dict[str, Any] | None,
             "theme_confidence": relay_plan.get("theme_confidence"),
         }),
         "call_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        # 🌊 周期位置留痕（2026-10-21 P1）：**只记录、不参与裁决**。
+        #    写进 meta 是为了让决策日志/复盘能回答「当时是什么周期位置、所以这么判」；
+        #    ⛔ 不接进名额或逐票判定（位置判断置信度低于硬数据，让它决策风险大于收益）。
+        "cycle_phase": _cycle_info(),
     }
     return {"enabled": True, "stance": _stance, "quota": quota, "views": marks, "meta": meta}
 
@@ -820,6 +1380,8 @@ def apply_to_views(pool_result: dict[str, Any], views: dict[str, Any] | None) ->
         cur["line_is_core"] = m.get("line_is_core")
         cur["line_core"] = m.get("line_core")
         cur["follower_gate"] = bool(m.get("follower_gate"))
+        cur["linkage_gate"] = bool(m.get("linkage_gate"))
+        cur["linkage_discipline"] = m.get("linkage_discipline")
         cur["defense_gate"] = m.get("defense_gate")   # distribution / distribution_thin_late / sector_drain / high_position / old_dragon_rebound
         cur["defense_reason"] = (m.get("defense_detail") or {}).get("note") or None
         cur["defense_warn"] = m.get("defense_warn")

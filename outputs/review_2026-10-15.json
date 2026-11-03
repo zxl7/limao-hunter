@@ -1,0 +1,232 @@
+{
+  "title": "📝 盘后复盘 10-15 | 指数深跌·涨停溢价转亏｜高标升5板·PCB业绩线爆发",
+  "color": "grey",
+  "elements": [
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>① 📉 情绪演变与五日轨迹</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "**做多气氛从1分微升到1.8分，但代价是指数放量深跌、昨日涨停今天平均亏2.13%；情绪不再创新低，赚钱难度反而更大。**\n昨日 1分·市场很冷 → 今日 1.8分·市场很冷；涨停维持36只，晋级率由19.4%降到16.7%，核按钮17只（昨18只），最高板由4板抬到5板。\n📈 五日评分：8.2→1→3.6→1→<text_tag color='green'>1.8</text_tag>；近3日均值2.13。\n和前两次「1分后次日大反弹」不同，今天是连续第二天没有退回1分，但反弹只出现在封板端——昨日涨停今天平均 -2.13%，是10-08以来第一次明显转负。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>② 📊 真实情绪总览</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "指数：上证 3707.48 -1.59%｜深证成指 11816.79 -2.43%｜创业板指 2783.17 -2.92%\n上涨/下跌 <text_tag color='red'>442</text_tag>:<text_tag color='green'>5093</text_tag>（收盘快照·沪深口径）｜沪深两市成交额约1.63万亿，较昨日放量约2186亿\n做多气氛 **1.8分/10·市场很冷**｜涨停36只｜炸板率14.3%（昨41.9%）｜晋级率 <text_tag color='green'>16.7%</text_tag>\n昨日涨停今日均幅 <text_tag color='green'>-2.13%</text_tag>｜核按钮 <text_tag color='green'>17只</text_tag>｜大面3只｜最高板 <text_tag color='red'>4→5板</text_tag>\n亏钱方向：航运港口 -5.29%（招商南油、中远海能、招商轮船跌停）｜通信设备 -5.26%｜光通信 -4.04%｜风电设备 -4.13%"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>③ 🧠 AI综合判断</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "**今天是「封板端变好、跟随端变坏」的极端分化日：指数放量深跌、跌停27只，最高板却从4板抬到5板、炸板率从41.9%收敛到14.3%。**\n指数比昨天跌得更狠（-0.88/-1.97/-3.10 → -1.59/-2.43/-2.92）且放量2186亿，上涨家数从937只掉到442只；同时昨日涨停今天平均 -2.13%，昨日2板11只里有8只直接跌停。\n增量变化在这里：晋级率已连续6个交易日低于25%线（今16.7%，距近10日门槛22.7%还差6.0个百分点），但亏钱的位置变了——**从高标扩散到中位票，资金反而更集中地缩到少数有业绩支撑的票上**（PCB业绩线、传媒5板）。\n<text_tag color='neutral'>⚠️ 风险</text_tag>\nA. 指数放量下跌＋跌停27只＋上涨仅442只，是普跌加剧，不是缩量洗盘。\nB. 昨日2板11只里8只跌停（金奥博、荣丰控股、路畅科技、哈空调、龙江交通、星帅尔、万里股份、航发科技），中位票亏钱面最重。\nC. 晋级率16.7%、连板股仅6只，接力资金持续缺席；核按钮仍有17只，负反馈没有收敛。\nD. 板数前8的高标已全部披露股票交易异常波动公告（慈文传媒、百洋股份、冰山冷热、阳光乳业、富春染织、新华文轩、崇达技术、远大控股），其中慈文传媒股权质押比例7.27%。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>⑤ 🔥 主线复盘</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='red'>⭐确定性最强：PCB与覆铜板·元件（三季报业绩线）</text_tag>\n· 5只涨停：<text_tag color='purple'>崇达技术(002815)首板</text_tag>（09:25一字·封单3.27亿全场第一）、<text_tag color='purple'>金禄电子(301282)首板20cm</text_tag>（封单2.75亿）、<text_tag color='purple'>骏亚科技(603386)首板·3天2板</text_tag>、<text_tag color='purple'>天津普林(002134)首板</text_tag>、<text_tag color='purple'>澳弘电子(605058)首板·19天11板</text_tag>（封单仅0.16亿）。\n· 催化：10-14晚沪电股份、崇达技术、金禄电子集中披露三季报预增，金禄电子第三季度净利同比预增1266.91%~1442.76%；华泰研报提出资金正从「堆算力」转向「按现金流确定性选股」。\n⚠️ 个股很活跃但板块指数仍跌（PCB概念-2.88%、元件-2.94%），涨停票集中在有业绩预告的中小市值公司；若市场继续转弱、抱团松动，这批票有补跌风险。\n\n<text_tag color='blue'>文化传媒与AI短剧·抱团延续（高度靠它撑）</text_tag>\n· <text_tag color='purple'>慈文传媒(002343)5板</text_tag>（封单1.40亿·换手16.17%）、<text_tag color='purple'>新华文轩(601811)2板</text_tag>、<text_tag color='purple'>读者传媒(603999)首板</text_tag>、<text_tag color='purple'>内蒙新华(603230)首板</text_tag>、<text_tag color='purple'>广博股份(002103)首板</text_tag>。\n· 催化：腾讯上线微信生态「绿泡泡短剧」小程序；微信开放平台10月16日起启动第四季度微短剧激励活动。\n⚠️ 板块指数同步下跌（数字媒体-3.04%、影视院线-2.01%），欢瑞世纪盘中触板后收+6.24%，扩散没有跟上高度。\n\n<text_tag color='blue'>大消费·白酒与乳品（低位防御）</text_tag>\n· <text_tag color='purple'>阳光乳业(001318)3板</text_tag>（封单1.08亿）、<text_tag color='purple'>皇台酒业(000995)首板·3天2板</text_tag>、<text_tag color='purple'>五芳斋(603237)首板</text_tag>。\n· 催化：白酒渠道库存同比下降约10%~20%，白酒Ⅱ涨1.72%居申万二级行业首位；财政部表态支持扩大国内需求。\n⚠️ 只有3只涨停，是资金避险的去处，不是进攻主线。\n\n<text_tag color='blue'>支线：医药与固态电池</text_tag>\n· <text_tag color='purple'>华北制药(600812)首板</text_tag>（成交21.15亿）、<text_tag color='purple'>向日葵(300111)首板20cm</text_tag>、<text_tag color='purple'>百花医药(600721)首板</text_tag>、<text_tag color='purple'>上海洗霸(603200)首板</text_tag>（固态电池）。\n⚠️ 四只分属不同细分，没有形成合力，先按资金避险分支观察。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>⑥.5 👑 核心演化史</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "**昨日核心今日命运**\n· 慈文传媒：昨4板 → <text_tag color='red'>今5板晋级</text_tag>（封单1.40亿·全天未开板）。\n· 百洋股份：昨4板 → <text_tag color='red'>今5板晋级</text_tag>（封单0.64亿偏弱·换手22.37%·盘中开板1次）。\n· 新经典：昨4板 → 断板收 +0.78%，出版线温和断，没有放量杀跌。\n· 醋化股份：昨3板 → <text_tag color='green'>核按钮 -10.00% 跌停</text_tag>。\n· 昨2板11只 → 仅2只晋级（冰山冷热、阳光乳业），其余8只跌停或大跌。\n\n**今日市场核心**\n· <text_tag color='purple'>慈文传媒(002343)</text_tag> 5板 [AI影视/短剧]｜生命周期：加速（封单实、换手16.17%、未开板）。\n· <text_tag color='purple'>百洋股份(002696)</text_tag> 5板 [鱼粉/水产]｜封单偏弱，属于跟随高度。\n· <text_tag color='purple'>澳弘电子(605058)</text_tag> 19天11板 [PCB/覆铜板]·创历史新高｜封单仅0.16亿、盘中反复开板13次，是烂板封回。\n\n**明日核心推演**\n· 慈文传媒与百洋股份谁能独家走到6板，是明日高度的唯一看点；若双双断板，市场高度会直接压回3板（冰山冷热、阳光乳业）。\n· 接棒候选来自今日首板中最强的两只：崇达技术（09:25一字·封单3.27亿）、金禄电子（20cm·业绩预增192.88%~218.92%）；传媒方向看新华文轩2板能否接力。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>⑥ 📊 轮动复盘</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "✅ PCB与元件：今日新爆发（0→5只涨停），业绩预告驱动，但板块指数仍跌，属于个股行情。\n✅ 大消费：2→6只，白酒、乳品、食品同步走强，是本轮唯一资金与个股同向的方向。\n✅ 医药：0→4只，华北制药、向日葵、百花医药等首板。\n❌ 商业百货（昨日待回流方向）：东百集团跌停、百大集团 -8.17%、中兴商业 -1.1%，回流不成立。\n❌ AI影视（昨日待回流方向）：博纳影业 -8.24%、欢瑞世纪盘中触板后收 +6.24%，扩散失败。\n❌ 科技硬件与运输：航运港口 -5.29%（招商南油、中远海能、招商轮船跌停）、通信设备 -5.26%、光通信 -4.04%，是今日最集中的亏钱方向。\n\n⚡ 超跌避险反弹（单独观察，按一日游对待）：通信技术（5日累计 -88.1亿·当日 +6.5亿）、固态电池（5日 -81.0亿·当日 -47.6亿）、央国企改革（5日 -70.8亿·当日 +2.3亿）；当日同方向涨停都不足3只。\n\n<text_tag color='orange'>切换日判断：不成立。</text_tag>旧方向的5板还在晋级（慈文传媒、百洋股份），新方向PCB只有5只首板、连板高度为0；昨日4板新经典只是温和断板（+0.78%），没有巨量分歧。属于退潮期的局部业绩脉冲，不是旧龙退位、新方向接棒。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>⑦ 💰 板块资金</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "fields": [
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='red'>半导体设备 +14.4亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='green'>央国企改革 -191.2亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='red'>CRO +10.8亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='green'>通信技术 -182.0亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='red'>超级品牌 +8.1亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='green'>5G概念 -162.3亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='red'>白酒Ⅲ +7.8亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='green'>电子 -135.3亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='red'>化学制剂 +7.4亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='green'>半导体概念 -134.2亿</text_tag>"
+          }
+        }
+      ]
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "流入集中在医药链与消费白马，流出集中在科技硬件与央国企改革——与今日涨停分布完全同向：钱在往低位防御和业绩票挪。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>⑨ 📎 明日展望与延续观察</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "· 看新方向能不能走出高度：PCB业绩线5只首板里，崇达技术、金禄电子能否连板，骏亚科技能否3进4。\n· 看板块大票能不能连板：传媒的慈文传媒、百洋股份5进6，是明日高度的唯一来源。\n· 看老龙头反包还是续杀：新经典（昨4板温和断）与澳弘电子（19天11板·烂板封回）明日的走向。\n· 看新龙头有没有资金接：晋级率先回22.7%以上（今16.7%，差6.0个百分点），核按钮先收回个位数（今17只），昨日涨停今日均幅先转正（今 -2.13%）。\n\n<text_tag color='green'>⚠️ 修复条件一个都没满足：三项指标全部低于修复线，而且指数是放量下跌。明日先看负反馈能不能收敛，再谈方向。</text_tag>\n\n**延续观察**\n· 大消费（白酒/乳品）与医药是本轮仅有的资金与个股同向方向，看能否出现2板。\n· 出版传媒低位票（读者传媒、内蒙新华、新华文轩）能否接住慈文传媒的高度。\n\n**📈 股性参考·历史基因 Top10**\n这批是历史上爱涨停、连板能晋级、首板次日有溢价的老面孔——明日看谁继续扛（仅作观察参考，不构成推荐）：\n· <text_tag color='purple'>慈文传媒</text_tag>(近250日涨停6次·最长5板·晋级80.0%·首板次日高开1.78%)｜<text_tag color='purple'>百洋股份</text_tag>(10次·最长5板·44.4%·1.25%)\n· <text_tag color='purple'>澳弘电子</text_tag>(13次·最长5板·41.7%·-0.53%)｜<text_tag color='purple'>上海洗霸</text_tag>(9次·最长3板·25.0%·2.16%)\n· <text_tag color='purple'>新华文轩</text_tag>(11次·最长5板·60.0%·-0.38%)｜<text_tag color='purple'>华北制药</text_tag>(5次·最长3板·50.0%·2.87%)\n· <text_tag color='purple'>新宏泽</text_tag>(10次·最长3板·11.1%·0.45%)｜<text_tag color='purple'>读者传媒</text_tag>(6次·最长2板·20.0%·3.74%)\n· <text_tag color='purple'>富春染织</text_tag>(10次·最长3板·44.4%·3.43%)｜<text_tag color='purple'>内蒙新华</text_tag>(8次·最长5板·57.1%·1.04%)"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>🧘 心法</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "放量下跌的日子里，封板变好只是假象；先看昨天买的今天能不能全身而退，再谈要不要出手。"
+      }
+    }
+  ],
+  "note": "📡 选股宝+东财+腾讯自选股 | 17:42 | AI盘中诊断\n⚠️ 本报告基于公开信息分析，投资需谨慎"
+}

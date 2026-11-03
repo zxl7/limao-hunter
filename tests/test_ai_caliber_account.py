@@ -324,7 +324,12 @@ def _card_text(card):
 
 
 def test_verify_card_head_uses_filled_count(monkeypatch, tmp_path):
-    """AI 计划 1 只但竞价高开 >5% 没买到 → 卡头显示实买 0（与账本一致），并括注计划/机械。"""
+    """AI 计划 1 只但竞价高开 >5% 没买到 → 卡头显示实买 0（与账本一致），并括注计划/机械。
+
+    ⚠️ 2026-10-21：卡头汇总行已按用户要求默认隐藏（`VERIFY_CARD_HIDE` 含 `head`），
+    本条测的是**口径数字**，故显式打开卡头。
+    """
+    monkeypatch.setenv("VERIFY_CARD_HIDE", "")
     bc = _load_bc()
     monkeypatch.setattr(bc, "_core_reversal_block", lambda: None)
     monkeypatch.setattr(bc, "_nav_drawdown_block", lambda m: None)
@@ -347,13 +352,18 @@ def test_verify_card_head_uses_filled_count(monkeypatch, tmp_path):
                     "caliber": "ai", "hit_signals": 0, "covered": 14,
                     "nav_latest": 0.932762, "trade_date10": "2099-03-02"}})
     s = _card_text(card)
-    assert "AI 买入信号" in s and "重点看 1 只" in s and "机械量价参考 5 只" in s
+    assert "AI 买入信号" in s and "重点看 1 只" in s and "量价够格 5 只" in s
     # 定调同口径：实买 0 → 空仓观望（不得写「AI 买1只」）
     assert "AI 空仓·观望" in card["title"]
 
 
 def test_verify_card_mech_section_uses_mech_flag(monkeypatch, tmp_path):
-    """「📊 机械量价参考」段按 mech_can_enter 筛选——AI 放弃的机械达标票仍可见。"""
+    """机械口径按 `mech_can_enter` 筛选——AI 没买的机械达标票仍可见。
+
+    ⚠️ 2026-10-21 融合后（`VERIFY_CARD_UNIFY_MECH` 默认开）机械段不再逐票单列，
+    改为标题行胶囊 `📊 机械达标`。本条**显式关融合**，锁住回退路径的旧行为。
+    """
+    monkeypatch.setenv("VERIFY_CARD_UNIFY_MECH", "0")
     bc = _load_bc()
     monkeypatch.setattr(bc, "_core_reversal_block", lambda: None)
     monkeypatch.setattr(bc, "_nav_drawdown_block", lambda m: None)
@@ -376,8 +386,13 @@ def test_verify_card_mech_section_uses_mech_flag(monkeypatch, tmp_path):
                     "caliber": "ai", "hit_signals": 0, "covered": 14,
                     "nav_latest": 1.0, "trade_date10": "2099-03-03"}})
     s = _card_text(card)
-    assert "📊 机械量价参考（仅作核对，不构成 AI 买入）" in s and "📊 <text_tag color='purple'>双星新材" in s
-    assert "✅ <text_tag color='purple'>双星新材" not in s and "达标买入信号" not in s
+    # ⚠️ 2026-10-21 颜色降权：票名从 purple 改为 wathet（淡蓝）；段标题改为「量价够格的票」
+    assert "📊 量价够格的票（仅作参考，不等同于今天的买入安排）" in s and "📊 <text_tag color='neutral'>双星新材" in s
+    # ⛔ 原断言「不用 ✅ 前缀」仍成立（AI 口径段用 📊）；后半句原本断言「达标买入信号」
+    #    这个旧段名不存在 —— 段名已改为「量价够格的票」，那条断言失去意义，改为锁
+    #    「旧的机械口径措辞不许回来」。
+    assert "✅ <text_tag color='neutral'>双星新材" not in s
+    assert "达标买入信号" not in s and "机械量价参考" not in s
     # 机械参考段与账本口径解耦：该票 can_enter=False（AI 只观察），但机械达标照常列出
     assert "🤖 AI 判断" not in s or "观察" in s
 
@@ -425,7 +440,13 @@ def test_caliber_note_marks_switch():
 
 
 def test_verify_card_renders_caliber_note(monkeypatch, tmp_path):
-    """竞价验证卡战绩行下方渲染口径分界（净值曲线跨口径，不标会被误读）。"""
+    """竞价验证卡战绩行下方渲染口径分界（净值曲线跨口径，不标会被误读）。
+
+    ⚠️ 2026-10-21：用户点名不要「📈 已记录N次…」整块（`VERIFY_CARD_HIDE` 含 `pnl`），
+    口径注释紧跟该行、同属一块 → 默认也不渲染。本条**显式打开该块**来锁「注释不会丢」：
+    只要战绩行在，口径分界就必须在（⛔ 不许出现「有战绩数字、没口径说明」）。
+    """
+    monkeypatch.setenv("VERIFY_CARD_HIDE", "")
     bc = _load_bc()
     monkeypatch.setattr(bc, "_core_reversal_block", lambda: None)
     monkeypatch.setattr(bc, "_nav_drawdown_block", lambda m: None)

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.limao.migrate-sync</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/zxl/WorkBuddy/狸猫猎手/scripts/migrate/sync_tick.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/zxl/WorkBuddy/狸猫猎手</string>
+    <!-- 每 30s 一拍。
+         ⚠️ 实测抓取端（pulse_fetcher，cron 驱动）是 **60s 才落一次盘**
+            （fetch.log: 14:40:01 → 14:42:00，interval=60s）。
+            所以同步间隔低于 30s 不会有任何收益，只会多两次空 rsync。 -->
+    <key>StartInterval</key>
+    <integer>30</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/zxl/.limao/sync_state/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/zxl/.limao/sync_state/launchd.log</string>
+</dict>
+</plist>

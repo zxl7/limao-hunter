@@ -82,3 +82,37 @@ def test_nuke_and_reflow_cards_have_no_ma5():
         blob = json.dumps(card, ensure_ascii=False)
         assert "MA5" not in blob and "MA10" not in blob, f"{name} 残留 MA5/MA10"
         assert "非AI研判" not in blob, f"{name} 残留「非AI研判」（应为「非AI判断」）"
+
+
+def test_climax_card_returns_none_when_nothing_to_say():
+    """⛔ 无内容 → 返回 None，⛔ 不许返回 `content=""` 的卡（2026-10-22）。
+
+    事故预演：`build_climax_card([], "10:30")` 曾产出
+    `{"tag":"div","text":{"tag":"lark_md","content":""}}` —— 飞书该字段必须非空，
+    否则整块渲染异常。实测触发条件是早上 `pulse_snapshots/latest.json` 的 `top5` 为空。
+    """
+    assert ls.build_climax_card([], "10:30") is None
+    # 有炸板提示时仍应出卡（内容来自 broken_cnt，与 sectors 无关）
+    card = ls.build_climax_card([], "10:30", broken_cnt=ls.CLIMAX_BROKEN_HINT_N)
+    assert isinstance(card, dict)
+    assert card["elements"][0]["text"]["content"].strip()
+
+
+def test_no_live_card_has_empty_content():
+    """⛔ 全部盘中卡在任何数据状态下都不得产出空 content（飞书硬要求）。"""
+    def _blank(o):
+        if isinstance(o, dict):
+            return ("content" in o and not str(o.get("content") or "").strip()) or any(
+                _blank(v) for v in o.values())
+        if isinstance(o, list):
+            return any(_blank(v) for v in o)
+        return False
+
+    for name, fn in _CASES:
+        try:
+            card = fn()
+        except Exception:      # noqa: BLE001
+            continue
+        if not isinstance(card, dict):
+            continue
+        assert not _blank(card), f"{name} 含空 content（飞书会渲染异常）"

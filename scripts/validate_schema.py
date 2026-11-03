@@ -226,6 +226,15 @@ def validate_one(path: Path, fail_fast: bool = False) -> tuple[bool, list[str]]:
     if contract is None:
         return True, []  # 不在契约内的文件不校验（保守通过）
 
+    # zt_*.json 双形态兼容（2026-10-15 实测）：同一文件名 `zt_YYYY-MM-DD.json`
+    # 被两种形态复用——
+    #   ① 日频收盘形态（capture_daily 17:0x 落盘）：必含 zt_count/max_boards/ladder/zt_list；
+    #   ② 盘中快照形态（theme_data 盘中写入、theme_series 消费）：intraday_only=true +
+    #      intraday_points[]。当前交易日 capture_daily 未跑时文件是盘中形态，不能删
+    #     （否则时间轴看板断料），故契约按 intraday_only 分支走盘中校验。
+    if name.startswith("zt_") and data.get("intraday_only"):
+        return _validate_zt_intraday(name, data, errors)
+
     if not isinstance(data, dict):
         return False, [f"{name}: 应为 dict，实为 {type(data).__name__}"]
 
@@ -279,6 +288,44 @@ def validate_one(path: Path, fail_fast: bool = False) -> tuple[bool, list[str]]:
     # 行级契约（P2-10）：字段级已在上方；此处校验 list/dict 桶内每一行的关键字段。
     if not (fail_fast and errors):
         _check_rows(name, contract, data, errors)
+    return len(errors) == 0, errors
+
+
+def _validate_zt_intraday(name: str, data: dict, errors: list[str]) -> tuple[bool, list[str]]:
+    """zt_*.json 盘中快照形态契约（intraday_only=true + intraday_points[]）。
+
+    与日频收盘形态互斥：当前交易日 capture_daily 未落盘时，文件是盘中形态，
+    由 theme_data 写入、theme_series 消费，不可删改，故单独校验其结构而非套用
+    日频契约（会误报缺 zt_count/max_boards/ladder）。
+    """
+    top = {
+        "date": (_f_str, "交易日"),
+        "date_raw": (_f_str, "交易日(纯数字)"),
+        "intraday_points": (_f_list, "盘中采样点序列"),
+    }
+    for field, (check, desc) in top.items():
+        if field not in data:
+            errors.append(f"{name}: 缺必填字段 [{field}]（{desc}）")
+        elif not check(data[field]):
+            v = data[field]
+            errors.append(f"{name}: 字段 [{field}] 类型异常（{desc}）: {type(v).__name__}={str(v)[:40]}")
+    # 行级：每个采样点需含 window/ts/themes/total/max_boards
+    counter = [0]
+    for idx, pt in enumerate(data.get("intraday_points") or []):
+        if not isinstance(pt, dict):
+            counter[0] += 1
+            if counter[0] <= _ROW_ERR_CAP:
+                errors.append(f"{name}: intraday_points[{idx}] 应为 dict，实为 {type(pt).__name__}")
+            continue
+        _row_fields_check(errors, name, "intraday_points", f"[{idx}]", pt, {
+            "window": (_f_str, "采样窗"),
+            "ts": (_f_ts, "采样时刻"),
+            "themes": (_f_dict, "题材分布"),
+            "total": (_f_int, "涨停总数"),
+            "max_boards": (_f_int, "最高连板"),
+        }, counter)
+    if counter[0] > _ROW_ERR_CAP:
+        errors.append(f"{name}: …(行级问题共 {counter[0]} 处，此处仅列前 {_ROW_ERR_CAP} 处)")
     return len(errors) == 0, errors
 
 

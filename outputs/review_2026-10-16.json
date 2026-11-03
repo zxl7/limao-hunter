@@ -1,0 +1,232 @@
+{
+  "title": "📝 盘后复盘 10-16 | 指数红盘普涨·封板质量转差｜双5板核心倒下",
+  "color": "grey",
+  "elements": [
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>① 📉 情绪演变与五日轨迹</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "**做多气氛从1.8分升到2分，指数翻红、上涨家数从442只回到3084只，但追涨停端反而更差——炸板率从14.3%飙到45.4%，昨日涨停今天平均亏1.64%。**\n昨日 1.8分·市场很冷 → 今日 2分·市场很冷；涨停由36只增至61只，晋级率连续第二天停在16.7%，核按钮从17只降到15只，最高板由5板跳到11板（新华传媒停牌3天后复牌）。\n📈 五日评分：1→3.6→1→1.8→<text_tag color='green'>2.0</text_tag>；近3日均值1.6。\n和昨天完全相反：昨天是「封板端变好、跟随端变坏」，今天变成「指数和上涨家数变好、封板端急速变坏」——全天有49只盘中摸过涨停却没封住，昨天这个数字只有6只。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>② 📊 真实情绪总览</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "指数：上证 3716.28 +0.24%（仍收在五日线3758点下方）｜深证成指 11802.46 -0.12%｜创业板指 2772.38 -0.39%\n上涨/下跌 <text_tag color='red'>3084</text_tag>:<text_tag color='green'>2060</text_tag>（沪深口径）｜沪深两市成交额约1.56万亿，较昨日缩量约776亿\n做多气氛 **2分/10·市场很冷**｜涨停61只（昨36只）｜炸板率 <text_tag color='green'>45.4%</text_tag>（昨14.3%）｜晋级率 <text_tag color='green'>16.7%</text_tag>\n昨日涨停今日均幅 <text_tag color='green'>-1.64%</text_tag>｜核按钮 <text_tag color='green'>15只</text_tag>｜大面5只｜最高板 <text_tag color='red'>5→11板</text_tag>\n亏钱方向：PCB（宝鼎科技、天津普林跌停）｜CRO（药明康德尾盘跳水触及跌停）｜AI视频（欢瑞世纪、流金科技领跌）｜北证50 -1.81%"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>③ 🧠 AI综合判断</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "**今天是「指数红盘、个股普涨、追涨停端反而更差」的分裂日：上涨家数从442只回到3084只，指数的钱回来了，但昨天涨停的票今天平均亏1.64%，炸板率从14.3%飙到45.4%。**\n三个增量变化：①涨停由36只增到61只、上涨家数放大7倍，是低位补涨与资金回补，不是情绪回暖；②封板质量急速转差——49只盘中摸板没封住，封板率只剩五成多，是最近最差的一天；③最高板从5板跳到11板，只是新华传媒停牌3天后复牌一字（换手仅1.56%），不代表情绪抬升，真实连板最高的还是冰山冷热4板。\n真正变的地方是方向：军工装备、低空经济、汽车零部件今天合计20多只首板，其中军工（+36.2亿）和低空经济（+32.6亿）是资金和涨停唯一同向的方向，也是9月底以来少见的「钱跟着涨停走」。\n<text_tag color='red'>⚠️ 风险</text_tag>\nA. 炸板率45.4%（昨14.3%）＋大面5只，封板意愿急速转差，这个位置追涨停几乎没有胜率。\nB. 5板核心双双终结：慈文传媒断板、百洋股份核按钮跌停；昨日涨停今天平均亏1.64%，中位票还在塌。\nC. 指数虽然收红，但上证3716点仍在五日线3758点下方，成交额缩到1.56万亿，是缩量反弹，没有增量资金进来。\nD. 新华传媒11板的滚动市盈率337倍（所处新闻出版行业只有17.77倍），公司已明确提示「股价再异常上涨可能再申请停牌核查」，随时有被抽走的可能。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>⑤ 🔥 主线复盘</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='red'>⭐确定性最强：军工装备与低空经济（航空产业链）</text_tag>\n· 十余只首板：<text_tag color='purple'>长城军工(601606)首板</text_tag>（09:38直线封板·封单2.07亿）、<text_tag color='purple'>万丰奥威(002085)首板</text_tag>（封单1.73亿）、<text_tag color='purple'>宗申动力(001696)首板</text_tag>（封单1.02亿）、<text_tag color='purple'>金盾股份(300411)首板20cm</text_tag>（封单0.89亿）、<text_tag color='purple'>中信海直(000099)首板</text_tag>（封单0.73亿）等。\n· 催化：第十六届中国国际航空航天博览会定档12月7日至13日广东珠海，展商超1100家、空军海军多型新型装备同台亮相；特斯拉二代Roadster发布（马斯克称2028年投产、市场传闻具备悬浮飞行功能）带动飞行汽车联想；香港特区拟年内完成跨境低空物流试飞草拟。\n· 资金与涨停同向：军工+36.2亿、低空经济+32.6亿、国防军工+29.1亿、无人机+28.5亿。\n⚠️ 清一色首板、连板高度为0；航展属预期型催化、飞行汽车是美股映射，明天能不能走出2板是分水岭。\n\n<text_tag color='blue'>汽车零部件与机器人（涨停家数最多）</text_tag>\n· 14只首板：<text_tag color='purple'>均胜电子(600699)首板</text_tag>（「汽车+机器人Tier1」·封单0.70亿）、<text_tag color='purple'>中鼎股份(000887)首板</text_tag>、<text_tag color='purple'>文灿股份(603348)首板</text_tag>、<text_tag color='purple'>天汽模(002510)首板</text_tag>、<text_tag color='purple'>旭升集团(603305)首板</text_tag>等。\n· 催化：新剑传动问询回复确认特斯拉Optimus V3硬件方案基本冻结定型、即将进入量产周期；均胜电子与大唐集团旗下辰芯科技签署战略合作（新一代TBOX与V2X车用电子）。\n⚠️ 同样全是首板，板块内部连板为0；汽车资金+27.8亿排名靠后，更像跟着军工制造一起补涨。\n\n<text_tag color='blue'>出版传媒·新华系（高度靠它撑）</text_tag>\n· <text_tag color='purple'>新华传媒(600825)11板</text_tag>（09:25一字·封单9.08亿全场第一·换手仅1.56%）、<text_tag color='purple'>新华文轩(601811)3板</text_tag>（封单0.25亿·盘中开板5次）、<text_tag color='purple'>读者传媒(603999)2板</text_tag>（封单1.12亿）、<text_tag color='purple'>出版传媒(601999)首板</text_tag>、<text_tag color='purple'>华媒控股(000607)首板</text_tag>。\n· 催化：新华传媒停牌核查结果落地、今日复牌；重组拟发行股份购买上海界面财联社100%股权。\n⚠️ 传媒板块资金 -37.6亿是全场流出第一，个股涨停靠重组和低价补涨，板块资金没跟上。\n\n<text_tag color='blue'>支线：房地产·福建区域·碳纤维</text_tag>\n· <text_tag color='purple'>粤宏远A(000573)首板</text_tag>（全国重点城市商品房销售改革落地扩围）、<text_tag color='purple'>厦门信达(000701)首板</text_tag>与<text_tag color='purple'>福建水泥(600802)首板</text_tag>、<text_tag color='purple'>吉林化纤(000420)首板</text_tag>（碳纤维）。\n⚠️ 三条支线各只有1到2只，彼此不同方向，还谈不上合力。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>⑥.5 👑 核心演化史</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "**昨日核心今日命运**\n· 慈文传媒：昨5板 → 断板收 +4.71%（温和断·成交21.23亿）。\n· 百洋股份：昨5板 → <text_tag color='green'>核按钮 -9.97% 跌停</text_tag>（封单本已偏弱）。\n· 阳光乳业：昨3板 → <text_tag color='green'>核按钮 -10.02% 跌停</text_tag>。\n· 冰山冷热：昨3板 → <text_tag color='red'>4板晋级</text_tag>（封单0.88亿·换手33.24%）。\n· 新华文轩：昨2板 → <text_tag color='red'>3板晋级</text_tag>（封单仅0.25亿·盘中开板5次）。\n· 澳弘电子：19天11板 → 断板收 -6.61%，历史高位终结。\n\n**今日市场核心**\n· <text_tag color='purple'>新华传媒(600825)</text_tag> 11板 [出版/重组·界面财联社]｜生命周期：加速（复牌一字·封单9.08亿·全天未开板）。\n· <text_tag color='purple'>冰山冷热(000530)</text_tag> 4板 [冰雪工程/液冷]｜真实连板最高（封单0.88亿）。\n· <text_tag color='purple'>新华文轩(601811)</text_tag> 3板 [出版]｜封单仅0.25亿、盘中开板5次，封得不实。\n\n**明日核心推演**\n· 新华传媒是明天唯一的高度来源，但公司已明说「再异常上涨可能再申请停牌」，它是随时会被抽走的票，不能当常规龙头看。\n· 真正的高度要看冰山冷热4进5、新华文轩3进4；新方向里军工的长城军工、低空的万丰奥威与金盾股份是最强的首板接棒候选。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>⑥ 📊 轮动复盘</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "✅ 军工装备与低空经济：今日新爆发（0→十余只涨停），航展定档＋飞行汽车联想，资金同步流入，是今天唯一「钱和涨停同向」的方向。\n✅ 汽车零部件与机器人：今日新爆发（0→14只涨停），特斯拉Optimus量产预期带动。\n❌ PCB与元件（昨日新爆发方向）：今日集体回撤——宝鼎科技、天津普林跌停，金禄电子 -8.83%、澳弘电子 -6.61%，四会富仕/金百泽/本川智能跌超10%，一日游成立。\n❌ 商业百货（昨日待回流方向）：盘中百大集团一度涨停但没封住，收盘板块无一只涨停，回流不成立。\n❌ AI影视与传媒：资金 -37.6亿全场流出第一，欢瑞世纪、流金科技领跌，前期抱团方向继续退。\n❌ CRO：药明康德尾盘跳水触及跌停，板块由强转弱。\n\n⚡ 超跌避险反弹（单独观察，按一日游对待）：央国企改革（5日累计 -142.0亿·当日 +2.3亿）、机器人概念（5日 -126.0亿·当日 +9.3亿）、新能源车（5日 -116.0亿·当日 +9.8亿）；同方向涨停均不足3只。\n\n<text_tag color='orange'>切换日判断：部分成立（方向切换·未确认）。</text_tag>旧的5板核心今天双双倒下（慈文传媒温和断、百洋股份跌停），同时军工、低空经济、汽车零部件一天冒出20多只首板，是9月底以来最像切换的一天。但三个硬伤没解决：新方向清一色首板、真实连板高度仍靠旧票（冰山冷热4板）、封板质量反而更差（炸板率45.4%）。所以只能算低位方向试错，不是新周期启动。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>⑦ 💰 板块资金</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "fields": [
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='red'>半导体概念 +38.4亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='green'>传媒 -37.6亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='red'>军工 +36.2亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='green'>周期股 -37.5亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='red'>存储芯片 +35.1亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='green'>AI应用 -32.6亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='red'>半导体 +32.9亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='green'>AIGC概念 -32.3亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='red'>低空经济 +32.6亿</text_tag>"
+          }
+        },
+        {
+          "is_short": true,
+          "text": {
+            "tag": "lark_md",
+            "content": "<text_tag color='green'>华为概念 -31.8亿</text_tag>"
+          }
+        }
+      ]
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "钱在往半导体和军工航空链挪，往外撤的集中在传媒与AI应用。今天涨停最多的军工、低空正好和资金同向；而出版系涨停（新华传媒11板）所在的传媒板块，反而是全场流出第一——涨停靠个股重组，板块资金没跟上。"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>⑨ 📎 明日展望与延续观察</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "· 看新方向能不能走出高度：军工的长城军工、低空的万丰奥威与金盾股份、汽车零部件的均胜电子，这批首板明天能不能出2板。\n· 看板块大票能不能连板：冰山冷热4进5、新华文轩3进4，是明天真实连板的最高看点。\n· 看老龙头反包还是续杀：慈文传媒（昨5板断板收 +4.71%）与澳弘电子（19天11板·今日 -6.61%）往哪边走。\n· 看新龙头有没有资金接：晋级率能不能先回到22.7%以上（今16.7%，差6个百分点），核按钮先收到个位数（今15只），昨日涨停今日均幅先转正（今 -1.64%）。\n\n<text_tag color='green'>⚠️ 三项修复条件一个都没到，而且是缩量反弹＋近一半尝试封板的票没封住。明天先看能不能不亏钱，再谈买什么。</text_tag>\n\n**延续观察**\n· 军工装备与低空经济是本轮少见的钱和涨停同向方向，看能否出2板、并把珠海航展预期继续发酵。\n· 出版系低位票（出版传媒、华媒控股）能否接住新华传媒的高度；同时留意新华传媒随时再停牌的抽离风险。\n\n**📈 股性参考·历史基因 Top10**\n这批是历史上爱涨停、连板能晋级、首板次日有溢价的老面孔——明日看谁继续扛（仅作观察参考，不构成推荐）：\n· <text_tag color='purple'>新华传媒</text_tag>(近250日涨停13次·最长7板·晋级66.7%·首板次日高开3.04%)｜<text_tag color='purple'>新华文轩</text_tag>(12次·最长5板·63.6%·-0.38%)\n· <text_tag color='purple'>华阳国际</text_tag>(7次·最长2板·16.7%·1.27%)｜<text_tag color='purple'>读者传媒</text_tag>(7次·最长2板·33.3%·4.98%)\n· <text_tag color='purple'>冰山冷热</text_tag>(8次·最长6板·57.1%·3.21%)｜<text_tag color='purple'>东方嘉盛</text_tag>(3次·最长5板·50.0%·7.27%)\n· <text_tag color='purple'>奥佳华</text_tag>(7次·最长4板·50.0%·3.28%)｜<text_tag color='purple'>上工申贝</text_tag>(7次·最长6板·16.7%·-1.65%)\n· <text_tag color='purple'>保隆科技</text_tag>(2次·最长2板·0.0%·4.25%)｜<text_tag color='purple'>兴欣新材</text_tag>(6次·最长3板·33.3%·0.11%)"
+      }
+    },
+    {
+      "tag": "hr"
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "<text_tag color='neutral'>🧘 心法</text_tag>"
+      }
+    },
+    {
+      "tag": "div",
+      "text": {
+        "tag": "lark_md",
+        "content": "指数翻红、上涨家数回来了，不等于昨天买的那只票能全身而退；先看炸板率回到三成以下，再谈出手。"
+      }
+    }
+  ],
+  "note": "📡 选股宝+东财+腾讯自选股 | 17:35 | AI盘中诊断\n⚠️ 本报告基于公开信息分析，投资需谨慎"
+}

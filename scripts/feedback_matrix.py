@@ -564,9 +564,13 @@ def main():
     break_count = sum(1 for n in nukes if n.get("breakdown") is True)
     nuke_count = len(nukes)
     big_loss = sum(1 for q in quotes.values() if -5 <= q["pct"] < -3)
-    # 炸板率：最新盘面 broken/(broken+total_zt)
-    total_zt = int(latest.get("total_zt") or 0)
+    # 涨停总数统一以本次反馈使用的「今日真实涨停池」为准。
+    # ⛔ 不得再读取 latest.total_zt：该字段来自选股宝实时池，而 today_codes 来自东财
+    # 收盘/盘中涨停池，两个集合可能天然差异，曾造成 now_zt_count=59 但
+    # today_zt_codes=61 的同文件自相矛盾（2026-10-16）。
+    total_zt = len(today_codes)
     broken_count = int((latest.get("broken") or {}).get("count") or 0)
+    # 炸板率：当前盘面 broken/(broken+今日统一涨停池)
     broken_rate = broken_count / max(1, broken_count + total_zt)
     # 最高板趋势
     prev_max_b = int(snap.get("max_boards") or 0)

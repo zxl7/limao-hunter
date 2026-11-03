@@ -1,0 +1,12 @@
+[Unit]
+Description=Tick limao-pulse every 30s (mirrors launchd StartInterval=30)
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=30s
+AccuracySec=1s
+# 与 Mac 上的 launchd 一致：脚本内部按交易时段自节流，所以这里只管心跳
+Unit=limao-pulse.service
+
+[Install]
+WantedBy=timers.target

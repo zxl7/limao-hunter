@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""尾盘财富密码·阴线回踩 MA10 潜伏扫描与独立台账。
+"""尾盘财富密码·强势趋势核心(分歧转一致)潜伏扫描与独立台账。
 
 策略只记录与结算研究信号，绝不下单、绝不推送，也不混入接力策略账户账本。
 
@@ -11,7 +11,8 @@
 
 CLI（三个时点各一条，均由调度调用）：
 - `scan --output …` + `record --file …`：14:30 扫描并冻结（快照 + 信号台账）
-- `entry-plan --decision-date …`：卡推送后抓当日实时价作**买入价**（当日已记则跳过·不覆盖）
+- `entry-plan --decision-date …`：卡推送后抓当日实时价作**买入价**（当日已记则跳过·不覆盖）；
+  取价范围＝当日 AI 精选推票（卡面「✅ 今日买入」那几只·`ENTRY_PICKS_ONLY`），买几只记几只
 - `settle-live --decision-date … --trade-date …`：T+1 10:00 抓真实价作卖出价并结算收益
 
 ⛔ 2026-10-09 用户拍板：本策略＝「尾盘潜伏卡」的**唯一选材与推票来源**；
@@ -37,15 +38,8 @@ LOOKBACK_DAYS = 5           # 2026-10-13 用户定：「前期的热门题材」
 MIN_HOT_SECTOR_ZT = 3
 MIN_HOT_THEME_ZT = 3        # 题材口径（选股宝/东财 getFryTomorrowList 回补）：单日涨停≥3家才算热门题材
 MIN_HISTORY_BOARDS = 2
-MA10_TOUCH_LOW = 0.98       # 收盘允许低于 MA10 最多 2%
-MA10_TOUCH_HIGH = 1.03      # 收盘允许高于 MA10 最多 3%
-VOLUME_SHRINK_RATIO = 0.80  # 当日量 <= 前一日量 80% 才算缩量
 MIN_TURNOVER_YI = 5.0
 EXCLUDE_BOARDS = 5
-# ⛔ 2026-10-13 用户「只买阴线…靠近10日线的阴线」+ 实盘教训（10-09 三只全亏 / 10-13 大金重工
-#   当日 −9.36% 被当「缩量回踩」）：把「阴线」与「回踩」的口径收严——
-MAX_DROP_PCT = 5.0          # 当日跌幅上限（%，相对前收）→ 超过＝**砸盘**，不是「回踩」
-REQUIRE_CLOSE_DOWN = True   # 「阴线」须**同时收跌**（close < prev_close）：跳空高开收阴不算
 DATA_FAIL_MAX_RATIO = 0.5   # 日K抓取失败占比 ≥ 此值 且 ≥ DATA_FAIL_MIN 只 → data_ok=False
 DATA_FAIL_MIN = 20
 
@@ -60,11 +54,40 @@ ENV_MAX_DOWN_LIMIT = 10        # 跌停家数 ≥ 该值算弱
 ENV_MIN_ZT_TOTAL = 40          # 涨停家数 < 该值算弱
 ENV_MAX_BROKEN_RATE = 35.0     # 炸板率（%）≥ 该值算弱
 WEAK_ENV_MAX_PICKS = 2         # 退潮日最多推几只（用户：尽量推两个）
-WEAK_ENV_POSITION_PCT = 50.0   # 退潮日**每只**仓位上限（2 只 → 平摊）
-NORMAL_ENV_POSITION_PCT = 50.0 # 常态每只仓位上限（既有口径：各自不超一半）
+# ⛔ 单票硬顶单一源 = core/risk_limits.MAX_POSITION_PER_STOCK（2026-10-30 用户「单股不能超过 50%」）
+#   双路径兜底（`core.*` 与 `wealth_code.core.*` 两种顶层包都要能取到同一个数）
+try:
+    from wealth_code.core.risk_limits import MAX_POSITION_PER_STOCK as _HARD_PER_STOCK  # noqa: E402
+except ImportError:  # pragma: no cover
+    from core.risk_limits import MAX_POSITION_PER_STOCK as _HARD_PER_STOCK  # noqa: E402
+
+WEAK_ENV_POSITION_PCT = _HARD_PER_STOCK * 100.0   # 退潮日**每只**仓位上限（2 只 → 平摊）
+NORMAL_ENV_POSITION_PCT = _HARD_PER_STOCK * 100.0 # 常态每只仓位上限（既有口径：各自不超一半）
+
+# ── 强势趋势核心·分歧转一致（2026-10-15 上线，取代旧的「阴线回踩MA10」口径）──
+# 反推样本：华北制药600812(医药/鼠疫链霉素)、欢瑞世纪000892(传媒/AI短剧)。
+# 旧口径选的是弱势回踩/破位票（实证 2 赚 12 亏、累计 -35%）；本口径选
+# 「强势题材核心、均线多头、近15日放量启动、近1-3日分歧洗盘(仍在MA10上方)后反包转一致」的票。
+STRONG_MA10_POS_LOW = 1.03      # 价须站在 MA10 上方至少 +3%
+STRONG_MA10_POS_HIGH = 1.15     # 至多 +15%，过高=追板高位
+STRONG_MIN_VOL_RATIO = 1.2      # 近5日均量/近20日均量 ≥1.2（放量）
+STRONG_START_PCT = 0.07         # 近15日须有 ≥+7% 放量启动阳线
+STRONG_START_VOL_RATIO = 1.2    # 启动阳线量比门槛
+STRONG_PULLBACK_DROP_LOW = -0.15   # 分歧洗盘阴线跌幅下限(-15%，强票洗盘更狠)
+STRONG_PULLBACK_DROP_HIGH = -0.03  # 分歧洗盘阴线跌幅上限(-3%)
+STRONG_CONSEC_BOARDS_MAX = 3    # 当日连续涨停≥3板视为高位不接
+STRONG_SHAPE_BARS = 70          # 取近70根算 MA60/量比/启动
+
 STRATEGY = "ambush_pullback_ma10_v1"
 SIGNAL_LEDGER_NAME = "ambush_pullback_signal_log.jsonl"
 SETTLEMENT_LEDGER_NAME = "ambush_pullback_settlement_log.jsonl"
+
+# 买入价台账取价范围（2026-10-15 用户「就按你这个台账判断的买」）：
+#   True  = 只记**当日 AI 精选推票**（`cache/ambush_ai_MM-DD.json` 的 picks，且须落在当日冻结池
+#           内）—— 与卡面「✅ 今日买入（AI 精选）」逐票一致，买几只就记几只。
+#   False = 旧口径：冻结全池逐票记价 —— 含未入选票（实证 2026-10-15 记了 4 只而卡面只推 2 只），
+#           结算时会把没买的票也算进战绩。
+ENTRY_PICKS_ONLY = True
 
 
 def _now() -> datetime:
@@ -223,55 +246,104 @@ def _historical_universe(cache_dir: Path, today: str) -> dict[str, dict]:
     return out
 
 
-def _shape(bars: list[dict]) -> tuple[dict | None, str | None]:
-    """计算阴线、MA10 上行、回踩及缩量。bars 必须按日期正序并含当天日K。"""
-    if len(bars) < 12:
-        return None, "日K不足12根"
-    tail = bars[-12:]
+def _ma(vals: list[float], n: int, i: int) -> float | None:
+    if i + 1 < n:
+        return None
+    return sum(vals[i + 1 - n:i + 1]) / n
+
+
+def _shape_strong(bars: list[dict]) -> tuple[dict | None, str | None]:
+    """强势趋势核心·分歧转一致（2026-10-15 启动的新策略）。
+
+    反推自华北制药600812/欢瑞世纪000892 的理想买点（10-14 视角）。六条规律：
+    ① 均线多头（MA5≥MA10≥MA20）且 MA20 上行
+    ② 价站在 MA10 上方 +3%~+15%（趋势上行，非回踩破位）
+    ③ 量能放大：近5日均量/近20日均量 ≥ 1.2
+    ④ 近15日有 ≥+7% 的放量启动阳线（题材点火）
+    ⑤ 近1-3日出现分歧洗盘阴线（跌幅 -15%~-3%、收跌）且洗盘时价仍在 MA10 上方，
+       随后当日反包阳线（分歧转一致）= 尾盘介入点
+    ⑥ 风控：当日连续涨停≥3板视为高位不接（防接飞刀）
+    bars 按日期正序，需 ≥ STRONG_SHAPE_BARS 根。
+    """
+    n = len(bars)
+    if n < STRONG_SHAPE_BARS:
+        return None, f"日K不足{STRONG_SHAPE_BARS}根"
     try:
-        closes = [float(x["close"]) for x in tail]
-        current = tail[-1]
-        prev = tail[-2]
-        open_ = float(current["open"])
-        close = float(current["close"])
-        prev_close = float(prev["close"])
-        volume = float(current["volume"])
-        prev_volume = float(prev["volume"])
+        rows = [{"date": str(x.get("date") or ""), "open": float(x["open"]),
+                 "close": float(x["close"]), "high": float(x["high"]),
+                 "low": float(x["low"]), "volume": float(x["volume"])} for x in bars]
     except (KeyError, TypeError, ValueError):
         return None, "日K字段不完整"
-    if open_ <= 0 or close <= 0 or volume <= 0 or prev_volume <= 0:
-        return None, "日K价格或成交量无效"
-    ma10 = sum(closes[-10:]) / 10
-    ma10_prev = sum(closes[-11:-1]) / 10
-    ma10_prev2 = sum(closes[-12:-2]) / 10
-    is_bearish = close < open_
-    is_down = close < prev_close
-    drop_pct = (prev_close - close) / prev_close * 100 if prev_close > 0 else 0.0
-    ma10_up = ma10 > ma10_prev > ma10_prev2
-    ma10_gap_pct = (close / ma10 - 1) * 100
-    near_ma10 = MA10_TOUCH_LOW <= close / ma10 <= MA10_TOUCH_HIGH
-    volume_ratio = volume / prev_volume
-    is_shrinking = volume_ratio <= VOLUME_SHRINK_RATIO
-    if not is_bearish:
-        return None, "当日非阴线"
-    if REQUIRE_CLOSE_DOWN and not is_down:
-        return None, "当日未收跌（跳空高开收阴不算）"
-    if drop_pct > MAX_DROP_PCT:
-        return None, f"当日跌幅>{MAX_DROP_PCT:g}%（是砸盘·不是回踩）"
-    if not ma10_up:
-        return None, "MA10未连续上行"
-    if not near_ma10:
-        return None, "收盘未回踩或接近MA10"
-    if not is_shrinking:
-        return None, "当日未缩量"
+    closes = [r["close"] for r in rows]
+    opens = [r["open"] for r in rows]
+    vols = [r["volume"] for r in rows]
+    N = len(rows)
+    cur = N - 1
+    price = closes[cur]
+    if price <= 0:
+        return None, "当日收盘价无效"
+    ma5, ma10, ma20 = _ma(closes, 5, cur), _ma(closes, 10, cur), _ma(closes, 20, cur)
+    if not (ma5 and ma10 and ma20):
+        return None, "均线数据不足"
+    # ① 多头排列 + MA20 上行（比 15 天前，避免中途挖坑单日拉低近期 MA20 误判）
+    if not (ma5 >= ma10 - 1e-6 and ma10 >= ma20 - 1e-6):
+        return None, "均线未多头排列(MA5≥MA10≥MA20)"
+    ma20_prev = _ma(closes, 20, cur - 15)
+    if ma20_prev and ma20 <= ma20_prev:
+        return None, "MA20未上行"
+    # ② 价在 MA10 上方 +3%~+15%
+    pos = price / ma10
+    if not (STRONG_MA10_POS_LOW <= pos <= STRONG_MA10_POS_HIGH):
+        return None, f"价相对MA10位置={pos:.2f} 不在[{STRONG_MA10_POS_LOW},{STRONG_MA10_POS_HIGH}]"
+    # ③ 量能放大
+    v5 = sum(vols[-5:]) / 5
+    v20 = sum(vols[-20:]) / 20
+    vol_ratio = v5 / v20 if v20 > 0 else 0
+    if vol_ratio < STRONG_MIN_VOL_RATIO:
+        return None, f"量能未放大(量比={vol_ratio:.2f}<{STRONG_MIN_VOL_RATIO})"
+    # ④ 近15日有 ≥+7% 启动阳线（放量由 ③ 全局量比保证；不强求单根量比，
+    #    否则早期启动阳线相对后期放量的末5日均量天然偏低而被误杀）
+    start_hit = False
+    for i in range(max(0, N - 15), N):
+        if closes[i] / opens[i] - 1 >= STRONG_START_PCT:
+            start_hit = True
+            break
+    if not start_hit:
+        return None, "近15日无≥+7%启动阳线"
+    # ⑤ 分歧洗盘→反包：近1-3日洗盘阴线(跌-3%~-9%)且洗盘时价仍在MA10上方
+    pullback_idx = None
+    for i in range(max(0, N - 3), N - 1):
+        is_yin = closes[i] < opens[i]
+        drop = closes[i] / closes[i - 1] - 1
+        if is_yin and STRONG_PULLBACK_DROP_LOW <= drop <= STRONG_PULLBACK_DROP_HIGH:
+            mi = _ma(closes, 10, i)
+            if mi and closes[i] / mi >= 1.0:
+                pullback_idx = i
+                break
+    if pullback_idx is None:
+        return None, "近3日无『MA10上方分歧洗盘阴线』"
+    # 反包：当天收阳且收复洗盘日收盘（允许极小误差，避免微持平/微跌被误杀）
+    if not (closes[cur] > opens[cur] and closes[cur] >= closes[pullback_idx] * 0.99):
+        return None, "洗盘后未反包转一致"
+    # ⑥ 风控：当日连续涨停≥3板不接
+    consec = 0
+    for i in range(cur, max(-1, cur - STRONG_CONSEC_BOARDS_MAX - 1), -1):
+        pct = closes[i] / closes[i - 1] - 1 if i > 0 else 0
+        if pct >= 0.095:
+            consec += 1
+        else:
+            break
+    if consec >= STRONG_CONSEC_BOARDS_MAX:
+        return None, f"当日连续{consec}板高位不接"
+    ma10_gap_pct = (price / ma10 - 1) * 100
     return {
-        "date": str(current.get("date") or ""), "open": round(open_, 3), "close": round(close, 3),
-        "prev_close": round(prev_close, 3), "pct": round((close / prev_close - 1) * 100, 2),
-        "drop_pct": round(drop_pct, 2),
-        "volume": volume, "prev_volume": prev_volume, "volume_ratio": round(volume_ratio, 4),
-        "ma10": round(ma10, 3), "ma10_prev": round(ma10_prev, 3), "ma10_prev2": round(ma10_prev2, 3),
-        "ma10_gap_pct": round(ma10_gap_pct, 3), "is_bearish": True, "is_down": bool(is_down),
-        "ma10_up": True, "near_ma10": True, "is_shrinking": True,
+        "date": rows[cur]["date"], "open": round(opens[cur], 3), "close": round(price, 3),
+        "pct": round((price / closes[cur - 1] - 1) * 100, 2),
+        "ma5": round(ma5, 3), "ma10": round(ma10, 3), "ma20": round(ma20, 3),
+        "ma10_gap_pct": round(ma10_gap_pct, 3), "volume_ratio": round(vol_ratio, 4),
+        "pullback_date": rows[pullback_idx]["date"],
+        "pullback_drop_pct": round((closes[pullback_idx] / closes[pullback_idx - 1] - 1) * 100, 2),
+        "consec_boards": consec, "strategy_mode": "strong_trend",
     }, None
 
 
@@ -347,6 +419,7 @@ def scan(cache_dir: Path, bars_fetcher: Callable[[str, int], list[dict]] | None 
     candidates, rejected = [], {}
     attempted = 0
     fetch_failed = 0
+    n_bars = STRONG_SHAPE_BARS
     for code, meta in universe.items():
         reason = _excluded(code, meta["name"], int(meta["max_boards"]), float(meta["turnover_yi"]))
         if reason:
@@ -354,17 +427,22 @@ def scan(cache_dir: Path, bars_fetcher: Callable[[str, int], list[dict]] | None 
             continue
         attempted += 1
         try:
-            shape, reason = _shape(bars_fetcher(code, 15))
+            shape, reason = _shape_strong(bars_fetcher(code, n_bars))
         except Exception:
             shape, reason = None, "日K抓取失败"
         if not shape:
-            if str(reason) in ("日K抓取失败", "日K不足12根"):
+            if str(reason) in ("日K抓取失败", f"日K不足{STRONG_SHAPE_BARS}根"):
                 fetch_failed += 1
             rejected[str(reason)] = rejected.get(str(reason), 0) + 1
             continue
         hot_zt = int(meta.get("theme_zt_max") or 0) or int(meta["sector_zt_count"])
-        score = round((3.0 - abs(shape["ma10_gap_pct"])) * 10 + (1 - shape["volume_ratio"]) * 20
-                      + min(hot_zt, 8) + min(int(meta["max_boards"]), 4) * 2, 2)
+        # 越接近 MA10 上方 +8% 越好；量能放大加分；热度/辨识度加分
+        score = round(
+            min(hot_zt, 8)
+            + min(int(meta["max_boards"]), 4) * 2
+            + (shape["volume_ratio"] - 1) * 10
+            + max(0, 5 - abs(shape["ma10_gap_pct"] - 8)) * 2,
+            2)
         candidates.append({**meta, **shape, "score": score})
     candidates.sort(key=lambda x: (-x["score"], x["code"]))
     # ⛔ 数据源健康度（2026-10-09 血案：腾讯停用 host → 全量日K空 → 候选 0 只被当成
@@ -381,11 +459,15 @@ def scan(cache_dir: Path, bars_fetcher: Callable[[str, int], list[dict]] | None 
         "generated_at": _now().isoformat(),
         "planned_entry_time": f"{day} 推送后（≈14:50）", "planned_exit_time": "next_trade_day 10:00",
         "data_ok": data_ok, "fetch_failed": fetch_failed, "attempted": attempted,
-        "params": {"lookback_days": LOOKBACK_DAYS, "min_hot_sector_zt": MIN_HOT_SECTOR_ZT,
+        "params": {"strategy_mode": "strong_trend",
+                   "lookback_days": LOOKBACK_DAYS, "min_hot_sector_zt": MIN_HOT_SECTOR_ZT,
                    "min_hot_theme_zt": MIN_HOT_THEME_ZT,
-                   "min_history_boards": MIN_HISTORY_BOARDS, "ma10_touch_low": MA10_TOUCH_LOW,
-                   "ma10_touch_high": MA10_TOUCH_HIGH, "volume_shrink_ratio": VOLUME_SHRINK_RATIO,
-                   "max_drop_pct": MAX_DROP_PCT, "require_close_down": REQUIRE_CLOSE_DOWN},
+                   "min_history_boards": MIN_HISTORY_BOARDS,
+                   "strong_ma10_pos": [STRONG_MA10_POS_LOW, STRONG_MA10_POS_HIGH],
+                   "strong_min_vol_ratio": STRONG_MIN_VOL_RATIO,
+                   "strong_start_pct": STRONG_START_PCT,
+                   "strong_pullback_drop": [STRONG_PULLBACK_DROP_LOW, STRONG_PULLBACK_DROP_HIGH],
+                   "strong_consec_boards_max": STRONG_CONSEC_BOARDS_MAX},
         "stats": {"universe": len(universe), "hits": len(candidates), "rejected": rejected},
         "env": env, "advice": position_advice(env),
         "candidates": candidates,
@@ -452,6 +534,92 @@ def settle(cache_dir: Path, decision_date: str, trade_date: str,
                         lambda x: (x.get("strategy"), x.get("decision_date"), x.get("code")))
 
 
+# ── 仓位加权「账户当日收益」（2026-10-15 用户需求：收益须乘动态仓位）──────────
+# 终端原净值把每笔结算当满仓连乘（多票日虚高）；本函数改用当日 relay 动态仓位
+# 方案加权，得出「唯一当日收益」= Σ(仓位权重_i × 个股return_pct_i)。
+DAILY_PNL_NAME = "ambush_pullback_daily_pnl.jsonl"
+
+
+def _alloc_position_weights(n: int, per_pick_cap: float, total_cap: float) -> list[float]:
+    """N 只成交的仓位权重（占账户比例）。每只=min(per_pick_cap) 且总和不超 total_cap。"""
+    per_pick_cap = float(per_pick_cap) if per_pick_cap and per_pick_cap > 0 else 1.0
+    total_cap = float(total_cap) if total_cap and total_cap > 0 else 1.0
+    if n <= 0:
+        return []
+    if per_pick_cap * n <= total_cap:
+        return [per_pick_cap] * n
+    return [total_cap / n] * n
+
+
+def build_weighted_daily_pnl(cache_dir: Path, path: Path | None = None,
+                             relay_loader=None) -> list[dict[str, Any]]:
+    """按决策日聚合尾盘潜伏结算，用**当日 relay 动态仓位方案**加权出「账户当日收益」。
+
+    权重：读 decision_date 当天落盘的 relay plan（per_pick_cap/total_cap）；缺 → 中性档兜底
+    （relay neutral 2只/40%/60%）并标 missing（诚实降级·不编造）。
+    账户当日收益 = Σ(权重_i × 个股return_pct_i)；按 decision_date 排序复利滚 nav（base 1.0）。
+    输出 ambush_pullback_daily_pnl.jsonl。
+    """
+    source = cache_dir / SETTLEMENT_LEDGER_NAME
+    rows: list[dict] = []
+    if source.exists():
+        for line in source.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            if r.get("strategy") == STRATEGY and r.get("status") == "settled":
+                rows.append(r)
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(str(r.get("decision_date") or ""), []).append(r)
+    loader = relay_loader or _default_relay_loader
+    out: list[dict] = []
+    nav = 1.0
+    for dd in sorted(groups.keys()):
+        items = groups[dd]
+        rets = [float(x.get("return_pct") or 0.0) for x in items]
+        plan = loader(dd)
+        if isinstance(plan, dict) and plan.get("per_pick_cap") is not None:
+            ppc = float(plan["per_pick_cap"])
+            tc = float(plan.get("total_cap") or 1.0)
+            missing = False
+        else:
+            ppc, tc, missing = 0.4, 0.6, True  # 中性档兜底（relay neutral: 2只/40%/60%）
+        weights = _alloc_position_weights(len(items), ppc, tc)
+        weighted = sum(w * r_ for w, r_ in zip(weights, rets))
+        nav = round(nav * (1 + weighted / 100.0), 6)
+        out.append({
+            "decision_date": dd,
+            "trade_date": items[0].get("trade_date"),
+            "weighted_return_pct": round(weighted, 4),
+            "nav": nav,
+            "stock_count": len(items),
+            "plan": {"tier": plan.get("tier") if isinstance(plan, dict) else None,
+                     "per_pick_cap": ppc, "total_cap": tc, "missing": missing},
+            "stocks": [{"code": x.get("code"), "name": x.get("name"),
+                        "return_pct": round(float(x.get("return_pct") or 0.0), 4),
+                        "weight": round(weights[i], 4)} for i, x in enumerate(items)],
+        })
+    target = path or cache_dir / DAILY_PNL_NAME
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in out) + ("\n" if out else ""),
+        encoding="utf-8")
+    return out
+
+
+def _default_relay_loader(trade_date: str):
+    try:
+        from core import relay_position as _rp
+        return _rp.load_daily_plan(trade_date)
+    except Exception:
+        return None
+
+
 ENTRY_FILE_TMPL = "ambush_pullback_entry_{}.json"
 
 
@@ -504,6 +672,47 @@ def frozen_codes(cache_dir: Path, decision_date: str, path: Path | None = None) 
     return out
 
 
+def picks_declared_empty(cache_dir: Path, decision_date: str) -> bool:
+    """AI 注入文件存在且**明确声明今日不买**（`picks` 键存在但为空数组）。
+
+    与「文件缺失 / 字段异常」严格区分：前者是 AI 判断「今天一只都不买」，此时**不得**回落
+    冻结全池记账——否则会把没买的票记成成交、污染次日结算战绩（2026-10-30 实证：
+    唯一候选被判定不买，回落全池会凭空产生一笔次日结算的交易）。后者才回落全池并标
+    `scope="pool"`。
+    """
+    mmdd = str(decision_date)[5:]
+    src = cache_dir / f"ambush_ai_{mmdd}.json"
+    try:
+        d = json.loads(src.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return isinstance(d, dict) and "picks" in d and isinstance(d.get("picks"), list) and not d["picks"]
+
+
+def pick_codes(cache_dir: Path, decision_date: str) -> list[str]:
+    """当日 AI 精选推票代码（`cache/ambush_ai_MM-DD.json` → `picks[].stocks[].code`）。
+
+    与 `frozen_codes`（当日冻结全池）相对：买入价台账的口径应以**实际买入的票**为准，而非
+    「当日扫出过哪些票」。文件缺失、无 picks、字段异常一律返回空列表——调用方据此回落全池，
+    ⛔ 不猜、不补、不用别的票顶替。
+    """
+    mmdd = str(decision_date)[5:]          # YYYY-MM-DD → MM-DD（AI 注入文件命名约定）
+    src = cache_dir / f"ambush_ai_{mmdd}.json"
+    try:
+        d = json.loads(src.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    out: list[str] = []
+    for item in d.get("picks") or []:
+        if not isinstance(item, dict):
+            continue
+        for s in item.get("stocks") or []:
+            code = str((s or {}).get("code") or "").strip()
+            if code and code not in out:
+                out.append(code)
+    return out
+
+
 def plan_entry(cache_dir: Path, decision_date: str,
                price_fetcher: Callable[[list[str]], dict] | None = None,
                out: Path | None = None, overwrite: bool = False) -> dict:
@@ -511,6 +720,10 @@ def plan_entry(cache_dir: Path, decision_date: str,
 
     ⛔ 当日已记录买入价时默认**不覆盖**（2026-10-09 用户「推出来之后就买入，计入战绩」）：
     买入价＝推送时点的价，后续时点重跑不得用更晚的价追溯改写战绩。
+
+    取价范围（`ENTRY_PICKS_ONLY`）：默认只取**当日 AI 精选推票**（＝卡面「✅ 今日买入」那几只），
+    并强制须落在当日冻结池内（池外票剔除·与卡片 `PICKS_POOL_ENFORCE` 同口径）；AI 注入文件
+    缺失时回落冻结全池并置 `scope="pool"`（⛔ 不静默丢票、也不阻断台账）。
     """
     target = out or cache_dir / ENTRY_FILE_TMPL.format(decision_date)
     if not overwrite:
@@ -521,6 +734,16 @@ def plan_entry(cache_dir: Path, decision_date: str,
         except Exception:
             pass
     codes = frozen_codes(cache_dir, decision_date)
+    scope = "pool"
+    if ENTRY_PICKS_ONLY:
+        if picks_declared_empty(cache_dir, decision_date):
+            # AI 已明确「今日一只都不买」：不回落全池、不记假成交
+            codes, scope = [], "none"
+        else:
+            _pool = set(codes)
+            _picks = [c for c in pick_codes(cache_dir, decision_date) if c in _pool]
+            if _picks:
+                codes, scope = _picks, "picks"
     fetch = price_fetcher or _realtime_prices
     prices: dict[str, float] = {}
     if codes:
@@ -529,7 +752,8 @@ def plan_entry(cache_dir: Path, decision_date: str,
         except Exception:
             prices = {}
     payload = {"strategy": STRATEGY, "decision_date": decision_date, "slot": "entry_after_push",
-               "captured_at": _now().isoformat(), "codes": codes, "prices": prices}
+               "scope": scope, "captured_at": _now().isoformat(),
+               "codes": codes, "prices": prices}
     if prices:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -558,7 +782,14 @@ def settle_live(cache_dir: Path, decision_date: str, trade_date: str,
     label = None
     if len(captured) >= 16 and captured[10] in ("T", " "):
         label = f"{decision_date} {captured[11:16]} 买入"
-    return settle(cache_dir, decision_date, trade_date, entry, exit_prices, path=path, entry_time=label)
+    settled = settle(cache_dir, decision_date, trade_date, entry, exit_prices, path=path, entry_time=label)
+    # 结算成功后立即重建账户级日收益，保证终端读到的不是过时净值。
+    try:
+        build_weighted_daily_pnl(cache_dir)
+    except Exception:
+        # 收益聚合失败不回滚已经完成的逐笔结算；下次 weighted-pnl 可重建。
+        pass
+    return settled
 
 
 def pending_decision_date(cache_dir: Path, before: str) -> str | None:
@@ -584,7 +815,7 @@ def pending_decision_date(cache_dir: Path, before: str) -> str | None:
 def _cli(argv: list[str]) -> int:
     """仅供定时任务调用的显式入口；不包含下单或推送能力。"""
     import argparse
-    ap = argparse.ArgumentParser(description="尾盘阴线回踩MA10潜伏：扫描、冻结与独立结算")
+    ap = argparse.ArgumentParser(description="尾盘潜伏(强势趋势核心·分歧转一致)：扫描、冻结与独立结算")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sp = sub.add_parser("scan", help="14:30 扫描并输出JSON；默认不落盘")
     sp.add_argument("--date", dest="day")
@@ -608,6 +839,8 @@ def _cli(argv: list[str]) -> int:
     ep.add_argument("--entry-prices", type=Path, required=True, help="{code: 14:50价格}")
     ep.add_argument("--exit-prices", type=Path, required=True, help="{code: 次日10:00价格}")
     ep.add_argument("--cache-dir", type=Path, default=_PROJ_ROOT / "cache")
+    wpn = sub.add_parser("weighted-pnl", help="按动态仓位加权聚合尾盘潜伏当日账户收益")
+    wpn.add_argument("--cache-dir", type=Path, default=_PROJ_ROOT / "cache")
     args = ap.parse_args(argv)
     if args.cmd == "scan":
         res = scan(_PROJ_ROOT / "cache", today=args.day)
@@ -627,8 +860,9 @@ def _cli(argv: list[str]) -> int:
         return 0
     if args.cmd == "entry-plan":
         res = plan_entry(args.cache_dir, args.decision_date, out=args.out, overwrite=args.overwrite)
-        print(f"[ambush-pullback] 当日买入价（推送后实时价）：冻结{len(res['codes'])}只 / "
-              f"取到{len(res['prices'])}只 · captured_at={res.get('captured_at')}")
+        print(f"[ambush-pullback] 当日买入价（推送后实时价）：口径={res.get('scope')} · "
+              f"冻结{len(res['codes'])}只 / 取到{len(res['prices'])}只 · "
+              f"captured_at={res.get('captured_at')}")
         return 0
     if args.cmd == "settle-live":
         trade_date = args.trade_date or _trade_date()
@@ -641,13 +875,22 @@ def _cli(argv: list[str]) -> int:
         n = settle_live(args.cache_dir, decision, trade_date, entry_file=args.entry_file)
         print(f"[ambush-pullback] 结算 {n} 只（买入日 {decision} → 卖出日 {trade_date}）")
         return 0
+    if args.cmd == "weighted-pnl":
+        out = build_weighted_daily_pnl(args.cache_dir)
+        print(f"[ambush-pullback] 加权当日收益 {len(out)} 个决策日")
+        return 0
     try:
         entry = json.loads(args.entry_prices.read_text(encoding="utf-8"))
         exit_ = json.loads(args.exit_prices.read_text(encoding="utf-8"))
     except Exception as exc:
         print(f"[ambush-pullback] 无法读取价格文件: {exc}", file=sys.stderr)
         return 2
-    print(f"[ambush-pullback] 结算 {settle(args.cache_dir, args.decision_date, args.trade_date, entry, exit_)} 只")
+    settled = settle(args.cache_dir, args.decision_date, args.trade_date, entry, exit_)
+    try:
+        build_weighted_daily_pnl(args.cache_dir)
+    except Exception:
+        pass
+    print(f"[ambush-pullback] 结算 {settled} 只")
     return 0
 
 

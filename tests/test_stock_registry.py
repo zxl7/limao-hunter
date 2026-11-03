@@ -14,6 +14,7 @@ import json
 import sqlite3
 import sys
 import threading
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -364,6 +365,35 @@ def test_dump_json_not_n_plus_one(monkeypatch, db, tmp_path):
     assert select_count <= 5, traces
 
 
+def test_xgb_snapshot_merges_topics_by_code(db):
+    """选股宝快照按 code 去重，把多个主题合并到同一个对象。"""
+    snap = {
+        "ts": f"{D1}T10:00:00+08:00",
+        "hot_spots": [{"sector": "机器人", "stocks": [
+            {"code": "600000.SH", "name": "甲", "pct": 9.9},
+        ]}],
+        "top5": [{"name": "智能制造", "official": {"boards": [{"name": "机械设备"}]},
+                  "zt_stocks": [{"code": "600000", "name": "甲", "pct": 10.0}]}],
+        "limit_up_stocks": [{"code": "600000", "name": "甲", "sector": "机器人、涨停"}],
+    }
+    result = SR.ingest_xgb_snapshot(snap, db_path=db)
+    assert result["ok"] is True
+    row = SR.get_by_code("600000", db_path=db)
+    assert row["themes"] == sorted(["机器人", "智能制造", "涨停"])
+    assert row["industry"] == "机械设备"
+    assert row["limit_up_touched"] == 1
+    assert SR.stats(db_path=db)["stocks"] == 1
+
+
+def test_xgb_snapshot_missing_code_is_not_guessed(db):
+    """选股宝只给名称时不得猜代码，也不得新增重复对象。"""
+    snap = {"ts": f"{D1}T10:00:00+08:00",
+            "top5": [{"name": "机器人", "followers": [{"name": "无代码票", "pct": 10.0}]}]}
+    result = SR.ingest_xgb_snapshot(snap, db_path=db)
+    assert result["ok"] is False
+    assert SR.stats(db_path=db)["stocks"] == 0
+
+
 def test_switches_disable_ingest(monkeypatch, db):
     """可逆开关：关掉后 ingest 变 no-op（查询路径不受影响）。"""
     monkeypatch.setenv("STOCK_REGISTRY_ENABLED", "0")
@@ -478,3 +508,75 @@ def test_intraday_hook_does_not_raise_on_bad_input(monkeypatch):
 
     monkeypatch.setenv("STOCK_REGISTRY_INTRADAY", "0")
     IP._ingest_stock_registry({}, {}, [])       # 关掉开关 → 静默通过
+
+
+# ── ⑩ 全量命中队列与技术派生层 ─────────────────────────────────────────
+
+def _bars(n=130):
+    bars = []
+    start = date(2026, 1, 1)
+    for i in range(n):
+        close = 10.0 + i * 0.1
+        day = start + timedelta(days=i)
+        bars.append({"date": day.isoformat(),
+                     "open": close - 0.1, "close": close,
+                     "high": close + 0.2, "low": close - 0.2,
+                     "volume": 100.0 + i})
+    return bars
+
+
+def test_every_daily_hit_enters_technical_queue(db):
+    result = SR.upsert_many([
+        _obs("600000", pct=3.2),
+        _obs("000001", pct=4.1),
+    ], trade_date=D1, asof_ts=f"{D1}T15:00:00+08:00",
+        source="intraday:test", db_path=db, enqueue_technical=True)
+    assert result["ok"] and result["technical_enqueued"] == 2
+    assert SR.technical_queue_codes(trade_date=D1, db_path=db) == ["000001", "600000"]
+
+
+def test_technical_derivative_new_high_excludes_current_bar():
+    bars = []
+    for i in range(130):
+        close = 10.0 + i * 0.01
+        bars.append({"date": f"2026-01-{i + 1:03d}", "close": close,
+                     "high": close, "low": close - 0.2, "volume": 100.0})
+    row = SR.calculate_technical_derivative("600000", bars)
+    assert row["status"] == "ok"
+    assert row["new_high_20d"] == 1
+    assert row["new_high_60d"] == 1
+    assert row["new_high_120d"] == 1
+    assert row["ma_bullish"] == 1
+
+
+def test_process_technical_queue_is_idempotent_and_records_errors(db):
+    SR.upsert_one(_obs("600000"), trade_date=D1,
+                  asof_ts=f"{D1}T10:00:00+08:00", source="intraday:test", db_path=db,
+                  allow_backfill=True)
+    SR.enqueue_daily_codes(trade_date=D1, db_path=db)
+
+    def fetcher(code, n=130):
+        assert code == "600000"
+        return _bars(n)
+
+    first = SR.process_technical_queue(trade_date=D1, db_path=db, fetcher=fetcher)
+    second = SR.process_technical_queue(trade_date=D1, db_path=db, fetcher=fetcher)
+    assert first["written"] == 1 and first["failed"] == 0
+    assert second["queued"] == 0
+    tech = SR.get_technical_derivative("600000", db_path=db)
+    assert tech["bar_date"] and tech["ma5"] is not None
+    assert SR.stats(db_path=db)["technical_rows"] == 1
+
+
+def test_technical_missing_kline_is_error_without_fake_values(db):
+    SR.upsert_one(_obs("600000"), trade_date=D1,
+                  asof_ts=f"{D1}T10:00:00+08:00", source="intraday:test", db_path=db,
+                  allow_backfill=True)
+    SR.enqueue_daily_codes(trade_date=D1, db_path=db)
+    result = SR.process_technical_queue(trade_date=D1, db_path=db,
+                                        fetcher=lambda code, n=130: [])
+    assert result["failed"] == 1 and result["written"] == 0
+    conn = sqlite3.connect(db)
+    status = conn.execute("SELECT status,last_error FROM stock_technical_queue WHERE code='600000'").fetchone()
+    conn.close()
+    assert status == ("error", "missing_kline")

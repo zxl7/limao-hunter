@@ -1,0 +1,563 @@
+{
+ "title": "📝 盘后复盘 10-26 | 高位断·低位稳·高度6→4",
+ "color": "grey",
+ "elements": [
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📉 ① 情绪演变 · 五日轨迹**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**情绪分**　<text_tag color='red'>▰</text_tag><text_tag color='neutral'>▱▱▱▱▱▱▱▱▱</text_tag>　**1.4 / 10 · 退潮**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**昨日 → 今日**　10.0（市场很热）→ **1.4**，<text_tag color='green'>全天转差</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**五日轨迹**　1.0 → 4.2 → 1.0 → 10.0 → **1.4**　近 3 日均 4.1　（10-19 → 21 → 22 → 23 → 26）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**定调**　**高位断、低位稳**——两只 6 板同日断掉，2 板的 9 只里反倒晋级 6 只。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📊 ② 真实情绪总览**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**指数**　上证 3697.52 <text_tag color='red'>+0.19%</text_tag>（仍在五日线 3698.89 下方）　深证 11534.38 <text_tag color='green'>-1.19%</text_tag>　创业板 2638.23 <text_tag color='green'>-1.71%</text_tag>　科创50 <text_tag color='green'>-2.23%</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**情绪分**\n1.4 / 10 · 退潮"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**涨停**\n55 只（昨 82）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**晋级率**\n18.3%（门槛 22.0%）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**炸板率**\n30.3%（23 只开过板）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**核按钮**\n8 只"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**大面**\n5 只"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**连板晋级**\n6 / 12"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**昨涨停今均**\n+2.50%"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**高度**　6 → 4（大业股份、海洋王两只 6 板同日断，7 板一个没出）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**广度**　涨 <text_tag color='red'>2083</text_tag> : 跌 <text_tag color='green'>3069</text_tag>　成交 1.61 万亿（缩量约 3470 亿）　跌停 <text_tag color='green'>26 只</text_tag>（昨 6）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**亏钱方向**　前期高标和 PCB 链集体跌停——澳弘电子、金安国纪、华正新材、冰山冷热、哈空调、三峡新材。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🧠 ③ AI 综合判断**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**判断**　昨天那 10 分不是新周期起点，是跌透之后的单日抢筹。今天高潮只活一天，**高度从 6 板塌到 4 板**。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**变**　涨停 82→55，但 55 只里 27 只是机器人——钱没离场，缩回了一条线；同时 AI 硬件整链失血约 700 亿（通信 -170.8／电子 -150.4／5G -144.1／华为 -126.3／半导体 -109.8）。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**赚 39 只**　人气接力 29（+12.08%）｜新题材首封 5（+10.04%）｜独走 4（+12.54%）｜前排 1（百洋股份 10-15 曾 5 板，歇两天再封）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**亏 27 只**　低位失败出货 8（-8.99%）｜没人跟的小票 18（-1.96%）｜高度衰减 1（海洋王 -4.79%）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**断**　「昨天的首板今天还有肉」这条路没断（昨涨停今均 +2.50%、66% 收红）；断的是「高位接着往上接」——两只 6 板同日断。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='red'>⚠️ 风险</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**A.** 高度只剩 4 板一根独苗（上海九百），它明天一断，市场就没有高度了。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**B.** 跌停 26 只是前期高标在出清，别在跌停板上找便宜。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**C.** AI 硬件整条链同日流出 700 亿，通信、电子、CPO、PCB 一起走，短期别在这里找反弹。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**D.** 55 只涨停里 40 只首板，首板晋级只有 8/70，追涨停的胜率还没回来。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🔥 ⑤ 主线复盘**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='red'>⭐ 最强</text_tag>　**机器人链**　27 只｜钱还在进，票在跌\n· 3 板 6 只　襄阳轴承（成交 12.75 亿·封 1.08 亿）· 多伦科技（封 3.55 亿，全场最实）· 赛福天（封 2.89 亿）· 林州重机 · 正裕工业 · 华阳智能 20cm（封 0.01 亿·炸 5 次，最松）\n· 2 板 8 只　万向钱潮（成交 25.08 亿，全场最大）· 模塑科技（15.31 亿）· 创维数字 · 锋龙股份 · 杰克科技 · 福莱新材 · 永创智能 · 大名城\n· 催化　选股宝「工厂、商超都在用，年产量冲刺 10 万台」；钱 人形机器人 +25.5 亿，全场第一\n⚠️ 板块指数 -0.92%、半导体和自动化设备今天零涨停——小票还在封，上游和大票在撤"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='blue'>🔹 次强</text_tag>　**大消费 · 低位补涨**　约 8 只｜白酒 +1.86% 是今天唯一逆势上涨的题材\n· 上海九百 4 板（全场最高·09:25 一字·封 1.36 亿）\n· 休闲食品 3 只　桂发祥 · 良品铺子 · 青岛食品｜白酒 皇台酒业｜乳品 阳光乳业｜农业 东方海洋 · 百洋股份\n· 催化　2026 新消费产业大会\n⚠️ 除上海九百外全是首板，封单只有 0.27~0.44 亿，钱进得很薄"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**支线**"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**数据要素**　3 只\n延华智能 · 海量数据 · 生意宝"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**基础建设**　2 只\n奥雅股份 20cm · 大千生态"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**医药商业**　2 只\n塞力医疗 · 英特集团"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**游戏**　1 只\n电魂网络（游戏Ⅲ +3.23%）"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**👑 ⑥.5 核心演化史**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**核心命运**"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**大业股份**　6 板 → 断板\n<text_tag color='green'>+8.08%</text_tag>（摸到涨停没封住）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**海洋王**　6 板 → 断板\n<text_tag color='green'>-3.49%</text_tag>（开过 5 次板）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**上海九百**　3 板 → 4 板\n一字·封 1.36 亿"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**华阳智能**　2 板 → 3 板\n20cm·封 0.01 亿"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**断头与回落**　兆威机电 昨 2 板 → +4.94%（收红）｜睿能科技 昨 2 板 → -2.72%｜南方路机 昨 2 板 → +3.35%——2 板这一层断的 3 只都没亏。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**明日推演**\n· 上海九百 4 进 5　高度只剩它一根，顶住市场才有参照\n· 机器人 6 只 3 板出 4 板　先看封单最实的多伦科技、赛福天\n· 大业 +8.08%、海洋王 -3.49% 断板后是反包还是续杀，决定这条线是洗还是散"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📊 ⑥ 轮动复盘**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>❌ 半导体</text_tag>　4 → 0（半导体概念 -109.8 亿）\n<text_tag color='green'>❌ 自动化设备</text_tag>　5 → 0　<text_tag color='green'>❌ AI 软件</text_tag>　15 → 4（软件 7→2、IT 6→1）\n<text_tag color='green'>❌ 电池</text_tag>　3 → 0　<text_tag color='green'>❌ 其他电子 / 影视院线</text_tag>　各 2 → 0"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='red'>✅ 机器人链</text_tag>　汽零 6→6、专用设备 8→6、通用设备 5→5、电机 2→1——今天封板最多的还是这条线\n<text_tag color='red'>✅ 食品饮料</text_tag>　0 → 5（休闲食品 0→3、白酒 0→1、乳品 0→1）　<text_tag color='red'>✅ 基础建设</text_tag>　0 → 2"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**切换日：不成立**\n旧核心是温和断（大业还收 +8.08%），新冒头的只有低位消费一堆首板，没有哪条线接过高度；再加上双创大跌、缩量 3470 亿——这是退潮，不是换人。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**💰 ⑦ 板块资金流向**"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>人形机器人 +25.5 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>通信技术 -170.8 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>AI芯片 +15.1 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>电子 -150.4 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>婴童概念 +10.9 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>5G概念 -144.1 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>汽车 +10.9 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>华为概念 -126.3 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>汽车零部件 +10.1 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>半导体概念 -109.8 亿</text_tag>"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📎 ⑨ 明日展望与延续观察**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**看点**\n① 上海九百 4 进 5——高度只剩它一根，一字封 1.36 亿能不能撑住\n② 机器人 6 只 3 板里出几只 4 板，多伦科技（封 3.55 亿）、赛福天（封 2.89 亿）最实\n③ 大消费能不能出 2 板——休闲食品 3 只加皇台酒业，今天封单都不到 0.5 亿"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**晋级率**\n18.3%，离门槛 22.0% 还差 3.7 个点"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**核按钮**\n8 只 ✓ 已进个位"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**最高板**\n4（昨 6，断了两级）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**跌停**\n26 只（昨 6，要收回来）"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**一句话**　高度没修好之前，涨停再多也不代表能追。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**延续**　人形机器人是今天唯一还在进钱的方向（+25.5 亿）；数据要素 3 只等第 4 天回流。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🧘 心法**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "高位断板那天最容易被「低位还有肉」骗进去。分清洗盘还是换人，看的是封单，不是涨幅。"
+   }
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "📡 数据：选股宝涨停池 + 东财板块资金 + 腾讯行情 | 17:26 | AI 盘后复盘"
+    }
+   ]
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "⚠️ 本报告基于公开信息分析，投资需谨慎"
+    }
+   ]
+  }
+ ]
+}

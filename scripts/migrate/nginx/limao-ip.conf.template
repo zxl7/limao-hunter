@@ -1,0 +1,20 @@
+# 狸猫终端 · 用服务器 IP 直接访问（不改动 oscarwl.icu 的域名站点）
+# 说明：SPA 的 /assets 与 /api 都是根路径绝对引用，所以必须把整个 / 交给狸猫，
+#      不能挂 /limao/ 子路径（否则要重建前端 base，且 /api 会 404）。
+server {
+    listen 80;
+    server_name 43.136.183.186;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 60s;
+    }
+}

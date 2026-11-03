@@ -63,6 +63,13 @@ def test_data_ready_records_theme_series_step(tmp_path, monkeypatch):
     ready = json.loads((pulse / "data_ready.json").read_text(encoding="utf-8"))
     assert ready["ready"] is True
     assert ready["steps"]["theme_series"] == 0
+    assert ready["steps"]["intraday_exit_peaks"] == 0
+    # 峰值采集是卖出侧未来证据的旁路：即便异常也不能阻断现有数据就绪和推送链。
+    results = dict(ready["steps"])
+    results["intraday_exit_peaks"] = 1
+    assert pipeline._compute_ready(
+        results=results, feedback_error=None, rotation_date=datetime.now().strftime("%Y-%m-%d")
+    ) == (True, "")
 
 
 def test_compute_ready_date_level_and_pre_auction_benign():
@@ -91,6 +98,17 @@ def test_compute_ready_date_level_and_pre_auction_benign():
     ready, reason = pipeline._compute_ready(results=bad, feedback_error=None, rotation_date=today)
     assert ready is False
     assert "步骤未全部完成" in reason
+
+
+def test_compute_ready_blocks_inconsistent_zt_counts():
+    today = datetime.now().strftime("%Y-%m-%d")
+    ok = {k: 0 for k in ("intraday_pulse", "feedback_matrix", "realtime_analytics", "theme_series")}
+    ready, reason = pipeline._compute_ready(
+        results=ok, feedback_error=None, rotation_date=today,
+        consistency_error="涨停计数不一致 feedback=59, codes=61, zt_history=61",
+    )
+    assert ready is False
+    assert "口径不一致" in reason
 
 
 def test_compute_ready_old_exact_source_ts_no_longer_blocks():

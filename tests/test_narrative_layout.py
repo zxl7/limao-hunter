@@ -35,6 +35,28 @@ _EXPLICIT = (
 )
 
 
+
+# ── 分层隔离：本文件只测「点评语义分段渲染（_narr_render 层）」────────────
+# ⛔ 2026-10-21：`VERIFY_CARD_LEAN`（整段取舍）是另一层；档位 2 会把整段点评从卡里撤掉，
+#    本文件的「点评必须分段」断言就测不到了 → 假红。lean 自己的契约在
+#    `tests/test_verify_card_lean.py`。
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _isolate_lean(monkeypatch):
+    monkeypatch.setenv("VERIFY_CARD_LEAN", "0")
+    # ⛔ 2026-10-21：`VERIFY_CARD_HIDE` 是**第三层**（整块不要：回撤/位置/战绩/全局）。
+    #    本文件测的是时点词与分段语义，与「这块显示不显示」无关 —— 不隔离会让
+    #    「🗣️ 全局」相关断言随隐藏默认值假红。隐藏契约在 test_verify_card_lean.py。
+    monkeypatch.setenv("VERIFY_CARD_HIDE", "")
+    # ⛔ 2026-10-21：`VERIFY_CARD_UNIFY_MECH`（机械口径并入 AI 判定）是**第四层**，
+    #    会把机械段从「逐票完整展示」改成「一行口径 + 标题行胶囊」。本文件测的是
+    #    点评语义分段，与「机械口径放哪」无关 —— 不隔离会让断言随融合默认值假红。
+    #    融合契约在 `tests/test_verify_card_lean.py`。
+    monkeypatch.setenv("VERIFY_CARD_UNIFY_MECH", "0")
+
+
 def _lines(txt: str) -> list[str]:
     return [ln for ln in str(txt).split("\n") if ln.strip()]
 
@@ -172,7 +194,13 @@ def test_eod_card_narrative_is_multiline_block():
 
 
 def test_verify_card_risk_not_inline_and_narrative_multiline(monkeypatch):
-    """竞价卡：标题行不再挂内联风险标签；点评走同一套语义分段。"""
+    """竞价卡：标题行不再挂内联风险标签；点评走同一套语义分段。
+
+    2026-10-21 简洁模式（用户「早盘内容过于冗余·简洁一点但核心数据不要少」）改契约：
+    买入票点评 = 走势 + 题材 + 风险 **3 段**，`历史股性` 段与上方 `📈 历史基因` 行是同一批
+    数字的两次表述 → 只留 gene 行一处。⛔ 断言同时锁住「段没丢完」与「回退开关」：
+    `VERIFY_CARD_COMPACT=0` 时恢复 4 段（旧版全量）。
+    """
     monkeypatch.setattr(bc, "_core_reversal_block", lambda: None)
     monkeypatch.setattr(bc, "_nav_drawdown_block", lambda m: None)
     rec = {"code": "000993", "name": "闽东电力", "bucket_label": "高标/题材核心",
@@ -181,15 +209,28 @@ def test_verify_card_risk_not_inline_and_narrative_multiline(monkeypatch):
                                           "gap_pct": 0.4, "auction_amount_yi": 0.9,
                                           "auction_amount_need_yi": 0.6,
                                           "signal_label": "符合预期"}}}
-    card = bc.build_verify_card({"payload": {"records": [rec]},
-                                 "summary": {"total_candidates": 1, "buy_signals": 1,
-                                             "hit_signals": 0, "covered": 0,
-                                             "nav_latest": 1.0, "trade_date10": "2026-09-11"}})
-    blocks = _blocks(card)
-    heads = [b for b in blocks if b.startswith("✅")]
-    assert heads and all("⚠️" not in h for h in heads), heads      # 标题行无内联风险
-    narr = [b for b in blocks if "昨日走势" in b]
-    assert narr and len(_lines(narr[0])) >= 4, narr
+    vr = {"payload": {"records": [rec]},
+          "summary": {"total_candidates": 1, "buy_signals": 1,
+                      "hit_signals": 0, "covered": 0,
+                      "nav_latest": 1.0, "trade_date10": "2026-09-11"}}
+
+    def _render():
+        card = bc.build_verify_card(vr)
+        blocks = _blocks(card)
+        heads = [b for b in blocks if b.startswith("✅")]
+        assert heads and all("⚠️" not in h for h in heads), heads   # 标题行无内联风险
+        narr = [b for b in blocks if "昨日走势" in b]
+        assert narr, blocks
+        return _lines(narr[0])
+
+    lines = _render()
+    assert len(lines) == 3, lines                     # 走势 + 题材 + 风险（股性并入 gene 行）
+    assert lines[-1].startswith("　　<text_tag color='turquoise'>")
+    gene = [b for b in _blocks(bc.build_verify_card(vr)) if "历史基因" in b]
+    assert gene, "gene 行必须仍在（数据不丢）"
+
+    monkeypatch.setenv("VERIFY_CARD_COMPACT", "0")    # 回退开关：恢复旧全量 4 段
+    assert len(_render()) == 4
 
 
 # ── 6. 🗣️ 全局旁白的「盘面基准日」标注（2026-09-14）──────────────────

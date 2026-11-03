@@ -1466,12 +1466,20 @@ def _climax_hit(zc: int, peak: int) -> bool:
     return (zc * 10 >= peak * int(CLIMAX_PEAK_PCT * 10)) and zc <= peak
 
 
-def build_climax_card(sectors: list, hhmm: str, broken_cnt: int = 0) -> dict:
+def build_climax_card(sectors: list, hhmm: str, broken_cnt: int = 0) -> dict | None:
     """⛔ 板块过热预警卡（2026-09-08 用户「发酵到高位别追高」·话术通俗）。
 
     提醒：主流板块涨停家数已冲到今日高点（≥已推峰值 80%）且不再往上创新高——
     最热闹的时候追进去最容易站岗（T+1 今天买明天才能卖）；炸板多时补一句
     「封板在松动」。每天每板块最多 1 次（sig.climax_warned），机器检测非 AI 判断。
+
+    ⛔ **无内容 → 返回 None，⛔ 不返回空 content 的卡**（2026-10-22）：
+      `sectors` 空且炸板数没到阈值时，下面的 `md(*lines)` 会拼出 `content=""`，
+      而飞书 `div.text.content` 必须是**非空字符串** → 该卡整块渲染异常。
+      实测：早上 `pulse_snapshots/latest.json` 的 `top5` 为空时复现
+      （`card_lint` 判 `div.text 须为 {tag:'lark_md', content:非空字符串}`）。
+      ⛔ 调用方（`live_signal` 推卡处）已有 `if _climax_sectors:` 守卫，
+        但**函数自己也要防**——守卫漏一天就是一张坏卡上群。
     """
     def md(*lines):
         return {"tag": "lark_md", "content": "\n".join(lines)}
@@ -1488,6 +1496,9 @@ def build_climax_card(sectors: list, hhmm: str, broken_cnt: int = 0) -> dict:
         lines.append(f"　（另有 {len(sectors) - 3} 个板块同样过热，别追）")
     if broken_cnt >= CLIMAX_BROKEN_HINT_N:
         lines.append(f"　今天盘中已有 {broken_cnt} 家涨停被砸开，封板在松动，追高更要小心")
+    if not lines:
+        # ⛔ 无内容就不出卡（空 content 非法·见 docstring）
+        return None
     elements = [{"tag": "div", "text": md(*lines)}, {"tag": "hr"},
                 {"tag": "note", "elements": [md(f"⛔ 板块过热机器检测 | {hhmm} | 非AI判断·防站岗提示")]}]
     return {"title": f"⛔ 短线精灵·板块过热 {hhmm}", "color": "orange", "elements": elements}

@@ -1,0 +1,424 @@
+{
+ "title": "📝 盘后复盘 10-21 | 钱搬到算力·修复三项首次全过",
+ "color": "blue",
+ "elements": [
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📉 ① 情绪演变 · 五日轨迹**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**情绪分**　<text_tag color='red'>▰▰▰▰</text_tag><text_tag color='neutral'>▱▱▱▱▱▱</text_tag>　**4.2 / 10 · 分歧**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**昨日 → 今日**　1.0（市场很冷）→ **4.2**，全天转好"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**五日轨迹**　1.0 → 1.8 → 2.0 → 1.0 → **4.2**　近3日均 2.4　（10-14→15→16→19→21）"
+   }
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "10-20 盘后链缺档，该日无评分，昨日对比按 10-19 计"
+    }
+   ]
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📊 ② 真实情绪总览**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**指数**　上证 3713.03 <text_tag color='green'>-0.60%</text_tag>（跌回五日线 3720.62 下方）　深证 11704.35 <text_tag color='green'>-0.82%</text_tag>　创业板 2694.71 <text_tag color='green'>-1.62%</text_tag>　科创50 <text_tag color='red'>+0.06%</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**情绪分**\n4.2 / 10 · 分歧"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**涨停**\n50 只（昨 54）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**封板率**\n71.4%"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**炸板率**\n28.6%（20 只摸板）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**晋级率**\n29.6%（门槛 21.3%）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**核按钮**\n6 只（昨 14）"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**高度**　4 → 4（三只 3 板补位，最高板没塌）　**昨涨停今均 +3.56%**（昨 +0.53%）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**广度**　涨 <text_tag color='red'>2011</text_tag> : 跌 <text_tag color='green'>3061</text_tag>　成交 1.43 万亿　跌停 5　大面 3"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🧠 ③ AI 综合判断**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**判断**　三项修复同时达标，但 **只修个股、不修指数**。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**变**　通信系五席挤进流入前十（+23.5~42.6 亿），电池链五方向全线失血、零涨停。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**赚 34 只**　人气接力 25（+12.01%）｜新题材首封 6（+11.66%）｜独走 3（+10.06%）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**亏 14 只**　低位失败 4（-6.52%）｜跟风 7（-2.26%）｜高位被核 2（-8.25%）｜高度衰减 1"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**断**　纯跟风普涨断了；同题材一起封还在，换了方向。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='red'>风险</text_tag>　① 赚钱只在 50 只涨停里，指数没修\n　　　② 三只 4 板并列，没有唯一龙头，4 进 5 之前没有参照物"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🔥 ⑤ 主线复盘**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='red'>⭐ 最强</text_tag>　**算力 · 云计算数据中心**　8 只｜唯一「钱和涨停同向」\n· 润建股份 3 板　封 1.46 亿 · 成交 10.58 亿\n· 首板 6 只　海量数据 · 恒大高新 · 利通电子（38.3 亿·炸 5 次）· 顺灏股份 · 三变科技 · 天威视讯\n· 催化　DeepSeek 单集群 155 万亿 Tokens/天，光模块订单排到 2027 年底\n⚠️ 除润建外全是首板；移远通信炸 17 次·封单 0.08 亿，这条线最差"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='blue'>🔹 次强</text_tag>　**数据要素**　3 只｜全首板\n· 太极股份（近 3 日第 2 次）· 三维天地 20cm · 航天信息（11:17 才封）\n· 催化　国家数据集团挂牌、落址雄安\n⚠️ 三只封单都不到 1 亿，钱没有重仓"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='blue'>🔹 持续</text_tag>　**机器人**　7 只｜最高板在这条线，钱没跟\n· 大业股份 4 板（一字·4.01 亿）｜日海 · 泰尔 · 永达 · 移远 2 板｜利亚德 20cm\n⚠️ 除大业外全在 2 板以下；板块资金没进前十"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**支线**"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**短剧**　7 只\n粤传媒 2 板 · 南威软件 2 板"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**医药**　4 只\n莱美药业 20cm 领涨"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**大消费**　3 只 2 板\n百洋 · 九阳 · 安记"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**制冷**　2 只\n雪人集团 · 哈空调"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**👑 ⑥.5 核心演化史**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**核心命运**"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**大业股份**　3 板 → 4 板\n一字封 4.01 亿 · 最硬"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**海洋王**　3 板 → 4 板\n一字封 2.0 亿 · 换手 0.82%"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**东安动力**　3 板 → 4 板\n炸 1 次 · 三只里最松"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**润建股份**　2 板 → 3 板\n封 1.46 亿 · 算力唯一有高度"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**断头与核按**　吉大正元 4 板 → 断板 <text_tag color='green'>-3.57%</text_tag>（温和断）｜京城股份 <text_tag color='green'>-7.52%</text_tag>｜长春一东 <text_tag color='green'>-8.98%</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**明日推演**\n· 4 进 5　谁独家谁是龙头，三只同断高度就塌\n· 润建 3 进 4　封单放大才算接住\n· 2 进 3　日海 · 泰尔 · 永达决定机器人退不退"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📊 ⑥ 轮动复盘**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>❌ PCB</text_tag>　连续 3 日零涨停｜骏亚科技 <text_tag color='green'>-9.21%</text_tag>\n<text_tag color='green'>❌ 白酒</text_tag>　顺鑫农业 +6.92% 未封\n<text_tag color='red'>✅ 回流</text_tag>　算力 1→8｜数据要素 0→3｜医药 4→4\n　　　　　　短剧 2→7｜制冷 0→2\n⚡ 半导体 +26.6 亿，只封 1 只 20cm（近 5 日仍 -93.3 亿）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**切换日：成立，但只是钱换方向**\n旧 4 板温和断 + 新方向集群起，形态是切换；\n但三指齐跌、高度持平 4 板、新方向 7 只首板 → 情绪没转强。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📎 ⑨ 明日展望与延续观察**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**看点**\n① 算力首板能否出 2 板（海量数据 · 恒大高新 · 利通电子）\n② 移远通信 2 进 3（成交 44.48 亿）是这条线试金石\n③ 吉大正元断板后整理还是续杀\n④ 润建 3 进 4，封单能否放大"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**晋级率**\n29.6% ✓ 过线"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**核按钮**\n6 只 ✓ 收口"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**昨涨停今均**\n+3.56% ✓ 转正"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**但指数没修**——先看止跌，再谈加不加仓。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**延续**　短剧 7 只能否接住机器人热度｜电池链流出未止"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🧘 心法**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "钱只认算得出来的吞吐和订单。指数不给面子时，少做一手不丢人。"
+   }
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "📡 数据：选股宝涨停池 + 东财板块资金 + 腾讯行情 | 18:10 | AI 盘后复盘"
+    }
+   ]
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "⚠️ 本报告基于公开信息分析，投资需谨慎"
+    }
+   ]
+  }
+ ]
+}

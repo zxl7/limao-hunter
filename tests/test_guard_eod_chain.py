@@ -86,6 +86,9 @@ def _seed(cache: Path, *, at: datetime, with_latest: bool) -> None:
     _touch(cache / "eruption_history" / f"eruption_{TODAY}.json", at)
     _touch(cache / "sector_flow_history" / f"sector_flow_{TODAY}.json", at)
     _touch(cache / "short_term" / "daily" / f"emotion_{TODAY}.json", at)
+    # 🐉 2026-10-27 新增第 4 项受检产出（终端 /leader-daily 数据源）。
+    # 内容写 "{}"（无 generated_ts）→ 只按 mtime 判，与 eruption 同形态。
+    _touch(cache / "board_leader_daily" / f"leader_{TODAY}.json", at)
     if with_latest:
         p = cache / "theme_rotation.json"
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -102,13 +105,15 @@ def test_missing_of_all_green_when_eod(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 def test_missing_of_flags_intraday_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """事故复现：文件全在但都是盘中写的 → 必须 5 项全报。"""
+    """事故复现：文件全在但都是盘中写的 → 必须 6 项全报。"""
     monkeypatch.setattr(g, "CACHE", tmp_path)
     _seed(tmp_path, at=DAY, with_latest=True)
     miss = g._missing_of(TODAY, live=True)
     names = {m[0] for m in miss}
-    assert len(miss) == 5, f"应报 5 项盘中口径，实得 {miss}"
-    assert names == {"题材爆发快照", "板块资金流", "情绪日快照", "题材回流引擎", "载体证伪"}
+    assert len(miss) == 6, f"应报 6 项盘中口径，实得 {miss}"
+    assert names == {
+        "题材爆发快照", "板块资金流", "情绪日快照", "连板日台账", "题材回流引擎", "载体证伪",
+    }
     assert all("盘中口径" in m[1] for m in miss)
 
 
@@ -125,11 +130,30 @@ def test_missing_of_live_false_skips_latest_only(
 def test_missing_of_flags_absent_dated_products(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """按日期命名的三件套完全缺失（09-21 事故形态）→ 历史查询也能查出。"""
+    """按日期命名的四件套完全缺失（09-21 事故形态）→ 历史查询也能查出。"""
     monkeypatch.setattr(g, "CACHE", tmp_path)
     miss = g._missing_of("2026-09-21", live=False)
-    assert len(miss) == 3
+    assert len(miss) == 4
     assert all("不存在" in m[1] for m in miss)
+
+
+def test_leader_daily_must_be_eod_collect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """🐉 连板日台账：必须按「盘后定稿」判，⛔ 不得声明 source 豁免。
+
+    理由（10-27 实测）：15:30 eod 也能算出龙一，但那时涨停池还没定稿
+    （42 只 → 收盘 41 只、多伦封单 0.24% → 1.65%）⇒ 盘中口径写出的台账会把
+    「连板日」记错。若误标 `source`，`_cover_state` 只看 mtime，
+    15:30 那一版就会被判为已覆盖，终端「连板日观察」从此静默错档。
+    """
+    assert g._semantic_of("board_leader_daily/leader_{}.json") == "collect"
+    # 盘后 mtime + 盘中内容时间 → 必须报（证明内容判据真的施加在台账上）
+    monkeypatch.setattr(g, "CACHE", tmp_path)
+    _seed(tmp_path, at=EOD, with_latest=True)
+    _write_with_ts(tmp_path / "board_leader_daily" / f"leader_{TODAY}.json",
+                   mtime=EOD, generated_ts="2026-09-22T15:30:04+08:00")
+    miss = g._missing_of(TODAY, live=True)
+    assert [m[0] for m in miss] == ["连板日台账"], f"实得 {miss}"
+    assert "内容 generated_ts=15:30" in miss[0][1]
 
 
 def test_theme_rotation_date_mismatch_reported(

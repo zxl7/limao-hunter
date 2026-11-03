@@ -584,17 +584,30 @@ def parse_pool(raw, key):
     ⚠️ `count` 一并改为**剔除后**的名单长度，避免「数量含 688、名单不含」的自相矛盾。
     """
     p = raw.get(key, {})
-    items = (p or {}).get("data") or []
-    if not isinstance(items, list): return {"count": 0, "names": []}
-    names = []
-    for it in items:
+    raw_items = (p or {}).get("data") or []
+    if not isinstance(raw_items, list): return {"count": 0, "names": [], "items": []}
+    names, items = [], []
+    for it in raw_items:
         if isinstance(it, dict):
             sym = str(it.get("symbol") or it.get("code") or "")
             if sym[:3] in ("688", "689"):
                 continue                      # ⛔ 科创板无权限（铁律）
             nm = it.get("stock_chi_name") or it.get("name") or ""
-            if nm: names.append(nm)
-    return {"count": len(names), "names": names}
+            if not nm: continue
+            names.append(nm)
+            # 跌幅：终端「极值名单」要显示每只票跌了多少（2026-10-31 用户要求）。
+            # ⚠️ 上游字段名不止一种，且**单位无法在此刻实测确认**（选股宝池接口
+            #    在非交易时段超时）→ 原样带出数值，不做单位换算、不做符号修正。
+            #    前端只在 |pct| ≥ 1 时显示（即已经像百分比），
+            #    否则一律不显示 —— 宁可缺，不可错。
+            pct = None
+            for k in ("change", "px_change_rate", "pct", "chg"):
+                v = it.get(k)
+                if isinstance(v, (int, float)):
+                    pct = round(float(v), 2)
+                    break
+            items.append({"code": sym, "name": nm, "pct": pct})
+    return {"count": len(names), "names": names, "items": items}
 
 # ── 关注板块重挫归因（方案A：跌停/炸板池 → 关注板块命中）──
 # 基于用户关注方向（通信设备/半导体/航天军工/锂电池/CPO光模块，见 USER.md）
@@ -1581,6 +1594,10 @@ def build_limit_up_stocks(stocks, total_zt):
             "pct": stock.get("pct"),
             "boards": stock.get("boards") or None,
             "sector": "、".join(plates[:3]) or None,
+            # 首封时间（HH:MM）—— 题材内个股「按涨停时间排序」的唯一依据
+            # （2026-10-31 用户要求）。`enter_time` 恒为 'HH:MM' 或 '--:--'，
+            # 后者表示没有时间（不可用），落 None 让前端排到最后而不是当 00:00。
+            "fbt": stock.get("enter_time") if stock.get("enter_time") != "--:--" else None,
         })
     # 集合不完整时不落盘，时间轴不得把未知明细伪装成空名单。
     return rows if len(rows) == total_zt and len({r["code"] for r in rows}) == total_zt else None
@@ -2106,7 +2123,7 @@ def build_post_card(sectors, plates, diagnoses, total_zt, risks, tomorrow):
 
 # ── Main ──────────────────────────────────────────────
 
-def _ingest_stock_registry(stocks, pre_stocks, rising):
+def _ingest_stock_registry(stocks, pre_stocks, rising, snapshot=None):
     """把本轮盘中命中/接触到的个股沉淀进统一个股特征底库。
 
     ⚠️ 口径：入库门槛 = **进入系统可见范围**，与今日表现无关（不是只存涨停股）。
@@ -2126,6 +2143,12 @@ def _ingest_stock_registry(stocks, pre_stocks, rising):
                   f"更新{result.get('updated', 0)} 无变化{result.get('unchanged', 0)}")
         elif result.get("reason"):
             print(f"  个股底库跳过: {result['reason']}")
+        # latest.json 已在调用方落盘；用同一快照补充选股宝题材/板块标签。
+        if isinstance(snapshot, dict):
+            xgb = registry.ingest_xgb_snapshot(snapshot)
+            if xgb.get("ok"):
+                print(f"  选股宝题材: 新增{xgb.get('inserted', 0)} "
+                      f"更新{xgb.get('updated', 0)} 无变化{xgb.get('unchanged', 0)}")
     except Exception as e:  # noqa: BLE001 —— 底库失败不影响主链
         print(f"  ⚠️ 个股底库更新失败(不影响主流程): {e}")
 
@@ -2246,7 +2269,7 @@ def run_mode(mode, dry_run=False, json_only=False):
 
     # 个股特征底库：命中即增量更新（未命中的票原样保留）
     # ⚠️ 非致命 —— 底库异常不得中断快照与推送；受 STOCK_REGISTRY_INTRADAY 开关控制
-    _ingest_stock_registry(stocks, pre_stocks, rising)
+    _ingest_stock_registry(stocks, pre_stocks, rising, snapshot=summary)
 
     if dry_run or json_only:
         print("\n  --- JSON ONLY (no push) ---")

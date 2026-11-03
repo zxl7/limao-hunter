@@ -19,7 +19,9 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from card_lint import lint_card, NEST_FAIL_SINCE  # noqa: E402
+from card_lint import (  # noqa: E402
+    lint_card, NEST_FAIL_SINCE, PLAIN_MECH_WORDS_SINCE, PLAIN_JUDGE_WORDS_SINCE,
+)
 from push_card import normalize, fix_newlines  # noqa: E402
 import validate_schema as vs  # noqa: E402
 
@@ -65,7 +67,11 @@ def real_cards():
         files += [f for f in (ROOT / "wealth_code" / "cache").glob(pat)
                   if "debug" not in f.name and "preview" not in f.name]
     files = sorted({p.resolve() for p in files}, key=lambda p: -p.stat().st_mtime)
-    fresh = [f for f in files if _gen_dt(f.name) >= NEST_FAIL_SINCE][:4]
+    # ⚠️ 2026-10-21：取两者**较大值** —— NEST 标记 font↔text_tag 升 FAIL 的时刻，
+    #    PLAIN_MECH_WORDS 标记「机制解释词」入表时刻。两个门禁都得等到「此后生成的卡」
+    #    才有资格被要求"必须全过"，否则等于拿历史文件追责新门禁。
+    _since = max(NEST_FAIL_SINCE, PLAIN_MECH_WORDS_SINCE, PLAIN_JUDGE_WORDS_SINCE)
+    fresh = [f for f in files if _gen_dt(f.name) >= _since][:4]
     cards = []
     for f in fresh:
         try:
@@ -149,7 +155,7 @@ class TestCardLint:
         assert real_cards["files_total"], "未找到真实卡片 fixture"
         if not real_cards["cards"]:
             pytest.skip(
-                f"尚无 {NEST_FAIL_SINCE} 之后生成的生产卡"
+                f"尚无 {max(NEST_FAIL_SINCE, PLAIN_MECH_WORDS_SINCE, PLAIN_JUDGE_WORDS_SINCE)} 之后生成的生产卡"
                 f"（font↔text_tag 升 FAIL 后首张卡未产出）⇒ 待下一张竞价卡/复盘卡落地自动恢复")
         for c in real_cards["cards"]:
             ok, errs, warns = lint_card(c)

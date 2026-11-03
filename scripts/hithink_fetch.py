@@ -11,7 +11,7 @@ P0/P1 七项能力落地（2026-08-26，独立落盘 + 交叉校验 + 可逆开�
   P1-2 异动原因 anomaly   [--date]                        拉当日全市场异动原因落盘
   P1-3 估值快照 valuation [--codes 600519.SH,...] [--enrich-candidates [--apply]]
                                                           拉估值快照；--enrich-candidates 给财富密码候选注入估值字段
-  P1-4 全市场导出 dump    [--apply]                        拉全市场日K Parquet 下载链接（--apply 才下载）
+  P1-4 全市场导出 dump    [--recent] [--apply]              默认10年日K；--recent 拉近10交易日增量（--apply 才下载）
   all   [--check]                                          盘后一键跑 P0 三项 + P1 前两项（不写回候选）
 
 铁律：
@@ -409,25 +409,35 @@ def _enrich_candidates(cand: dict, val_map: dict, apply: bool) -> None:
 
 # ---------- P1-4 全市场导出 ----------
 
-def cmd_dump(apply: bool) -> int:
-    data = hithink_get("dump/market-dumps/daily-k/download-url")
+def cmd_dump(apply: bool, *, recent: bool = False) -> int:
+    """下载同花顺日K导出。
+
+    - 默认全量 daily-k 只保留兼容入口，适合明确要做长历史研究时手动调用。
+    - ``recent=True`` 使用 daily-k-10d，供最近 20 交易日的轻量日频底库日常增量同步。
+    本函数只下载原始 Parquet；导入/裁剪由 market_daily_store.py 显式执行，避免把
+    下载动作悄悄接入候选、推送或决策链。
+    """
+    endpoint = ("dump/market-dumps/daily-k-10d/download-url" if recent
+                else "dump/market-dumps/daily-k/download-url")
+    label = "近10交易日日K" if recent else "全市场10年日K"
+    data = hithink_get(endpoint)
     if not data:
-        print("[hithink] ❌ 全市场日K 下载链接拉取失败")
+        print(f"[hithink] ❌ {label} 下载链接拉取失败")
         return 1
     url = data.get("presigned_url") or data.get("url") or data.get("download_url") or ""  # 实测 presigned_url
     if not url:
         _log(f"[hithink] ⚠️ 返回结构未知: {json.dumps(data, ensure_ascii=False)[:200]}")
         return 1
-    _log(f"[hithink] ✅ 全市场日K Parquet 预签名URL已获取（有效期约5分钟）")
-    _log(f"[hithink]   {url[:120]}...")
+    _log(f"[hithink] ✅ {label} Parquet 预签名URL已获取（有效期约5分钟）")
     if not apply:
-        _log("[hithink] ⏭ dry-run：未下载（加 --apply 下载到 cache/hithink_dump/daily_k.parquet）")
+        target_name = "daily_k_10d.parquet" if recent else "daily_k_full.parquet"
+        _log(f"[hithink] ⏭ dry-run：未下载（加 --apply 下载到 cache/hithink_dump/{target_name}）")
         return 0
     import urllib.request
 
     out_dir = CACHE / "hithink_dump"
     out_dir.mkdir(parents=True, exist_ok=True)
-    target = out_dir / "daily_k.parquet"
+    target = out_dir / ("daily_k_10d.parquet" if recent else "daily_k_full.parquet")
     _log("[hithink] 📥 下载中（约几分钟，可后台跑）...")
     try:
         urllib.request.urlretrieve(url, target)  # noqa: S310（官方预签名URL）
@@ -469,7 +479,7 @@ def main() -> int:
             codes = rest[rest.index("--codes") + 1].split(",")
         return cmd_valuation(codes, "--enrich-candidates" in rest, apply)
     if cmd == "dump":
-        return cmd_dump(apply)
+        return cmd_dump(apply, recent="--recent" in rest)
     if cmd == "all":
         rc = 0
         rc |= cmd_limitup(date, check)

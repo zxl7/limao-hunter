@@ -1,0 +1,263 @@
+{
+ "title": "📝 盘后复盘 10-19 | 高标断头·高度11→3真空｜机器人12只首板接棒",
+ "color": "grey",
+ "elements": [
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>① 📉 情绪演变与五日轨迹</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "📝 定调：**高标断头·高度从11板塌到3板，机器人12只首板接棒**\n昨日 2.0分·市场很冷 → 今日 1.0分·市场很冷；涨停 61→46只，晋级率 16.7%→18.0%，核按钮 15→14只，最高板 11→3板。\n📈 五日评分：3.6→1→1.8→2.0→<text_tag color='green'>1.0</text_tag>；近3日均值1.6，连续第4个交易日收在2分及以下。\n\n今天和昨天不一样的地方在于「哪一头在变差」。昨天是指数翻红、封板端塌；今天是跟随端先转好——昨日涨停今天平均 <text_tag color='red'>+0.53%</text_tag>（昨 -1.64%）、上涨占比54.2%，炸板率从45.4%降到30.3%——塌掉的是高度：11板的新华传媒断板，市场最高只剩3板。分数掉到1分，不是全面崩塌，是高度真空。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>② 📊 真实情绪总览</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "指数：上证 3730.92 +0.39%（收在五日线3744.55下方）｜深证成指 11817.42 +0.13%｜创业板指 2746.29 -0.94%\n上涨/下跌 <text_tag color='red'>2337</text_tag>:<text_tag color='green'>3082</text_tag>（沪深口径）｜沪深两市成交额约1.44万亿，较昨日缩量约1180亿\n做多气氛 **1分/10·市场很冷**｜涨停 46只（昨61只）｜炸板率 <text_tag color='green'>30.3%</text_tag>（昨45.4%）｜晋级率 <text_tag color='green'>18.0%</text_tag>（昨16.7%）\n昨日涨停今日均幅 <text_tag color='red'>+0.53%</text_tag>｜核按钮 <text_tag color='green'>14只</text_tag>（真破位8只）｜大面5只｜连板晋级 2/7（28.6%）\n最高板 <text_tag color='green'>11→3板</text_tag>｜跌停 <text_tag color='green'>25只</text_tag>｜亏钱方向：出版传媒（新华文轩、读者传媒、出版传媒、华媒控股四只跌停）｜游戏、白酒全天无一涨停"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>③ 🧠 AI综合判断</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**盘面状态：市场很冷（1分），晋级率与涨停溢价连续多日走弱，防守级别维持最高档。今天是一次「高度出清、低位试错」的换轨日。**\n钱怎么赚的：赚钱的35只里，21只是「同题材多只一起封」的人气接力（机器人、PCB各有一串），6只是新题材里第一个封板的（肯特股份、亚邦股份、慕思股份、太极股份、福莱新材、金龙汽车），6只是老题材里只剩它封住的独走票（亨通光电、海正药业、四会富仕），剩下2只是高位继续封住的前排票（慈文传媒反包、澳弘电子）。\n钱怎么亏的：亏钱的28只里，13只是低位失败出货、平均 -7.35%——出版系那四只跌停全在这条路上；12只是没催化的跟风票、平均 -2.89%（旭升集团、江淮汽车、中鼎股份这些昨天跟涨、今天没人管的）。\n哪条路昨天有、今天没了：昨天靠「首板普涨」赚钱，61只涨停里谁都能分一口；今天这条路断了——昨日涨停只有54.2%收红，纯跟风的票直接进了亏钱路。今天能赚的是「选对方向的第一批」和「同一方向里多只一起封」，不是随便一只首板。\n\n<text_tag color='red'>⚠️ 风险</text_tag>\nA. 高度真空：11板断板、4板断板，全场最高只剩3板两只，接力没有参照物，明天3进4是唯一高度看点。\nB. 跌停25只＋核按钮14只（真破位8只），亏钱还在扩散，且四只跌停集中在出版传媒一条线上。\nC. 机器人12只清一色首板，催化主要是OpenAI与特斯拉的海外消息，国内暂时看不到能算出订单和利润的硬催化；消息一降温，12只可能一起哑火。\nD. 今天有20只盘中摸过涨停没封住（炸板率30.3%），追进去当天浮亏、T+1次日才能卖，封不住就是被动过夜。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>⑤ 🔥 主线复盘</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='red'>⭐确定性最强：机器人（人形机器人）——12只涨停全场最多，也是唯一钱和涨停同向的方向</text_tag>\n· 12只涨停：<text_tag color='purple'>福莱新材(605488)首板</text_tag>（11:21封住·封单0.67亿·换手2.8%·电子皮肤）、<text_tag color='purple'>正强股份(301119)首板20cm</text_tag>、<text_tag color='purple'>凡拓数创(301313)首板20cm</text_tag>（封1.06亿）、<text_tag color='purple'>兆威机电(003021)首板</text_tag>、<text_tag color='purple'>宁波东力(002164)首板</text_tag>（封0.96亿）等。\n· 催化：OpenAI 布局人形机器人赛道；特斯拉 Optimus V3 即将进入量产周期。\n· 资金：人形机器人 +24.6亿，是今天唯一「钱和涨停一起走」的方向。\n⚠️ 12只里11只是首板，最高才大业股份2板；催化主要是海外消息，国内暂时看不到能算出订单和利润的硬催化，广度厚、高度零。\n\n<text_tag color='blue'>低空经济与汽车零部件——唯一走出2板集群的方向</text_tag>\n· 5只齐步2板：<text_tag color='purple'>保隆科技(603197)2板</text_tag>（09:25秒封·封单3.32亿·全场第二）、<text_tag color='purple'>万丰奥威(002085)2板</text_tag>（封1.99亿·成交11.11亿）、<text_tag color='purple'>东安动力(600178)2板</text_tag>（封1.28亿）、<text_tag color='purple'>京城股份(600860)2板</text_tag>（封0.54亿）、<text_tag color='purple'>文灿股份(603348)2板</text_tag>；汽车零部件今天一共10只涨停。\n· 催化：珠海航展12月7日至13日；特斯拉Roadster带动飞行汽车联想。\n⚠️ 新能源车 -37.4亿，钱没跟；这5只昨天还是首板，明天能不能3板是这条线唯一的看点。\n\n<text_tag color='blue'>PCB与元件——三季报业绩线，但钱在撤</text_tag>\n· 5只涨停：<text_tag color='purple'>肯特股份(301591)首板20cm</text_tag>（封0.91亿·换手34.21%）、<text_tag color='purple'>四会富仕(300852)首板20cm</text_tag>（封0.42亿·成交19.55亿·净利+101.67%）、<text_tag color='purple'>沃特股份(002886)首板</text_tag>（封0.73亿）、<text_tag color='purple'>协和电子(605258)首板</text_tag>、<text_tag color='purple'>澳弘电子(605058)首板</text_tag>（封单只0.15亿·开板4次）。\n· 催化：三季报密集预喜，业绩是能算出来的。\n⚠️ PCB 板块资金 -28.1亿，涨停在涨、钱在撤，只算短炒，不算回流。\n\n支线：军工（<text_tag color='purple'>海洋王(002724)2板</text_tag>封1.19亿、甘化科工2板、长春一东2板封0.87亿）｜大消费（慕思股份、金达威、双枪科技首板）｜电力（江苏新能、晶科科技、浙江新能首板）｜染料（亚邦股份、锦鸡股份20cm）"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>⑥.5 👑 核心演化史</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**昨日核心今日命运**\n· 新华传媒 昨11板 → **断板 +2.77%**（成交39.96亿·换手25.61%·没有跌停，属于高位温和断）\n· 冰山冷热 昨4板 → **断板 +2.36%**\n· <text_tag color='green'>新华文轩 昨3板 → 跌停 -9.99%</text_tag>｜<text_tag color='green'>读者传媒 昨2板 → 跌停 -10.02%</text_tag>\n· 东方嘉盛 昨2板 → **3板**（封0.33亿·开板1次·换手20.48%）｜吉大正元 昨2板 → **3板**（09:25一字·封2.01亿）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**今日市场核心**\n· <text_tag color='purple'>吉大正元(003029) 3板</text_tag> [信息安全·商用密码]｜生命周期：加速（一字封2.01亿）\n· <text_tag color='purple'>东方嘉盛(002889) 3板</text_tag> [半导体供应链]｜封单只0.33亿、换手20.48%，弱封\n· 两只并列最高、没有唯一核心——这就是高度真空的另一面。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**明日核心推演**\n· 吉大正元3进4：一字板后第一次要接抛压，19.65%的股权质押、10月18日刚发过异动公告，这两条是变量。\n· 东方嘉盛封单太薄，3进4难度更大。\n· 真正说明新方向有没有戏的，是福莱新材（机器人秒封）能不能2板、保隆科技与万丰奥威能不能2进3。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>⑥ 📊 轮动复盘</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "❌ 传媒出版（昨日待回流方向）：<text_tag color='green'>新华文轩 -9.99%、读者传媒 -10.02%、出版传媒 -9.94%、华媒控股 -9.98% 四只跌停</text_tag>，11板的新华传媒也断板 +2.77%，全板块只剩慈文传媒一只反包涨停（换手46.52%·成交21.01亿）——回流彻底不成立。\n✅ PCB与元件（昨日待回流方向）：涨停从0回到5只，但板块资金 -28.1亿，回流只在涨停数上成立，钱没跟。\n❌ 游戏：浙数文化 -1.03%、奥飞娱乐 -2.08%、博瑞传播 -3.78%，全天无一涨停。\n❌ 白酒：顺鑫农业 +6.92% 摸板没封住、古井贡酒 +4.62%，全天无一涨停。\n✅ 今日新爆发：机器人（0→12只）、染料（亚邦股份、锦鸡股份20cm）、数据要素（太极股份）、国产芯片（大普微20cm、东方嘉盛3板）。\n\n<text_tag color='orange'>🔀 切换日判断：成立，但质量差。</text_tag>\n旧11板龙头新华传媒今天断板，同一天机器人冒出12只首板——标准的「旧龙死、新方向生」。\n但四条都不硬：\n· 上证3730.92跌破五日线3744.55，大盘没有支撑；\n· 高度从11板塌到3板，接力的参照物直接没了；\n· 机器人靠的是海外消息，没有国内政策或订单；\n· 旧龙是温和断（+2.77%、成交39.96亿），不是巨量分歧。\n结论：**退潮期低位试错＋高度真空，不是新周期启动。**"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>⑦ 💰 板块资金</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>通信线缆及配套 +27.1亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>央国企改革 -61.9亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>通信设备 +26.4亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>电池技术 -55.1亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>海工装备 +26.1亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>锂电池概念 -38.1亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>通信 +25.9亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>新能源车 -37.4亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>人形机器人 +24.6亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>PCB -28.1亿</text_tag>"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "钱最先进的是通信线缆与通信设备（+27.1／+26.4亿），但整条通信链只封出亨通光电一只（封单3.99亿·成交98.31亿）——钱到了、票没跟上。流出端集中在电池链（电池技术、锂电池、新能源车合计 -130亿以上）和PCB（-28.1亿），今天涨停最多的机器人反而是净流入，这也是它被当成最强方向的原因。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>⑨ 📎 明日展望与延续观察</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· 看新方向能不能走出高度：机器人12只首板（福莱新材秒封、正强股份20cm），明天能不能出2板。\n· 看板块大票能不能连板：保隆科技2进3（封3.32亿）、万丰奥威2进3（封1.99亿），低空与汽零是唯一有2板集群的方向。\n· 看老龙头反包还是续杀：新华传媒11板断板后收 +2.77%，明天是反包还是继续阴跌。\n· 看新龙头有没有资金接：吉大正元3进4，一字打开后有没有人接得住。\n\n**修复三项**：晋级率回到21.6%以上（今18.0%，差3.6个点）｜核按钮收回个位数（今14只）｜昨日涨停今日均幅保持正（今 +0.53%，**这一项已经达标**）。\n\n<text_tag color='green'>⚠️ 高度11→3真空、跌停25只、上证跌破五日线、机器人靠海外消息——明天先看能不能不亏钱，再谈买什么。</text_tag>\n\n**延续观察**\n· 机器人12只首板是收敛成2-3只强者，还是明天一起退，决定这条线是试错还是又一日游。\n· PCB业绩线涨停与资金背离（-28.1亿）能不能修回来，决定它只是短炒还是真回流。\n\n**📈 股性参考·历史基因 Top10**\n这批是历史上爱涨停、连板能晋级、首板次日有溢价的老面孔——明日看谁继续扛（仅观察参考，不构成推荐）：\n· <text_tag color='purple'>慈文传媒</text_tag>(近250日涨停7次·最长5板·晋级66.7%·首板次日高开1.78%)｜<text_tag color='purple'>澳弘电子</text_tag>(14次·最长5板·38.5%·-0.25%)\n· <text_tag color='purple'>沃特股份</text_tag>(7次·最长3板·33.3%·3.29%)｜<text_tag color='purple'>保隆科技</text_tag>(3次·最长2板·50.0%·7.13%)\n· <text_tag color='purple'>科森科技</text_tag>(17次·最长10板·18.8%·1.47%)｜<text_tag color='purple'>万丰奥威</text_tag>(3次·最长3板·50.0%·5.83%)\n· <text_tag color='purple'>天洋新材</text_tag>(14次·最长4板·53.8%·0.48%)｜<text_tag color='purple'>东方嘉盛</text_tag>(4次·最长5板·66.7%·7.27%)\n· <text_tag color='purple'>海洋王</text_tag>(8次·最长4板·28.6%·2.71%)｜<text_tag color='purple'>大普微</text_tag>(3次·最长1板·0.0%·1.69%)"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='neutral'>🧘 心法</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "高度从11板塌到3板，不是没人赚钱——是赚钱的路从「随便一只首板」换成了「选对方向的第一批」；跟风票，今天开始要还账。"
+   }
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "📡 数据：选股宝涨停池 + 东财板块资金 + 腾讯行情 | 17:35 | AI盘后复盘"
+    }
+   ]
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "⚠️ 本报告基于公开信息分析，投资需谨慎"
+    }
+   ]
+  }
+ ]
+}

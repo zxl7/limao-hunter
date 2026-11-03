@@ -1,0 +1,551 @@
+{
+ "title": "📝 盘后复盘 10-27 | 指数收最低·8只2板今天0晋级",
+ "color": "grey",
+ "elements": [
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📉 ① 情绪演变 · 五日轨迹**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**情绪分**　<text_tag color='red'>▰</text_tag><text_tag color='neutral'>▱▱▱▱▱▱▱▱▱</text_tag>　**1.8 / 10 · 退潮**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**昨日 → 今日**　1.4 → **1.8**，<text_tag color='red'>微升 0.4</text_tag>——指数却杀到全天最低，分数是被晋级率和涨停溢价抬起来的。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**五日轨迹**　4.2 → 1.0 → 10.0 → 1.4 → **1.8**　近 3 日均 4.4　（10-21 → 27）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**定调**　**指数收在全天最低、接力链条的腰断了**——涨停 41 只里 29 只是从没进过昨天池子的新面孔，昨天的 8 只 2 板今天一只没晋级。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📊 ② 真实情绪总览**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**指数**　上证 3648.30 <text_tag color='green'>-1.33%</text_tag>（**收在全天最低价**·距五日线 3681.47 低 33 点）　深证 11245.73 <text_tag color='green'>-2.50%</text_tag>　创业板 2548.15 <text_tag color='green'>-3.41%</text_tag>　科创50 <text_tag color='green'>-4.81%</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**情绪分**\n1.8 / 10 · 退潮"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**涨停**\n41 只（昨 55）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**晋级率**\n21.8%（门槛 20.7%·过线）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**炸板率**\n40.0%（约 27 只摸板没封住）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**核按钮**\n9 只（昨 8）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**大面**\n9 只（昨 5）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**连板晋级**\n4 / 15"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**昨涨停今均**\n+1.36%（中位 +0.82%）"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**高度**　4 → **5**（上海九百一根独苗，4 板三只并列）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**广度**　涨 <text_tag color='red'>626</text_tag> : 跌 <text_tag color='green'>4906</text_tag>　成交 1.46 万亿（缩量约 1478 亿）　跌停 <text_tag color='green'>22 只</text_tag>（昨 26）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**亏钱方向**　机器人链的高位票被核（林州重机 -9.91%、正裕工业 -10.02%），和昨天首板里没人跟的一批（朗特智能 -10.53%、金溢科技 -9.63%、春光科技 -8.94%、万向钱潮 -5.74%）。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🧠 ③ AI 综合判断**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**判断**　今天最刺眼的不是跌，是**跌得越狠、涨停票越赚**：情绪分 1.4→1.8、晋级率 17.1%→21.8% 反而过了门槛；但指数收在全天最低、涨 626 跌 4906，是 10 月以来第三差的广度（10-15 涨 442、10-22 涨 574）。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**变**　昨天 2 板层 9 只晋级 6 只（66%），今天 2 板层 8 只**一只没晋级**（0%）。但也没被打死——3 只还收红（福莱新材 +5.29%、模塑科技 +3.90%、杰克科技 +2.78%），最差万向钱潮 -5.74%。**腰部不是崩了，是没人愿意往上接。**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**赚**　人气接力 23（+11.32%）｜新题材板块龙 5（+11.98%）｜独走 1（亚玛顿 +10.02%）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**亏**　高位被核 2（-9.96%）｜低位失败出货 7（-7.32%）｜没人跟的小票 17（-2.86%）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**断**　昨天「首板今天还有肉」今天还在（昨涨停今均 +1.36%、50.9% 收红）；断的是「2 板上 3 板」这条路。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**历史对照**　涨家数掉到 600 出头这种日子，10-15（442 只涨）和 10-22（574 只涨）各出现过一次，次日都反弹了——10-16 涨 3084 只、10-23 涨 4217 只——但**两次反弹都没活过第二个交易日**。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='red'>⚠️ 风险</text_tag>"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**A.** 指数收在全天最低价，尾盘没人接盘，隔夜跳空的风险是最近几天最高的。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**B.** 高度只剩上海九百一只 5 板；它 10-22 发过异常波动、10-23 发过风险提示两份公告，一断全场没有高度。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**C.** 2 板层 0 晋级——明天 8 只新 2 板要是再接不上 3 板，就只剩「首板隔日卖」这一条路可走。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**D.** AI 硬件链连续两天失血（今天电子 -151.5／半导体 -148.8／华为 -139.5／国产芯片 -119.3／通信技术 -115.7 亿），别在这里找反弹。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🔥 ⑤ 主线复盘**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='red'>⭐ 最强</text_tag>　**一般零售**　1 → 6 只｜今天唯一成形的线\n· 上海九百 5 板（全场最高·09:30:26 封·封 1.5 亿·一次没开板·换手 7.49%）\n· 深 赛 格 首板（09:25 一字·封 4.01 亿，全场封单最实·成交只 0.59 亿）\n· 国芳集团（成交 11.97 亿·14:52 才封）· 广百股份 · 茂业商业 · 新华百货\n⚠️ 6 只里 5 只首板，除深赛格外封单只有 0.11~0.35 亿，钱进得很薄"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='blue'>🔹 次强</text_tag>　**汽车零部**　6 → 8 只｜最厚，但没高度\n· 襄阳轴承 4 板（封 1.28 亿·炸 1 次·成交 14.92 亿·换手 20.57%）\n· 光洋股份 2 板（封 1.7 亿·一次没开板·换手 3.87%）｜沪光股份 2 板（封 0.05 亿·炸 2 次，最松）\n· 首板　亚太股份（封 0.61 亿·炸 4 次）· 凯众股份 · 秦安股份 · 申达股份 · 大明电子\n⚠️ 除襄阳轴承、光洋股份，其余封单都不到 0.7 亿；这条线没能出 5 板"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**对照：机器人链高位全死**\n· 专用设备 6→1、通用设备 5→1、塑料 3→1——这三块昨天 14 只，今天剩 3 只\n· 林州重机 3 板→**核按钮 -9.91%**｜正裕工业 3 板→**核按钮 -10.02%**｜华阳智能 3 板→-2.65%\n· 只剩电机Ⅱ 1→3（大洋电机 首板·成交 14.19 亿｜凯中精密｜华新精科），钱 电机Ⅲ +7.0 亿是全场流入第一\n⚠️ 机器人制造四块（汽零/电机/专用/通用）昨天 18 只今天 13 只，但 4 板以上只剩襄阳轴承一只"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**支线**"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**通信设备　2 只**\n科瑞思 2 板 20cm · 天邑股份 20cm"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**家电零部　2 只**\n东贝集团 · 盾安环境"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**光学 / 光伏 / 军工电子**\n弘景光电 20cm（炸 9 次）· 亚玛顿 · 宏明电子 20cm"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**休闲食品 / 乳品**\n桂发祥 2 板 · 青岛食品 2 板 · 阳光乳业 2 板"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**👑 ⑥.5 核心演化史**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**昨日核心今天怎么了**\n· 上海九百 昨 4 板 → **5 板**（09:30:26 封·封 1.5 亿·一次没开板）\n· 赛福天 / 多伦科技 / 襄阳轴承 昨 3 板 → **4 板**\n· 林州重机 昨 3 板 → **核按钮 -9.91%**｜正裕工业 昨 3 板 → **核按钮 -10.02%**｜华阳智能 昨 3 板 → -2.65%\n· 昨天 8 只 2 板 → **0 只晋级**（福莱新材 +5.29%、模塑科技 +3.90%、杰克科技 +2.78% 还收红，万向钱潮 -5.74% 最差）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**今天的核心**　<text_tag color='purple'>上海九百（600838）5 板</text_tag>　[一般零售]｜生命周期：**加速**——唯一高度，前天一字变今天 09:30 封，封单从 1.36 亿加到 1.5 亿"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**明天看它什么**　能不能 6 板——它一断，全场没有高度；接棒的看 <text_tag color='purple'>深赛格（000058）</text_tag>（封 4.01 亿全场最实、09:25 一字）和 <text_tag color='purple'>襄阳轴承（000678）</text_tag>（4 板、成交 14.92 亿最大）"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📊 ⑥ 轮动复盘 · 切换日判定**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>❌ 机器人制造</text_tag>　专用设备 6→1、通用设备 5→1、塑料 3→1\n<text_tag color='green'>❌ 昨天的新爆发</text_tag>　休闲食品 3→2、医药商业 2→0、消费电子 2→0、基础建设 2→0、软件开发 2→1\n<text_tag color='green'>❌ 另有 43 个板块</text_tag>　昨天有涨停，今天一只没有"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='red'>✅ 一般零售</text_tag>　1 → 6（今天唯一带着高度的新方向）\n<text_tag color='red'>✅ 汽车零部</text_tag>　6 → 8　<text_tag color='red'>✅ 电机Ⅱ</text_tag>　1 → 3　<text_tag color='red'>✅ 家电零部</text_tag>　1 → 2　<text_tag color='red'>✅ 通信设备</text_tag>　1 → 2"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**切换日：成立，但质量差**\n· 旧线是被核掉的——机器人 3 板三只里两只核按钮，不是温和断\n· 新线起来了——一般零售 1→6，还带着全场唯一的 5 板\n· 但大盘破五日线（3648.30 vs 3681.47，差 0.90%）、广度 626:4906、催化只有「秒涨停」没有政策订单\n→ 是钱在退潮里换了一条低位线，不是新周期启动"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**💰 ⑦ 板块资金流向**"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>电机Ⅲ +7.0 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>电子 -151.5 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>银行 +6.9 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>半导体概念 -148.8 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>股份制银行 +6.4 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>人工智能 -143.1 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>保险重仓 +5.6 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>华为概念 -139.5 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>冰雪经济 +4.4 亿</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>国产芯片 -119.3 亿</text_tag>"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**一句话**　流入榜首只有 +7.0 亿——全场没有一个板块真在进钱；银行和保险进钱，是防守的钱在挪，不是进攻。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📎 ⑨ 明日展望与延续观察**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**看点**\n① 上海九百 5 进 6——老龙头是续命还是结束，它一断全场没高度\n② 今天 8 只新 2 板能不能出 3 板——新方向的票能不能走出高度\n③ 深赛格能不能连板——封 4.01 亿最实，但成交只 0.59 亿是纯一字，开板就是分歧\n④ 襄阳轴承 4 进 5——成交 14.92 亿全场第二，看新龙头有没有资金接"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**晋级率**\n21.8%，已过门槛 20.7% ✓ 但靠 4 只连板撑"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**核按钮**\n9 只，和昨天基本持平没扩散"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**最高板**\n5（昨 4，抬了一级）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**跌停**\n22 只（昨 26，在收但没收回）"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**一句话**　指数收最低这种日子，涨停票的抗跌要打折看——今天 41 只里 29 只是新面孔，接力链条只有一天长。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**延续**　一般零售、汽车零部是今天唯一两条还在增的方向；机器人只剩电机 3 只首板，不是主线了。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🧘 心法**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "广度塌到 626:4906 的时候，涨停家数越少不代表越安全——剩下的都是没人接的独苗。"
+   }
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "📡 数据：选股宝涨停池 + 东财板块资金 + 腾讯行情 | 17:2x | AI 盘后复盘"
+    }
+   ]
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "⚠️ 本报告基于公开信息分析，投资需谨慎"
+    }
+   ]
+  }
+ ]
+}

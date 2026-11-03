@@ -75,7 +75,9 @@ def test_deep_drawdown_renders_shrunk_position_not_ban():
     assert block is not None
     content = block[0]["text"]["content"]
     assert "禁买" not in content.replace("不禁买", "")     # 没有"禁买"结论
-    assert "压小" in content or "动态控制" in content
+    # ⚠️ 2026-10-21：原句「（按回撤压到原来的 45%·动态控制不禁买）」含系统注释词，
+    #    改为「（因为前面亏了 X%，按比例收着做）」——语义等价、去掉内部术语。
+    assert "压小" in content or "按比例收着做" in content
     assert "同时持有" in content                          # 仍给仓位数字（可买）
     fails, warns = _scan_block(block)
     assert fails == [], f"白话门禁命中机器黑话: {fails}"

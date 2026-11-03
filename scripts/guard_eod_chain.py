@@ -146,6 +146,11 @@ CHECKS = (
     ("题材爆发快照", "eruption_history/eruption_{}.json", "回流引擎的数据基准（缺它 = theme_rotation 停更）"),
     ("板块资金流", "sector_flow_history/sector_flow_{}.json", "回流判定「资金边际趋势」的地基"),
     ("情绪日快照", "short_term/daily/emotion_{}.json", "五日情绪汇总的结构化地基"),
+    # 🐉 2026-10-27 新增（用户「做好每一个连板日的观察」）：终端 /leader-daily 的数据源。
+    # ⛔ 必须用「盘后覆盖」判据（mtime + generated_ts ≥ 16:00）：15:30 eod 也能算出龙一，
+    #    但那时涨停池还没定稿（10-27 实测 42 只 → 收盘 41 只、个别封单 0.24% → 1.65%），
+    #    盘中/盘前口径写出来的台账会把「连板日」记错，必须被判为未覆盖。
+    ("连板日台账", "board_leader_daily/leader_{}.json", "终端「连板日观察」页的数据源（缺它 = 这条线断了没人知道）"),
 )
 
 # ── 带内容 date 的产出（文件名不含日期，只能读字段）──
@@ -175,6 +180,8 @@ TS_SEMANTICS = {
     "short_term/daily/emotion_{}.json": "source",
     "theme_rotation.json": "collect",                   # 盘后链写入时刻
     "carrier_state.json": "collect",                    # carrier_track 写入时刻
+    # 🐉 连板日台账：`generated_ts` = 脚本写入时刻（`board_leader_daily.build_for_date`）→ collect
+    "board_leader_daily/leader_{}.json": "collect",
 }
 DEFAULT_SEMANTIC = "collect"
 

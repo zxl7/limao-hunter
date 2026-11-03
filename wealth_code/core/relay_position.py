@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -84,7 +85,15 @@ TIER_STRONG = 0.75
 TIER_NEUTRAL = 0.45
 
 # 各档仓位方案（名额 / 单票上限 / 总仓上限）
-QUOTA_STRONG, PER_PICK_STRONG, TOTAL_STRONG = 3, 0.50, 1.00
+# ⛔ 单票硬顶单一源 = core/risk_limits.MAX_POSITION_PER_STOCK（2026-10-30 用户「单股不能超过 50%」）
+#   双路径兜底：pipeline/CLI 以 `core.*` 为顶层包运行，测试以 `wealth_code.core.*` 导入，
+#   两种 sys.path 下都必须能取到同一个数（否则等于又出现第二个 0.5）。
+try:
+    from wealth_code.core.risk_limits import MAX_POSITION_PER_STOCK as _HARD_PER_STOCK  # noqa: E402
+except ImportError:  # pragma: no cover - 取决于调用方 sys.path
+    from core.risk_limits import MAX_POSITION_PER_STOCK as _HARD_PER_STOCK  # noqa: E402
+
+QUOTA_STRONG, PER_PICK_STRONG, TOTAL_STRONG = 3, _HARD_PER_STOCK, 1.00
 QUOTA_NEUTRAL, PER_PICK_NEUTRAL, TOTAL_NEUTRAL = 2, 0.40, 0.60
 QUOTA_WEAK, PER_PICK_WEAK, TOTAL_WEAK = 1, 0.30, 0.30
 
@@ -581,6 +590,78 @@ def apply_total_cap(positions: list[float | None], plan: dict[str, Any] | None) 
     for k, i in enumerate(_idx):
         out[i] = round(_vals[k] * scale, 4)
     return out
+
+
+# ── 每日方案落盘（2026-10-15 用户需求：账户收益须乘动态仓位）──────────────────
+# 09:25 真实读数合成的方案落盘到本文件（按 trade_date 覆盖），供尾盘潜伏
+# （ambush_pullback）按 decision_date 取当天仓位约束，加权出「账户当日收益」。
+RELAY_PLAN_HISTORY = ROOT / "cache" / "relay_position_history.jsonl"
+
+
+def _read_relay_history() -> list[dict[str, Any]]:
+    if not RELAY_PLAN_HISTORY.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        for line in RELAY_PLAN_HISTORY.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except Exception:
+                continue
+    except Exception:
+        return []
+    return rows
+
+
+def _write_relay_history(rows: list[dict[str, Any]]) -> None:
+    RELAY_PLAN_HISTORY.parent.mkdir(parents=True, exist_ok=True)
+    RELAY_PLAN_HISTORY.write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + ("\n" if rows else ""),
+        encoding="utf-8")
+
+
+def persist_daily_plan(plan: dict[str, Any] | None, trade_date: str) -> bool:
+    """把当日 09:25 接力动态仓位方案落盘（按 trade_date 覆盖）。
+
+    纯数据落盘；失败返回 False，**调用方不得因落盘失败打断 09:25 裁决**。
+    """
+    if not isinstance(plan, dict) or not str(trade_date or "").strip():
+        return False
+    try:
+        row = {
+            "trade_date": str(trade_date).strip(),
+            "tier": plan.get("tier"),
+            "strength": plan.get("strength"),
+            "quota": plan.get("quota"),
+            "per_pick_cap": plan.get("per_pick_cap"),
+            "total_cap": plan.get("total_cap"),
+            "drawdown_pct": plan.get("drawdown_pct"),
+            "drawdown_level": plan.get("drawdown_level"),
+            "can_buy": plan.get("can_buy"),
+            "nav_peak": plan.get("nav_peak"),
+            "nav_latest": plan.get("nav_latest"),
+            "recorded_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        existing = _read_relay_history()
+        out = [r for r in existing if r.get("trade_date") != row["trade_date"]]
+        out.append(row)
+        out.sort(key=lambda r: r.get("trade_date") or "")
+        _write_relay_history(out)
+        return True
+    except Exception:
+        return False
+
+
+def load_daily_plan(trade_date: str) -> dict[str, Any] | None:
+    """读某交易日落盘的动态仓位方案（尾盘潜伏加权用）。缺 → None（诚实降级）。"""
+    td = str(trade_date or "").strip()
+    for r in _read_relay_history():
+        if r.get("trade_date") == td:
+            return r
+    return None
 
 
 if __name__ == "__main__":

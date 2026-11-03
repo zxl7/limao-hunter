@@ -157,6 +157,7 @@ def cmd_eod(args: argparse.Namespace) -> int:
     # 失败静默降级（渲染层读不到档案=诚实省略基因行，不阻断推送）。
     _cand_codes = sorted({str(x.get("code"))
                           for x in (payload.get("relay") or []) + (payload.get("watch") or [])
+                          + (payload.get("low_pool") or [])
                           if len(str(x.get("code") or "")) == 6})
     if _cand_codes:
         try:
@@ -166,6 +167,28 @@ def cmd_eod(args: argparse.Namespace) -> int:
             print(f"[EOD] 候选历史基因预生成 {len(_cand_codes)} 只 (rc={_r.returncode})")
         except Exception as _e:
             print(f"[EOD] 候选历史基因预生成跳过: {_e}")
+    # 📈（2026-10-23）：个股生涯库——反复出现的票怎么变现、在往哪个方向进化。
+    # 链式两步：判断轨迹全量重算（含今日 live 候选）→ 生涯重算 + 冻结当日跟踪清单。
+    # ⛔ 纯回看层：不参与评分、不占 relay/watch 名额、不进 09:25 裁决。
+    # 可逆开关 ENABLE_STOCK_ARC=0 关闭；任何异常只降级，绝不阻断盘后卡推送。
+    if os.environ.get("ENABLE_STOCK_ARC", "1") != "0":
+        try:
+            from core import judgement_trail as _jt
+            from core import stock_arc as _arc
+
+            _jt_idx = _jt.rebuild()
+            _arc_res = _arc.update_daily(str(payload.get("date") or ""), closed_today=True)
+            if _arc_res.get("error"):
+                print(f"[EOD] 个股生涯库跳过: {_arc_res['error']}")
+            else:
+                _ai = _arc_res["index"]
+                print(f"[EOD] 个股生涯库: {_ai['codes']} 只 / {_ai['episodes']} 波 | "
+                      f"跟踪清单 {_arc_res['patrol_count']} 只 | 轨迹 {_jt_idx.get('rows')} 行")
+                if _ai.get("phantom_dates"):
+                    print(f"[EOD] ⚠️ 判断轨迹含非交易日归档 {_ai['phantom_dates']}（生涯层已剔除）")
+        except Exception as _e:  # noqa: BLE001
+            print(f"[EOD] 个股生涯库降级: {_e}")
+
     if args.push:
         if (payload.get("relay") or []) or (payload.get("watch") or []):
             # 🤖 盘后卡「明日买入预案」：推卡前把次日 AI 预案视图注入 payload（2026-10-14）。
@@ -235,7 +258,9 @@ def _finalize_prev_batch(closing: bool = False) -> dict | None:
     quotes = input_auction.load_auction_quotes(aq_path)
     if not quotes:
         return None
-    codes = [str(c.get("code")) for c in (cand.get("relay", []) + cand.get("watch", [])) if c.get("code")]
+    codes = [str(c.get("code")) for c in
+             (cand.get("relay", []) + cand.get("watch", []) + cand.get("low_pool", []))
+             if c.get("code")]
     if closing:
         # 盘后：今日「当前价」(p) = 该交易日(T)收盘价 → 当日即可结算
         fetched = input_auction.fetch_realtime_closes(codes)
@@ -259,7 +284,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         # 防止合成测试数据污染真实交易战绩 cache（2026-08-12 修复）。
         cand = pipeline_eod.run_eod() if args.recompute else _load_latest_candidates()
         quotes, next_close = input_auction.synthesize_quotes_for_test(
-            cand.get("relay", []) + cand.get("watch", [])
+            cand.get("relay", []) + cand.get("watch", []) + cand.get("low_pool", [])
         )
         res = pipeline_verify.run_verify(
             candidates=cand, quotes=quotes, next_close_map=next_close, out_nav=False, persist=False
@@ -267,7 +292,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
     elif args.fetch:
         # 真实竞价接入：抓最新候选的 09:25 实时报价
         cand = _load_latest_candidates()
-        pool_codes = [str(c.get("code")) for c in (cand.get("relay", []) + cand.get("watch", [])) if c.get("code")]
+        pool_codes = [str(c.get("code")) for c in
+                      (cand.get("relay", []) + cand.get("watch", []) + cand.get("low_pool", []))
+                      if c.get("code")]
         # 同步冻结完整昨涨停池的 09:25 报价，用于判断红开比例、连板红开比例和量能。
         # ⛔ 不可只抓接力/观察池：筛选样本天然更强，会虚高市场反馈。
         full_zt_codes: list[str] = []
@@ -286,7 +313,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
         sector_support_map: dict[str, dict[str, Any]] = {}
         try:
             from core import sector_support
-            all_cands = list(cand.get("relay", [])) + list(cand.get("watch", []))
+            all_cands = (list(cand.get("relay", [])) + list(cand.get("watch", []))
+                         + list(cand.get("low_pool", [])))
             mates_codes = sector_support.collect_mates_codes(all_cands)
             if mates_codes:
                 mates_quotes = input_auction.fetch_realtime_auction(mates_codes)

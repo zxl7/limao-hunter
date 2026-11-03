@@ -3,8 +3,10 @@
 #   早盘 09:15-11:30 → 30s；午休 11:30-13:00 → 5min；下午 13:00-15:00 → 60s；非交易 → 10min
 # 本脚本由 launchd 每 30s 唤醒一次（plist StartInterval=30），内部按当前时段决定是否真正刷新（未到间隔则静默 exit）。
 # 非交易时段由 intraday_pulse.py 的 in_trading 守卫自动跳过抓取。
-cd /Users/zxl/WorkBuddy/狸猫猎手
-PY=/Users/zxl/.workbuddy/binaries/python/versions/3.13.12/bin/python3
+# ⚠️ 可迁移化（2026-10-30）：路径与解释器改为可外部覆盖，默认值保持 macOS 原行为不变。
+#    服务器部署时由 scripts/migrate/remote_env.sh 注入 LIMAO_ROOT / LIMAO_PY。
+cd "${LIMAO_ROOT:-/Users/zxl/WorkBuddy/狸猫猎手}"
+PY="${LIMAO_PY:-/Users/zxl/.workbuddy/binaries/python/versions/3.13.12/bin/python3}"
 LOG=cache/pulse_snapshots/fetch.log
 STATE=cache/pulse_snapshots/.last_fetch_ts
 
@@ -20,7 +22,9 @@ LOCK_OK=0
 if mkdir "$LOCKDIR" 2>/dev/null; then
   LOCK_OK=1
 else
-  LOCK_AGE=$(( $(date +%s) - $(stat -f%m "$LOCKDIR" 2>/dev/null || echo 0) ))
+  # stat 跨平台：BSD 用 -f%m，GNU 用 -c %Y（服务器是 Linux）
+  LOCK_MTIME=$(stat -f%m "$LOCKDIR" 2>/dev/null || stat -c %Y "$LOCKDIR" 2>/dev/null || echo 0)
+  LOCK_AGE=$(( $(date +%s) - LOCK_MTIME ))
   if (( LOCK_AGE > 600 )); then
     rm -rf "$LOCKDIR"
     mkdir "$LOCKDIR" 2>/dev/null && LOCK_OK=1
@@ -49,7 +53,8 @@ target_interval() {
 # fetch.log 轻量轮转：超过 2MB 归档为 .1，避免无限增长
 rotate_log() {
   local f="$1" max=2097152 sz=0
-  [[ -f "$f" ]] && sz=$(stat -f%z "$f" 2>/dev/null || echo 0)
+  # stat 跨平台：BSD -f%z / GNU -c %s
+  [[ -f "$f" ]] && sz=$(stat -f%z "$f" 2>/dev/null || stat -c %s "$f" 2>/dev/null || echo 0)
   if (( sz > max )); then
     mv "$f" "$f.1"
     echo "[$(date '+%H:%M:%S')] fetch.log 轮转(>$((max/1024/1024))MB → .1)" >> "$f"

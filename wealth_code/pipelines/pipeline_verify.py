@@ -110,13 +110,59 @@ def save_pool_call(trade_date: str, result: dict[str, Any]) -> None:
 
 
 def _load_full_zt_rows(date10: str) -> list[dict[str, Any]]:
-    """读取候选依据日的完整涨停池；缺失时返回空，竞价回暖闸自然不放宽。"""
+    """读取依据日的完整涨停池，个股事实优先来自统一底库。
+
+    ``market_open`` 只需要代码、板数和成交额等竞价闸门字段；其中代码、
+    收盘涨停和板数先读 ``stock_registry.stock_daily``，旧归档只补充底库
+    尚未结构化的 ``cje_yi`` 等字段。底库冷启动/缺料时再回退旧归档，
+    不改变原有结果形状，也不把缺料解释成「没有涨停」。
+    """
+    legacy_rows: list[dict[str, Any]] = []
     try:
         p = ROOT.parent / "cache" / "zt_history" / f"zt_{date10}.json"
-        rows = json.loads(p.read_text(encoding="utf-8")).get("zt_list") or []
-        return [row for row in rows if isinstance(row, dict)]
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        legacy_rows = [row for row in (raw.get("zt_list") or [])
+                       if isinstance(row, dict)]
     except Exception:
-        return []
+        legacy_rows = []
+
+    try:
+        from adapters.stock_registry_reader import get_daily_facts, get_stock
+
+        registry_rows = get_daily_facts(date10, date10, only_limit_up=True)
+    except Exception:
+        registry_rows = []
+    if not registry_rows:
+        return legacy_rows
+
+    supplements = {
+        str(row.get("code") or "").strip(): row
+        for row in legacy_rows
+        if str(row.get("code") or "").strip()
+    }
+    out: list[dict[str, Any]] = []
+    for item in registry_rows:
+        code = str(item.get("code") or "").strip()
+        if len(code) != 6:
+            continue
+        # 底库是个股事实主源；只对尚未结构化的字段做显式旧归档补充。
+        row = {
+            "code": code,
+            "name": item.get("name") or supplements.get(code, {}).get("name"),
+            "boards": item.get("boards"),
+            "pct": item.get("pct"),
+            "price": item.get("price"),
+        }
+        old = supplements.get(code) or {}
+        stock = get_stock(code) or {}
+        row["name"] = stock.get("name") or old.get("name") or row["name"]
+        for key in ("cje_yi", "cje", "fbt", "zbc", "hs", "seal", "seal_yi",
+                    "lt", "lt_yi", "zsz", "zsz_yi", "sector", "industry",
+                    "is_20cm"):
+            if old.get(key) is not None:
+                row[key] = old[key]
+        out.append(row)
+    return out or legacy_rows
 
 
 def _load_plan(trade_date: str) -> dict[str, Any]:
@@ -161,6 +207,12 @@ def _inject_pool_views(ai_decisions: dict[str, dict] | None,
         r["line_is_core"] = bool(m.get("line_is_core"))
         r["line_core"] = m.get("line_core")
         r["follower_gate"] = bool(m.get("follower_gate"))
+        r["linkage_gate"] = bool(m.get("linkage_gate"))
+        r["linkage_discipline"] = m.get("linkage_discipline")
+        # 🚧 身位（2026-10-21 92科比 口径）：line_tier = front/second/back；
+        #    backrow_note = 买的是「隔壁」（前排断板或买不到）。卡面据此标注，不改裁决。
+        r["line_tier"] = m.get("line_tier")
+        r["backrow_note"] = m.get("backrow_note")
         # 🛡️ 前置防守闸门（2026-10-08 经验）：which / why / 只留痕的警示——卡面据此点名
         #    「竞价达标但没买」的原因（否则读者只能自己猜）。⛔ 理由正文仍由个股段
         #    `_ai_view_line` 渲染（pool_reason），本块不重复。
@@ -173,10 +225,18 @@ def _inject_pool_views(ai_decisions: dict[str, dict] | None,
         r["mechanical_leader_note"] = m.get("mechanical_leader_note")
         r["leader_role"] = m.get("leader_role")
         r["leader_evidence"] = m.get("leader_evidence")
+        r["dragon_confirm"] = m.get("dragon_confirm")   # 🐉 龙头身份（P2·卡面只读）
+        # 🔍 池外龙头校验（2026-10-21）：盘后建池时判定「这条线的龙头在不在池内」，
+        #    ⛔ 不透传 → 卡面 `_outpool_badge` 永远读不到、后端判了也白判。
+        r["line_tier_outpool"] = m.get("line_tier_outpool")
+        r["line_tier_why"] = m.get("line_tier_why")
+        r["line_top"] = m.get("line_top")
+        r["line_tops"] = m.get("line_tops")
     # 池内票的预期区间/量能目标：优先用候选（最新），缺则用决策行（record 时补写的）
     if candidates:
         _by = {str(c.get("code")): c for c in
-               list(candidates.get("relay") or []) + list(candidates.get("watch") or [])}
+               list(candidates.get("relay") or []) + list(candidates.get("watch") or [])
+               + list(candidates.get("low_pool") or [])}
         for code, m in marks.items():
             c = _by.get(code)
             if not isinstance(c, dict):
@@ -328,6 +388,9 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
         "theme_mates_cnt": cand.get("theme_mates_cnt"),
         "theme_has_sector_effect": cand.get("theme_has_sector_effect"),
         "theme_is_lone": cand.get("theme_is_lone"),
+        # 盘后完整涨停池冻结的题材联动事实；卡面只渲染白话，不展示内部 schema/计数冲突字段。
+        "linkage_facts": cand.get("linkage_facts"),
+        "linkage_discipline": signal.get("linkage_discipline") or cand.get("linkage_discipline"),
         "performance": {
             "open_check": {
                 "can_enter": can_enter,
@@ -363,6 +426,8 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
                 "line_is_core": _plan_row.get("line_is_core"),
                 "line_core": _plan_row.get("line_core"),
                 "follower_gate": bool(_plan_row.get("follower_gate")),
+                "line_tier": _plan_row.get("line_tier"),
+                "backrow_note": _plan_row.get("backrow_note"),
                 # 🛡️ 前置防守闸门（2026-10-08 经验·distribution/sector_drain/high_position）
                 "defense_gate": _plan_row.get("defense_gate"),
                 "defense_reason": _plan_row.get("defense_reason"),
@@ -372,6 +437,13 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
                 "mechanical_leader_note": _plan_row.get("mechanical_leader_note"),
                 "leader_role": _plan_row.get("leader_role"),
                 "leader_evidence": _plan_row.get("leader_evidence"),
+                "dragon_confirm": _plan_row.get("dragon_confirm"),
+                "line_tier_outpool": _plan_row.get("line_tier_outpool"),
+                "line_tier_why": _plan_row.get("line_tier_why"),
+                # True 只会来自“昨日确认独苗 + 今早有效同题材报价均未红开”；
+                # 报价缺失时保留 False，防止卡面把数据不足说成板块走弱。
+                "linkage_gate": bool(_plan_row.get("linkage_gate")),
+                "linkage_discipline": _plan_row.get("linkage_discipline") or signal.get("linkage_discipline"),
                 "note": signal.get("note"),
                 "gap_pct": signal.get("gap_pct"),
                 "auction_price": signal.get("auction_price"),
@@ -432,7 +504,8 @@ def run_verify(
         quotes = load_auction_quotes(quotes_path) if quotes_path else {}
 
     date10 = str(candidates.get("date") or "").strip()
-    all_cands = list(candidates.get("relay") or []) + list(candidates.get("watch") or [])
+    all_cands = (list(candidates.get("relay") or []) + list(candidates.get("watch") or [])
+                 + list(candidates.get("low_pool") or []))
     # P1-6 冰点禁买：regime 从 candidates.environment 读取（eod 时已按 feedback_matrix 判定；
     # ice=情绪分≤2.0 → signal_eval 全部禁买）。兼容旧文件无 regime 字段（默认 None 不触发）。
     regime = str((candidates.get("environment") or {}).get("regime") or "").strip() or None
@@ -496,6 +569,14 @@ def run_verify(
                     relay_plan=_relay_plan)
                 if persist:
                     save_pool_call(trade_date10, pool_res)
+                    # 🎯 动态仓位方案落盘（2026-10-15）：供尾盘潜伏按 decision_date
+                    # 取当天仓位约束、加权出「账户当日收益」。落盘失败不得打断裁决。
+                    if _relay_plan is not None:
+                        try:
+                            from core import relay_position as _rp
+                            _rp.persist_daily_plan(_relay_plan, trade_date10)
+                        except Exception as _pe:
+                            print(f"[VERIFY] 动态仓位方案落盘跳过：{_pe}")
                 _pm = pool_res.get("meta") or {}
                 print(f"[VERIFY] 🎯 9:25 池内裁决：池内 {_pm.get('pool_size')} 只 · "
                       f"定调 {_pm.get('stance') or '—'} · 当日可买 "
@@ -504,6 +585,29 @@ def run_verify(
                       + ("" if persist else "（dry-run·不落盘）"))
             ai_decisions = _inject_pool_views(ai_decisions, pool_res, candidates)
         # AI 定调只影响 AI 预案本身；观察/放弃票不能由机械逃生阀改写为成交。
+
+    # ── 卡面「指标打满」要用的静态属性（2026-10-21 用户）──────────────────
+    # ⛔ 为什么要有这个白名单：`_build_record` 只从候选行搬它自己认识的字段
+    #    （26 个），量价/身份/梯队/资金这些**全被丢掉** → 卡面 `_buy_indicator_lines`
+    #    读了全是 None，五行只渲染出两行（实测）。
+    # ⛔ 只透传**不参与裁决**的展示字段，⛔ 不许把裁决相关字段塞进来（避免两处口径打架）。
+    _DISPLAY_FIELDS = (
+        # 量价
+        "cje_yi", "hs", "seal_amt", "seal_ratio_pct", "zbc", "fbt",
+        # 板块与身份
+        "core_theme", "core_theme_logic", "core_theme_heat", "industry_sector",
+        "theme_mates_cnt", "sector_mates_cnt", "is_sector_dragon",
+        "leader_role", "style_tag",
+        # 梯队
+        "ladder_grade", "ladder_health", "ladder_has_complete",
+        # 带动与资金
+        "carry_cnt", "carry_time", "carry_score", "main_flow_yi",
+        "main_flow_5d_yi", "lt_mktcap", "zsz_yi",
+        # 筹码
+        "chip_profit_rate", "chip_conc90",
+        # 历史
+        "history_relay_prob", "ret_10d_pct", "dev_10d_pct",
+    )
 
     records: list[dict[str, Any]] = []
     for cand in all_cands:
@@ -514,6 +618,16 @@ def run_verify(
                             sector_support=(sector_support_map or {}).get(code),
                             ai_decisions=ai_decisions,
                             valve_code=(valve or {}).get("code"))
+        # 🔍 池外龙头校验（2026-10-21）：record 由 `_build_record(cand, ...)` 从**候选行**重建，
+        #    ⛔ `_build_record` 不认这个字段 → 必须在出口处补，否则后端判了卡面也读不到
+        #    （实测：views 里是 back、record 里却是 None，卡面 `_outpool_badge` 静默失效）。
+        for _k in ("line_tier_outpool", "line_tier_why", "line_top", "line_tops"):
+            if cand.get(_k) is not None:
+                rec[_k] = cand.get(_k)
+        # 🎯 卡面「指标打满」的静态属性（白名单·见上方 _DISPLAY_FIELDS 注释）
+        for _k in _DISPLAY_FIELDS:
+            if _k in cand and cand.get(_k) is not None:
+                rec[_k] = cand.get(_k)
         records.append(rec)
 
     payload = {

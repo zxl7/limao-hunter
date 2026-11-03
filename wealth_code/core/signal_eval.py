@@ -48,6 +48,35 @@ def _sector_support_suffix(sector_support: dict[str, Any] | None) -> str:
     return ""
 
 
+def _theme_linkage_gate(
+    base: dict[str, Any],
+    record: dict[str, Any],
+    sector_support: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """板块联动纪律门：低板确认独苗不能因量价达标而直接买入。
+
+    只消费盘后冻结事实与同方向竞价承接；数据不足是 unknown，不等于板块没人。
+    off/annotate 只留痕，soft（默认）拦 1~2 板独苗，strict 才扩到高标。
+    """
+    try:
+        from core.theme_linkage import apply_auction_gate
+        discipline = apply_auction_gate(record, sector_support)
+    except Exception:
+        return None
+    if not discipline.get("block"):
+        return None
+    return {
+        **base,
+        "decision_status": "pending",
+        "decision_label": "观察",
+        "signal_status": "pending",
+        "signal_label": "板块联动待确认",
+        "rule_text": "",
+        "linkage_discipline": discipline,
+        "note": f"{discipline.get('note') or '板块联动待确认'}，不把单股竞价达标直接当成买点。",
+    }
+
+
 def _lone_high_open_gate(
     base: dict[str, Any],
     sector_support: dict[str, Any] | None,
@@ -234,13 +263,17 @@ def evaluate_realtime_signal(
     auction_exp_ok = (_floor_ok and auction_amount_yi >= _exp_need) if auction_amount_min_yi > 0 else True
     auction_super_ok = (_floor_ok and auction_amount_yi >= _super_need) if auction_amount_super_yi > 0 else True
     high_gap_caution = gap_pct is not None and gap_pct > caution_gap_pct
+    # 板块联动门（2026-10-22）：昨日确认独苗 × 今早无同方向助攻。
+    # soft 模式只拦 1~2 板，strict 才扩到高标；缺竞价同伴数据不会伪称“0红开”。
+    _linkage_gate = _theme_linkage_gate(base, record, sector_support)
     # 孤军高开门（2026-08-24）：gap≥3% 孤军高开 + 板块0红开 → 优先于一切 buy/极端高开判定
     _lone_gate = _lone_high_open_gate(base, sector_support, gap_pct)
+    _support_gate = _linkage_gate or _lone_gate
 
     # 超预期：涨幅达标 + 量能达标（超预期线）-> 直接买入
     if super_gap_ok and auction_super_ok:
-        if _lone_gate:
-            return _lone_gate
+        if _support_gate:
+            return _support_gate
         if high_gap_caution:
             return {
                 **base,
@@ -264,8 +297,8 @@ def evaluate_realtime_signal(
     # 符合预期：涨幅落预期区间 + 量能达标（预期线）-> 直接买入
     # 或贴近预期上沿（gap 超 hi ≤0.5pp 且未达 super）→ 同样按符合预期买入
     if (expected_ok or expected_near_hi) and auction_exp_ok:
-        if _lone_gate:
-            return _lone_gate
+        if _support_gate:
+            return _support_gate
         if high_gap_caution:
             return {
                 **base,
@@ -289,8 +322,8 @@ def evaluate_realtime_signal(
 
     # 超预期涨幅达标但量能不达标 -> 回退检查预期线（super → expected fallback）
     if super_gap_ok and not auction_super_ok:
-        if _lone_gate:
-            return _lone_gate
+        if _support_gate:
+            return _support_gate
         # 超线涨幅但极端高开(>5%)：无论量能，先观察不硬拒（用户2026-08-13：除非>5cm）
         if high_gap_caution:
             return {
@@ -340,8 +373,8 @@ def evaluate_realtime_signal(
 
     # 涨幅落预期区间但量能不达标 -> 低于预期（极端高开>5% 例外，降级观察）
     if expected_ok and not auction_exp_ok:
-        if _lone_gate:
-            return _lone_gate
+        if _support_gate:
+            return _support_gate
         if high_gap_caution:
             return {
                 **base,
@@ -366,8 +399,8 @@ def evaluate_realtime_signal(
     # 即价格超过预期上限、且涨幅≤5% 即直接买入；量能偏弱仅作备注提示，不阻断买入（量能门槛已从本档移除）。
     if (expected_range and gap_pct is not None and gap_pct > float(expected_range[1])
             and (super_gap_min is None or gap_pct < float(super_gap_min))):
-        if _lone_gate:
-            return _lone_gate
+        if _support_gate:
+            return _support_gate
         if high_gap_caution:
             return {
                 **base,

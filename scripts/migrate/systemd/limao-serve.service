@@ -1,0 +1,21 @@
+[Unit]
+Description=Limao terminal read-only server (serve.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__ROOT__/current
+# ⚠️ serve.py 默认去同级 `狸猫终端/dist` 找前端；服务器上没有那个目录，必须显式指定
+Environment=LIMAO_DIST_DIR=__ROOT__/current/dist
+Environment=SHARE_HOST=127.0.0.1
+Environment=SHARE_PORT=8000
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__PY__ __ROOT__/current/serve.py
+Restart=always
+RestartSec=3
+StandardOutput=append:__ROOT__/logs/serve.log
+StandardError=append:__ROOT__/logs/serve.err
+
+[Install]
+WantedBy=default.target

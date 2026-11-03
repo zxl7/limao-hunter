@@ -64,5 +64,5 @@ def test_missing_code_not_dropped():
 
 
 def test_empty_and_bad_shapes():
-    assert ip.parse_pool({}, "broken_pool") == {"count": 0, "names": []}
-    assert ip.parse_pool({"broken_pool": {"data": "not a list"}}, "broken_pool") == {"count": 0, "names": []}
+    assert ip.parse_pool({}, "broken_pool") == {"count": 0, "names": [], "items": []}
+    assert ip.parse_pool({"broken_pool": {"data": "not a list"}}, "broken_pool") == {"count": 0, "names": [], "items": []}

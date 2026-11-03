@@ -1,0 +1,26 @@
+# 狸猫终端 · nginx 反向代理片段
+# 装法：sudo ln -s /etc/nginx/sites-available/limao.conf /etc/nginx/sites-enabled/ && sudo nginx -t && sudo systemctl reload nginx
+#
+# ⛔ 监听 8080 而不是 80：这台服务器的 80 已被 oscarwl.icu 站点占用，抢端口会打挂现有站点。
+# 想要不带端口的域名，需在域名解析加 A 记录后，把下面 server 的 listen 改成 80 并配 server_name。
+
+server {
+    listen __PORT__;
+    listen [::]:__PORT__;
+    server_name __SERVER_NAME__;
+
+    # 站点体积小，但 JSON 有 850KB 级别的，开 gzip 明显更快；
+    # serve.py 自身也压，这里只对静态资源补一层
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 60s;
+    }
+}

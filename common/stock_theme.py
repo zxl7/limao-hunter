@@ -18,11 +18,17 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 # 依赖公共层（架构 P0 复用优先）
 from common.http_client import http_get
+from common.json_io import load_json, save_json
 
 # 选股宝 surge_stock 接口（盘中活·盘后关闭属正常；返回结构 2026-08-17 已兼容双形态）
 XGB_BASE = "https://flash-api.xuangubao.cn/api"
@@ -96,6 +102,161 @@ THEME_KEYWORDS: list[tuple[str, str, str]] = [
 # 热度等级阈值（题材热度 = 所在板块涨停数，来自入参 sector_zt_count）
 HEAT_HOT_ZT = 5    # 板块 ≥5 涨停 → H 高热
 HEAT_MID_ZT = 3    # 板块 ≥3 涨停 → M 中热
+
+# ============================================================================
+# 题材映射快照（P0 · 2026-10-18 用户「按顺序处理」）
+# ----------------------------------------------------------------------------
+# 【为什么要有这层】`fetch_all()` 走**实时接口**，返回的映射随抓取时刻变化：
+#   同一交易日 15:41 跑一次、之后任何时刻重跑一次，拿到的 theme/plates 可能不同
+#   → core_theme 变 → 板块梯队/板块情绪/题材聚合变 → **同一份涨停池算出两套候选**。
+#   2026-10-16 实证：同一涨停池(61只)+同一 env(2.0退潮ice)+同一 latest.json 重跑，
+#   长城军工 raw 54.51→58.28、尖峰集团 63.48→61.29，接力池从
+#   [晨曦航空, 尖峰集团] 变成 [冰山冷热, 新华文轩]。**决策不可复现 = 无法审计、无法改进。**
+#
+# 【做法】eod 首次抓到映射后落 `cache/theme_snapshot/theme_<date>.json`；
+#   同日重跑/回放/审计**优先读快照**，缺快照才请求接口并落盘。
+#   快照带 fingerprint（sha256 前12位），写进 candidates 供印证"这份候选用的哪份映射"。
+#
+# 【可逆开关】
+#   THEME_SNAPSHOT_ENABLED=0        → 整体关闭，退回旧行为（每次都实时抓）
+#   THEME_SNAPSHOT_FORCE_REFRESH=1  → 强制实时抓并覆盖快照（接口补数据时手动用）
+#   两个开关都只读环境变量、不改代码即可回滚。
+# ============================================================================
+THEME_SNAPSHOT_SCHEMA = "theme_map_snapshot_v1"
+THEME_SNAPSHOT_DIRNAME = "theme_snapshot"
+_BJ = timezone(timedelta(hours=8))
+
+
+def _snapshot_enabled() -> bool:
+    return os.environ.get("THEME_SNAPSHOT_ENABLED", "1") not in ("0", "false", "False", "")
+
+
+def _snapshot_force_refresh() -> bool:
+    return os.environ.get("THEME_SNAPSHOT_FORCE_REFRESH", "") in ("1", "true", "True")
+
+
+def _default_cache_dir() -> Path:
+    """项目根 cache/（本文件在 <root>/common/ 下）。"""
+    return Path(__file__).resolve().parents[1] / "cache"
+
+
+def theme_snapshot_dir(cache_dir: str | Path | None = None) -> Path:
+    base = Path(cache_dir) if cache_dir else _default_cache_dir()
+    return base / THEME_SNAPSHOT_DIRNAME
+
+
+def theme_snapshot_path(date: str, cache_dir: str | Path | None = None) -> Path:
+    """`cache/theme_snapshot/theme_<YYYY-MM-DD>.json`（date 为空时用 latest）。"""
+    d = str(date or "").strip() or "latest"
+    return theme_snapshot_dir(cache_dir) / f"theme_{d}.json"
+
+
+def theme_fingerprint(mapping: dict[str, Any]) -> str:
+    """映射内容指纹（sorted keys + 稳定序列化 → sha256 前 12 位）。"""
+    try:
+        blob = json.dumps(mapping, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]
+    except (TypeError, ValueError):
+        return ""
+
+
+def load_theme_snapshot(date: str, *, cache_dir: str | Path | None = None) -> dict[str, Any] | None:
+    """读快照 → {mapping, meta}；不存在/损坏/空映射 → None（调用方回退实时抓）。"""
+    raw = load_json(theme_snapshot_path(date, cache_dir))
+    if not isinstance(raw, dict):
+        return None
+    mapping = raw.get("mapping")
+    if not isinstance(mapping, dict) or not mapping:
+        return None
+    meta = {
+        "source": "snapshot",
+        "snapshot_path": str(theme_snapshot_path(date, cache_dir)),
+        "snapshot_date": raw.get("date") or date,
+        "generated_at": raw.get("generated_at") or "",
+        "count": len(mapping),
+        "fingerprint": raw.get("fingerprint") or theme_fingerprint(mapping),
+        "original_source": raw.get("source") or "live",
+    }
+    return {"mapping": mapping, "meta": meta}
+
+
+def save_theme_snapshot(
+    date: str,
+    mapping: dict[str, Any],
+    *,
+    cache_dir: str | Path | None = None,
+    source: str = "live",
+    overwrite: bool = False,
+) -> Path | None:
+    """落快照（原子写）。默认**不覆盖**已有快照——重跑不得偷改当日决策依据。
+
+    - overwrite=False：快照已存在且非空 → 直接返回原路径（保护首版）
+    - overwrite=True ：强制刷新场景显式覆盖
+    """
+    if not mapping:
+        return None
+    path = theme_snapshot_path(date, cache_dir)
+    if path.exists() and not overwrite:
+        existing = load_json(path)
+        if isinstance(existing, dict) and isinstance(existing.get("mapping"), dict) and existing.get("mapping"):
+            return path
+    payload = {
+        "schema": THEME_SNAPSHOT_SCHEMA,
+        "date": str(date or ""),
+        "generated_at": datetime.now(_BJ).strftime("%Y-%m-%d %H:%M:%S"),
+        "source": source,
+        "count": len(mapping),
+        "fingerprint": theme_fingerprint(mapping),
+        "mapping": mapping,
+    }
+    return path if save_json(path, payload) else None
+
+
+def get_theme_map(
+    date: str,
+    *,
+    cache_dir: str | Path | None = None,
+    fetcher: "ThemeFetcher | None" = None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """**eod 唯一入口**：拿当日题材映射 + 来源元信息（可审计、可复现）。
+
+    返回 `(mapping, meta)`，meta.source ∈
+      - `snapshot`          命中当日快照（重跑/回放/审计走这条，结果与首跑一致）
+      - `live`              首次抓取并落盘
+      - `snapshot_fallback` 强制刷新但接口抓空 → 退回已有快照（不空标注降级）
+      - `empty`             无快照且接口抓空（诚实空标注，不编造）
+      - `disabled`          开关关闭（旧行为）
+    """
+    if not _snapshot_enabled():
+        m = (fetcher or ThemeFetcher()).fetch_all()
+        return m, {"source": "disabled", "count": len(m), "fingerprint": theme_fingerprint(m)}
+
+    force = _snapshot_force_refresh()
+    if not force:
+        snap = load_theme_snapshot(date, cache_dir=cache_dir)
+        if snap:
+            return snap["mapping"], snap["meta"]
+
+    live = (fetcher or ThemeFetcher()).fetch_all()
+    meta: dict[str, Any] = {
+        "count": len(live),
+        "fingerprint": theme_fingerprint(live),
+    }
+    if live:
+        saved = save_theme_snapshot(date, live, cache_dir=cache_dir, source="live", overwrite=force)
+        meta["source"] = "live"
+        meta["snapshot_path"] = str(saved) if saved else ""
+        meta["snapshot_date"] = str(date or "")
+        meta["generated_at"] = datetime.now(_BJ).strftime("%Y-%m-%d %H:%M:%S")
+        meta["original_source"] = "live"
+        return live, meta
+
+    snap = load_theme_snapshot(date, cache_dir=cache_dir)
+    if snap:
+        snap["meta"]["source"] = "snapshot_fallback"
+        return snap["mapping"], snap["meta"]
+    meta["source"] = "empty"
+    return {}, meta
 
 
 class ThemeFetcher:

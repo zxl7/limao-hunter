@@ -230,6 +230,47 @@ def test_row_error_cap_prevents_flood(tmpdir_):
     assert any("行级问题共 20 处" in e for e in errs), errs
 
 
+# ── zt 盘中快照形态（intraday_only）契约 ────────────────────────────────
+ZT_INTRADAY = {
+    "date": "2026-10-15", "date_raw": "20261015", "intraday_only": True,
+    "intraday_points": [
+        {"window": "09:30", "ts": "2026-10-15 09:59",
+         "themes": {"医药": 3, "算力硬件/PCB": 3, "其他": 6, "电网": 2},
+         "total": 21, "max_boards": 5},
+        {"window": "10:00", "ts": "2026-10-15 10:20",
+         "themes": {"算力硬件/PCB": 5, "其他": 9, "医药": 4, "电网": 2},
+         "total": 26, "max_boards": 5},
+    ],
+}
+
+
+def test_zt_intraday_shape_passes(tmpdir_):
+    """盘中快照（theme_data 写、theme_series 消费）应走盘中契约，不被日频契约误杀。"""
+    ok, errs = _check(tmpdir_, "zt_2026-10-15.json", ZT_INTRADAY)
+    assert ok, errs
+
+
+def test_zt_intraday_missing_points_fails(tmpdir_):
+    obj = json.loads(json.dumps(ZT_INTRADAY))
+    obj.pop("intraday_points")
+    ok, errs = _check(tmpdir_, "zt_2026-10-15.json", obj)
+    assert not ok and any("intraday_points" in e for e in errs), errs
+
+
+def test_zt_intraday_point_bad_ts_fails(tmpdir_):
+    obj = json.loads(json.dumps(ZT_INTRADAY))
+    obj["intraday_points"][0]["ts"] = "刚刚"
+    ok, errs = _check(tmpdir_, "zt_2026-10-15.json", obj)
+    assert not ok and any("intraday_points[0].ts" in e for e in errs), errs
+
+
+def test_zt_intraday_point_nonint_total_fails(tmpdir_):
+    obj = json.loads(json.dumps(ZT_INTRADAY))
+    obj["intraday_points"][0]["total"] = "21"
+    ok, errs = _check(tmpdir_, "zt_2026-10-15.json", obj)
+    assert not ok and any("intraday_points[0].total" in e for e in errs), errs
+
+
 # ── 6. 匹配泛化不得误伤 ────────────────────────────────────────────────
 def test_unrelated_file_in_archive_dir_still_conservative_pass(tmpdir_):
     """top5_history/ 里的 theme_members.json 不在契约内 → 保守通过。"""

@@ -83,12 +83,110 @@ def _xuangubao_date(cache_dir: Path | None = None) -> str:
     return str(raw.get("date") or "").strip()
 
 
+def _registry_read_enabled(cache_dir: Path) -> bool:
+    """只有生产缓存或显式注入 DB 时才启用底库主读，避免夹具串到生产 DB。"""
+    raw = os.getenv("WEALTH_USE_STOCK_REGISTRY", "1").strip().lower()
+    if raw in ("0", "false", "no", "off", "n"):
+        return False
+    try:
+        if cache_dir.resolve() == DEFAULT_CACHE_DIR.resolve():
+            return True
+    except OSError:
+        pass
+    return bool(os.getenv("LIMAO_REGISTRY_DB", "").strip())
+
+
+def _load_registry_xuangubao(raw: dict[str, Any], cache_dir: Path) -> dict[str, Any] | None:
+    """以底库为个股事实主读，旧快照仅补充尚未结构化的涨停字段。"""
+    if not _registry_read_enabled(cache_dir):
+        return None
+    date10 = str(raw.get("date") or "").strip()[:10]
+    if not date10:
+        return None
+    try:
+        from .stock_registry_reader import get_daily_facts, get_stock
+
+        rows = get_daily_facts(date10, date10, only_limit_up=True)
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    supplements = {
+        str(item.get("code") or "").strip(): item
+        for item in (raw.get("zt_list") or [])
+        if isinstance(item, dict) and str(item.get("code") or "").strip()
+    }
+    ztgc: list[dict[str, Any]] = []
+    code2themes: dict[str, list[str]] = {}
+    sector_counter: dict[str, int] = {}
+    for item in rows:
+        code = str(item.get("code") or "").strip()
+        if len(code) != 6:
+            continue
+        old = supplements.get(code, {})
+        stock = get_stock(code) or {}
+        tags = stock.get("tags") if isinstance(stock.get("tags"), dict) else {}
+        themes = []
+        for key in ("theme", "concept", "sector", "board"):
+            values = tags.get(key) or []
+            if isinstance(values, str):
+                values = [values]
+            themes.extend(str(value).strip() for value in values if str(value).strip())
+        legacy_sector = str(old.get("sector") or "").strip()
+        if legacy_sector:
+            themes.append(legacy_sector)
+        themes = sorted(set(themes))
+        industry = str(stock.get("industry") or item.get("industry") or legacy_sector or "").strip()
+        row = {
+            "dm": code,
+            "mc": str(stock.get("name") or item.get("name") or old.get("name") or "").strip(),
+            "zf": float(item.get("pct") if item.get("pct") is not None else old.get("pct") or 0.0),
+            "lbc": int(item.get("boards") if item.get("boards") is not None else old.get("boards") or 1),
+            "fbt": str(old.get("fbt") or "").strip() or None,
+            "zbc": int(old.get("zbc") or 0),
+            "hs": float(item.get("hs") if item.get("hs") is not None else old.get("hs") or 0.0),
+            "hy": industry or "其他",
+            "is_20cm": bool(stock.get("is_20cm") if stock.get("is_20cm") is not None else old.get("is_20cm")),
+            "zj": float(item.get("seal_yi") if item.get("seal_yi") is not None else old.get("seal") or 0.0) or None,
+            "lbt": None,
+            "price": float(item.get("price") if item.get("price") is not None else old.get("price") or 0.0) or None,
+            "lt": float(old.get("lt_yi") or old.get("lt") or 0.0) or None,
+            "zsz": float(old.get("zsz_yi") or old.get("zsz") or 0.0) or None,
+            "cje": float(old.get("cje_yi") or old.get("cje") or 0.0) or None,
+        }
+        row["is_st"] = _is_st(row["mc"], code)
+        ztgc.append(row)
+        code2themes[code] = themes
+        for theme in themes:
+            if theme != "其他":
+                sector_counter[theme] = sector_counter.get(theme, 0) + 1
+
+    if not ztgc:
+        return None
+    return {
+        "date": date10,
+        "ztgc": ztgc,
+        "code2themes": code2themes,
+        "hot_sectors": [
+            {"name": name, "count": count}
+            for name, count in sorted(sector_counter.items(), key=lambda pair: pair[1], reverse=True)
+        ],
+        "raw": raw,
+        "registry_primary": True,
+    }
+
+
 def _load_xuangubao(cache_dir: Path | None = None) -> dict[str, Any]:
-    """选股宝（yesterday_zt.json）涨停池适配（原 load_zt_pool 主体）。"""
+    """底库主读个股事实，选股宝快照保留为补充字段与原始审计。"""
     cache_dir = cache_dir or DEFAULT_CACHE_DIR
     raw = _load_json(cache_dir / "yesterday_zt.json")
     if not raw:
         return {"date": "", "ztgc": [], "code2themes": {}, "hot_sectors": [], "raw": {}}
+
+    registry_result = _load_registry_xuangubao(raw, cache_dir)
+    if registry_result is not None:
+        return registry_result
 
     zt_list = raw.get("zt_list") or []
     ztgc: list[dict[str, Any]] = []
@@ -208,6 +306,11 @@ def load_environment(cache_dir: Path | None = None) -> dict[str, Any]:
         "up_rate": float(fb.get("up_rate") or 0.0),
         "avg_pct": float(fb.get("avg_pct") or 0.0),
         "now_zt_count": int(fb.get("now_zt_count") or 0),
+        # 市场最高板（2026-10-21 · 92科比「要么做高要么做低」的参照系）：
+        # 纯透传 feedback_matrix 既有字段，⛔ 不新抓、不改任何既有判定。
+        # 中位区由 `core/cycle_phase.mid_band()` 按它算；缺失则中位股闸不裁决。
+        "max_boards": (int(fb["now_max_boards"])
+                       if fb.get("now_max_boards") is not None else None),
         "regime": regime,
         # P0 孤岛打通（2026-08-17）：透传东财次日预期题材（此前仅 load_pulse 有、
         # expectation 层读不到导致纯孤岛）。数据源 = pulse_snapshots/latest.json em_expect。

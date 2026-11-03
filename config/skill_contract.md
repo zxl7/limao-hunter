@@ -16,7 +16,7 @@
 | 总控 | 财神-中枢 | 分诊、证据索引、跨模块定位；不产买卖判断 |
 | 结构化数据 | zxl-stock-realtime / westockdata / hithink-finance / a-stock-short-term | 按当前接口能力取数；保留来源、单位、时间、缺失状态 |
 | 事件与方法论 | stock-catalyst-hunter / a-stock-sentiment / 龙头战法-交易体系 | 催化证据、市场情绪、板块周期分别输出；不直接写交易终态 |
-| 决策研究 | AI操盘手 | 融合环境、方向、股性；盘后给预案，竞价结论经选股执行链 |
+| 决策研究 | 龙头战法交易员（原 AI操盘手） | 融合环境、方向、股性；盘后给预案，竞价结论经选股执行链 |
 | 候选与竞价 | 财神-选股 | pipeline_eod → ai_ledger record → pipeline_verify / pool_call / ai_caliber → build_cards 与账本 |
 | 盘中观测 | 财神-盯盘 | pulse_fetcher.sh → 快照/情绪/异动/时间轴；与盘后候选文件区分 |
 | 复盘与机构卡 | 财神-复盘 / 财神-机构调研 | 消费真实证据生成卡片；复盘骨架读 shared_rules，机构原文为主体 |
@@ -42,6 +42,17 @@
 11. 前置地位比较使用显式asof/cutoff、完整当日池、逐票历史和一次冻结题材；`ENABLE_PRESELECT_STATUS`关闭或上下文不可用时精确退回旧分池及后置处理。输入不得原位改变；旧新诊断仅随未来正常候选产出，不补写生产历史。09-29缺全量冻结题材及历史特征注入，只能做注明缺口的离线重建，不能宣称严格复现或收益有效。
 
 12. 09:25 池内裁决的防守闸门（`core/defense_gate.py`）**只读、不产生 view**，裁决权仍在 `pool_call`。输入四类且各自时点固定：环境＝昨收 `candidates.environment` ＋ 今开 `core.market_open` 双腿；方向资金＝`cache/sector_flow_history/sector_flow_<上一交易日>.json`（题材取 `core_theme` 优先，兜底 `theme_name`→`sector`）；位置＝前一交易日为止的 `cache/zt_history/zt_<交易日>.json` 逐票涨停序列（断板间隔＝交易日历索引差，**空文件＝节假日占位，不进日历**）＋ 候选的 `dev_10d_pct`/`dev_30d_pct`；派发特征＝前一交易日收盘的 `hs`/`seal_amt`/`lt_mktcap`/`fbt`。两类归档**都有缺口**（板块资金实测 09-23/24/25/29 缺；涨停历史 09-04 才起）：缺失、匹配不到、题材名过泛（命中板块 >8）或该票序列不足 2 条一律**不裁决**，不以邻近日期或更大范围代替。裁决链顺序＝宏观到微观（⑧方向 → ⑨位置 → ⑩派发），位置排在派发之前，⛔ 不得调换（否则卡面只说症状、说不出真原因）。门槛与开关单一源在该模块顶部；`pool_call.POOL_CALL_DEFENSE_GATE=False` 逐字回退，子开关 `_DISTRIBUTION`/`_SECTOR_DRAIN`/`_POSITION`/`_ENV` 分别可关。`call_pool` 新增 `zt_series`/`zt_days` 入参（显式传即不读盘，测试隔离用）。10-08 单日样本只够做定向校准（拦下两只亏损票、未误伤当日涨停票），**不构成收益有效性证明**，真伪待后续交易日累计。
+13. **板块联动发布契约**：发布阶段读取 `THEME_LINKAGE_ROLLOUT_STAGE`（`sidecar_record/card_explain/candidate_prefer/auction_gate/strict`），交易纪律读取 `THEME_LINKAGE_CANDIDATE_MODE`（`off/annotate/soft/strict`），两者正交。盘后 `pipeline_eod` 仅写 `linkage_facts_v1`、`linkage_eod_hint_v1` 与展示优先级；09:25 `signal_eval/pool_call` 是唯一可写 `linkage_discipline_v1`、冻结 `pool_call-<交易日>.json` 与影响终态的入口。`candidate_prefer` 不得修改 raw_score、relay/watch、排序、名额、账本或终态。
+14. 同题材成员报价缺失必须写 `unknown`，不等同于无支持。映射、报价、联动门异常默认 fail-open 并留痕，不能阻断既有候选或裁决；仅“完整池确认独苗 + 有效同题材报价均未红开”可拦截。盘中联动展示不得写入或改写次日竞价纪律；复盘不得以收盘后信息回填09:25冻结结论；回测仅按阶段/模式/映射指纹切片评估，不能自动切开关。
+15. 板块趋势共振的候选字段为 `theme_resonance_facts`，其 `schema` 值为 `theme_resonance_facts_v1`，EOD 标注应在最终 enrich 分支之后。趋势因果链仅为待验证的分析框架，非唯一已证因果；逻辑/催化、板块资金、完整池结构、独立价格技术证据分列，单项不等于趋势，也不识别资金身份。当前板块资金主链尚未真实接通，不声称已有；单日净流出只提示当日流出/背离，不称持续退潮。梯队与 `carry` 只归 `structure_status`；当前独立技术未接入，`technical_status=unknown`，当前不生成 `confirmed`。它只可作预案、卡面与复盘解释，禁止改 raw_score、relay/watch、排序、名额、账本或竞价终态；09:25仍仅由 `signal_eval/pool_call` 基于有效报价裁决。缺失或异常标 `unknown` + fail-open，仅提示研究信心不足，不自动降低真实交易 `view` 或删池；资金背离风险不被单股热度或未经核实消息抵消。
+16. 调度角色不因本契约改变时刻：竞价 automation 只负责旁白、准备、兜底或告警；launchd verify 链负责最终裁决、冻结与正式推送。若任务注册表、平台 automation、launchd 现场存在漂移，先核验并由用户确认真源，禁止文档维护时静默改 rrule 或重启服务。
+
+### RSI 研究证据交接（2026-10-27）
+
+- `common/rsi_evidence.py` 为 `rsi_evidence_v1` 计算与质量契约；20日未复权、Wilder、断档重新预热，RSI24缺样本保持空。`asof`只截断交易日期，不证明历史采集时已知，`historical_availability=not_verified`；公司行为未核验，不能直接解释跳变。
+- EOD 在最终候选补强之后追加 `rsi_evidence`，`ENABLE_RSI_EVIDENCE=0` 可关闭。只追加研究字段，不改变排序、池子、仓位、共振状态或竞价终态，不补写旧候选。
+- 操盘手只读入口：`wealth_code/scripts/ai_ledger.py research-input --decision-date YYYY-MM-DD`，读取已落盘候选，校验RSI代码与asof，输出 `operator_research_input_v1`。这不代表定时Agent已调用；缺字段须标未接通，不自动补算或record/settle。
+- 数据底座单票接口返回相同RSI契约；终端优先使用后端正序序列，旧接口回退明确标本地预览。日K `status/recent_bars` 使用严格只读连接，缺库不创建，研究查询支持asof。
 
 ## 副作用边界
 
@@ -76,7 +87,7 @@
 
 ## 保留待确认的策略冲突
 
-- AI操盘手“至少1个participate”与允许空仓、09:25才裁决的关系。
+- 龙头战法交易员“至少1个participate”与允许空仓、09:25才裁决的关系。
 - 周/月持有新需求与既有短线退出表如何衔接；5%入场线不得代替止损参数。
 - gen_candidates 中创业板0.85系数与用户主板/创业板对称参与要求的关系。
 - 缺冻结结果时是否允许bias回退、无预案是否允许机械回退。

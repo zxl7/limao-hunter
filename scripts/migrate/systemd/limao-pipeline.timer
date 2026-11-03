@@ -1,0 +1,11 @@
+[Unit]
+Description=Tick limao pipeline every 30s (self-throttled inside script)
+
+[Timer]
+OnBootSec=120s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Unit=limao-pipeline.service
+
+[Install]
+WantedBy=timers.target

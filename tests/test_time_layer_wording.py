@@ -26,6 +26,29 @@ spec.loader.exec_module(bc)
 
 
 # ── 夹具 ──────────────────────────────────────────────────────────
+
+# ── 分层隔离：本文件只测「跨日时点词平移」────────────────────────────────────
+# ⛔ 2026-10-21：`VERIFY_CARD_LEAN`（收紧段取舍）是**另一层**开关，
+#    与本文所测维度无关。不隔离会让本文件的断言随 lean 默认值漂移
+#    （实测：lean 默认开启后有 1 例因「整段不再渲染」而假红）。
+#    lean 自己的契约在 `tests/test_verify_card_lean.py`。
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _isolate_lean(monkeypatch):
+    monkeypatch.setenv("VERIFY_CARD_LEAN", "0")
+    # ⛔ 2026-10-21：`VERIFY_CARD_HIDE` 是**第三层**（整块不要：回撤/位置/战绩/全局）。
+    #    本文件测的是时点词与分段语义，与「这块显示不显示」无关 —— 不隔离会让
+    #    「🗣️ 全局」相关断言随隐藏默认值假红。隐藏契约在 test_verify_card_lean.py。
+    monkeypatch.setenv("VERIFY_CARD_HIDE", "")
+    # ⛔ 2026-10-21：`VERIFY_CARD_UNIFY_MECH`（机械口径并入 AI 判定）是**第四层**，
+    #    会把机械段从「逐票完整展示」改成「一行口径 + 标题行胶囊」。本文件测的是
+    #    跨日时点词平移，与「机械口径放哪」无关 —— 不隔离会让断言随融合默认值假红。
+    #    融合契约在 `tests/test_verify_card_lean.py`。
+    monkeypatch.setenv("VERIFY_CARD_UNIFY_MECH", "0")
+
+
 def _rec(code, name, status, gap, **extra):
     r = {"code": code, "name": name, "bucket_label": "高标/题材核心",
          "theme": "AI算力", "industry_sector": "消费电子",
@@ -60,6 +83,10 @@ def _ai_view(d, trade_date, views, **extra):
 def _quiet(monkeypatch):
     monkeypatch.setattr(bc, "_core_reversal_block", lambda: None)
     monkeypatch.setattr(bc, "_nav_drawdown_block", lambda m: None)
+    # 🌊 周期块也要隔离（2026-10-21 P1）：它自带「（MM-DD 收盘盘面）」基准标注，
+    # 不隔离会与本文件「旁白基准标注」的断言互相干扰，且会读到真实 feedback_matrix
+    # → 测试结果随生产数据漂移。isolate 掉才能只锁旁白这一件事。
+    monkeypatch.setattr(bc, "_cycle_phase_block", lambda **k: [])
 
 
 # ── 1. 平移规则（单元）─────────────────────────────────────────────

@@ -94,6 +94,7 @@ import os
 import re
 import sqlite3
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
@@ -235,9 +236,62 @@ CREATE TABLE IF NOT EXISTS stock_pending_review(
   created_ts TEXT NOT NULL,
   resolved INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS stock_technical_daily(
+  code TEXT NOT NULL,
+  bar_date TEXT NOT NULL,
+  source TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ok',
+  close REAL,
+  high REAL,
+  low REAL,
+  ma5 REAL,
+  ma10 REAL,
+  ma20 REAL,
+  ret_3d REAL,
+  ret_5d REAL,
+  ret_10d REAL,
+  high_20d REAL,
+  high_60d REAL,
+  high_120d REAL,
+  new_high_20d INTEGER,
+  new_high_60d INTEGER,
+  new_high_120d INTEGER,
+  ma_bullish INTEGER,
+  volume_ratio_5 REAL,
+  data_quality TEXT,
+  trigger TEXT,
+  created_ts TEXT NOT NULL,
+  updated_ts TEXT NOT NULL,
+  PRIMARY KEY(code, bar_date)
+);
+CREATE INDEX IF NOT EXISTS idx_technical_date ON stock_technical_daily(bar_date);
+CREATE INDEX IF NOT EXISTS idx_technical_code ON stock_technical_daily(code, bar_date);
+
+CREATE TABLE IF NOT EXISTS stock_technical_queue(
+  code TEXT NOT NULL,
+  trade_date TEXT NOT NULL,
+  first_enqueued_ts TEXT NOT NULL,
+  last_enqueued_ts TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  trigger TEXT,
+  PRIMARY KEY(code, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_technical_queue_status ON stock_technical_queue(status, trade_date);
 """
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
+
+# 技术派生层：它是可重算的每日快照，不回写客观身份/题材字段。
+TECHNICAL_COLS = (
+    "bar_date", "source", "status", "close", "high", "low",
+    "ma5", "ma10", "ma20", "ret_3d", "ret_5d", "ret_10d",
+    "high_20d", "high_60d", "high_120d", "new_high_20d",
+    "new_high_60d", "new_high_120d", "ma_bullish", "volume_ratio_5",
+    "data_quality", "trigger",
+)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -573,7 +627,8 @@ def connect(db_path: str | Path | None = None, *, create: bool = True,
         if create:
             conn.executescript(_SCHEMA)
             conn.execute(
-                "INSERT OR IGNORE INTO schema_meta(key, value) VALUES('version', ?)",
+                "INSERT INTO schema_meta(key, value) VALUES('version', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (SCHEMA_VERSION,),
             )
     except Exception:
@@ -698,6 +753,7 @@ def upsert_many(
     db_path: str | Path | None = None,
     allow_backfill: bool = False,
     conn: sqlite3.Connection | None = None,
+    enqueue_technical: bool = False,
 ) -> dict[str, Any]:
     """批量增量写入（单事务）。
 
@@ -710,6 +766,7 @@ def upsert_many(
     stamp = _norm_asof(asof_ts)
     summary = {"ok": False, "inserted": 0, "updated": 0, "unchanged": 0,
                "skipped": 0, "rejected": 0, "pending": 0, "reason": ""}
+    seen_codes: set[str] = set()
 
     if not date10:
         summary["reason"] = f"trade_date 无法解析: {trade_date!r}"
@@ -746,11 +803,16 @@ def upsert_many(
                     continue
                 outcome = _apply_one(c, obs, flags, date10, stamp, source)
                 summary[outcome] += 1
+                seen_codes.add(obs["code"])
             c.execute("COMMIT")
             summary["ok"] = True
         except Exception:
             c.execute("ROLLBACK")
             raise
+        if enqueue_technical and seen_codes:
+            q = enqueue_technical_derivatives(seen_codes, trade_date=date10,
+                                              trigger=source, db_path=db_path)
+            summary["technical_enqueued"] = q.get("enqueued", 0)
     finally:
         if own:
             c.close()
@@ -1134,7 +1196,116 @@ def ingest_intraday(*, trade_date: str, asof_ts: str,
     if not obs:
         return {"ok": False, "reason": "无观测", "skipped": 0}
     return upsert_many(obs, trade_date=trade_date, asof_ts=asof_ts,
-                       source="intraday:xuangubao+em", db_path=db_path)
+                       source="intraday:xuangubao+em", db_path=db_path,
+                       enqueue_technical=True)
+
+
+def _xgb_code(value: Any) -> Optional[str]:
+    """选股宝快照代码规范化；无代码时返回 None，不用名称猜代码。"""
+    return normalize_code(value)
+
+
+def build_xgb_snapshot_observations(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    """把已落盘的选股宝盘中快照转换为底库观测（只取样，不落库）。
+
+    可靠映射：
+    - `hot_spots[].stocks` 的 sector → 题材；
+    - `top5[].zt_stocks` 的主题名 → 题材，official.boards → 板块标签；
+    - `limit_up_stocks` 是本轮选股宝已确认的涨停集合，只写正向涨停证据；
+    - `leaders` / `early[].buy` 作为补充命中来源。
+
+    只接收带 code 的个股。名称不能反推代码；同一代码在多个题材出现时合并标签，
+    不创建重复对象。缺失字段由底库的字段级合并规则处理，不覆盖已有值。
+    """
+    if not isinstance(snapshot, dict):
+        return []
+    by_code: dict[str, dict[str, Any]] = {}
+
+    def add(item: Any, *, theme: Any = None, board_tags: list[Any] | None = None,
+            limit_up: bool = False) -> None:
+        if not isinstance(item, dict):
+            return
+        code = _xgb_code(item.get("code") or item.get("symbol"))
+        if not code:
+            return
+        row = by_code.setdefault(code, {"code": code, "themes": [], "boards_tags": [],
+                                        "sectors": []})
+        for key in ("name", "price", "pct", "boards"):
+            value = item.get(key)
+            if value not in (None, "", "-"):
+                row[key] = value
+        if theme not in (None, "", "其他"):
+            values = theme if isinstance(theme, (list, tuple, set)) else [theme]
+            row["themes"].extend(str(x).strip() for x in values if str(x).strip())
+        if board_tags:
+            row["boards_tags"].extend(str(x).strip() for x in board_tags if str(x).strip())
+            # 主表 industry 只在原值缺失时填充；已有行业由原权威来源保留。
+            if not row.get("industry"):
+                first = next((str(x).strip() for x in board_tags if str(x).strip()), None)
+                if first:
+                    row["industry"] = first
+        if limit_up:
+            row["limit_up_now"] = 1
+            row["limit_up_touched"] = 1
+
+    for group in snapshot.get("hot_spots") or []:
+        if not isinstance(group, dict):
+            continue
+        for item in group.get("stocks") or []:
+            add(item, theme=group.get("sector"))
+
+    for group in snapshot.get("top5") or []:
+        if not isinstance(group, dict):
+            continue
+        theme = group.get("name")
+        official = group.get("official") or {}
+        boards = [b.get("name") for b in (official.get("boards") or [])
+                  if isinstance(b, dict) and b.get("name")]
+        for item in group.get("zt_stocks") or []:
+            add(item, theme=theme, board_tags=boards, limit_up=True)
+        add(group.get("leader"), theme=theme, board_tags=boards, limit_up=True)
+        for item in group.get("followers") or []:
+            # 选股宝跟涨表常只给 name/pct，无 code；有 code 时才沉淀。
+            add(item, theme=theme, board_tags=boards)
+
+    for item in snapshot.get("limit_up_stocks") or []:
+        raw_themes = str(item.get("sector") or "").replace("/", "、").split("、")
+        add(item, theme=raw_themes, limit_up=True)
+
+    for item in snapshot.get("leaders") or []:
+        add(item, theme=item.get("sector"))
+    for group in snapshot.get("early") or []:
+        if isinstance(group, dict):
+            add(group.get("buy"), theme=group.get("sector"))
+
+    result: list[dict[str, Any]] = []
+    for row in by_code.values():
+        for key in ("themes", "boards_tags", "sectors"):
+            row[key] = sorted({x for x in row.get(key, []) if x})
+        result.append(row)
+    return result
+
+
+def ingest_xgb_snapshot(snapshot: dict[str, Any], *, trade_date: str | None = None,
+                        asof_ts: str | None = None,
+                        db_path: str | Path | None = None) -> dict[str, Any]:
+    """用选股宝已落盘快照增量填充底库；未命中的个股不动。"""
+    if not registry_enabled():
+        return {"ok": False, "reason": "registry 开关关闭", "skipped": 0}
+    if not isinstance(snapshot, dict):
+        return {"ok": False, "reason": "snapshot 非 dict", "skipped": 0}
+    stamp = _norm_asof(asof_ts or snapshot.get("ts"))
+    if not stamp:
+        return {"ok": False, "reason": "snapshot 缺合法 ts", "skipped": 0}
+    date10 = _coerce_date10(trade_date or stamp[:10])
+    if not date10:
+        return {"ok": False, "reason": "snapshot 缺合法日期", "skipped": 0}
+    obs = build_xgb_snapshot_observations(snapshot)
+    if not obs:
+        return {"ok": False, "reason": "选股宝快照无可识别代码", "skipped": 0}
+    return upsert_many(obs, trade_date=date10, asof_ts=stamp,
+                       source="xuangubao:snapshot", db_path=db_path,
+                       enqueue_technical=True)
 
 
 def ingest_eod_snapshot(snap: dict, *, trade_date: str | None = None,
@@ -1181,7 +1352,8 @@ def ingest_eod_snapshot(snap: dict, *, trade_date: str | None = None,
         return {"ok": False, "reason": "涨停池为空", "skipped": 0}
 
     result = upsert_many(obs, trade_date=date10, asof_ts=stamp,
-                         source="eod:biying_zt", db_path=db_path)
+                         source="eod:biying_zt", db_path=db_path,
+                         enqueue_technical=True)
 
     if _env_flag("STOCK_REGISTRY_EOD_CLOSE_ZERO", "1"):
         try:
@@ -1233,6 +1405,317 @@ def _mark_absent_from_pool(date10: str, stamp: str, pool_codes: set[str],
 # ══════════════════════════════════════════════════════════════════════
 # 查询
 # ══════════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════════════
+# 技术派生层（可重算、按日快照、与客观身份层分离）
+# ══════════════════════════════════════════════════════════════════════
+
+def _technical_schema(conn: sqlite3.Connection) -> None:
+    """为旧库补建技术派生表；CREATE TABLE IF NOT EXISTS 可安全重跑。"""
+    conn.executescript(_SCHEMA)
+
+
+def _float_or_none(value: Any) -> Optional[float]:
+    try:
+        f = float(value)
+        return None if math.isnan(f) or math.isinf(f) else f
+    except (TypeError, ValueError):
+        return None
+
+
+def _pct_change(closes: list[float], days: int) -> Optional[float]:
+    if len(closes) <= days or not closes[-1] or not closes[-1 - days]:
+        return None
+    return round((closes[-1] / closes[-1 - days] - 1.0) * 100.0, 3)
+
+
+def calculate_technical_derivative(code: str, bars: Sequence[dict[str, Any]], *,
+                                   source: str = "tencent:qfq",
+                                   trigger: str = "daily_hit") -> dict[str, Any]:
+    """根据前复权日K计算一票技术快照，不联网、不写库。
+
+    bars 必须按日期升序，字段至少包含 date/close；高低量缺失时只降级对应字段。
+    新高采用「当日收盘/最高价 >= 前一交易日滚动窗口最高」的严格口径，
+    避免把今天自身放进比较窗口而永远得到假新高。
+    """
+    code = normalize_code(code) or str(code)
+    clean = []
+    for bar in bars or []:
+        if not isinstance(bar, dict) or not bar.get("date"):
+            continue
+        close = _float_or_none(bar.get("close"))
+        if close is None:
+            continue
+        clean.append({"date": str(bar["date"])[:10], "close": close,
+                      "high": _float_or_none(bar.get("high")),
+                      "low": _float_or_none(bar.get("low")),
+                      "volume": _float_or_none(bar.get("volume"))})
+    clean.sort(key=lambda x: x["date"])
+    if not clean:
+        return {"code": code, "bar_date": None, "status": "no_data",
+                "source": source, "trigger": trigger,
+                "data_quality": ["missing_kline"]}
+    last = clean[-1]
+    closes = [x["close"] for x in clean]
+    row: dict[str, Any] = {"code": code, "bar_date": last["date"], "source": source,
+                           "status": "ok", "close": last["close"], "high": last["high"],
+                           "low": last["low"], "trigger": trigger, "data_quality": []}
+    for n in (5, 10, 20):
+        row[f"ma{n}"] = round(sum(closes[-n:]) / n, 3) if len(closes) >= n else None
+    row["ret_3d"] = _pct_change(closes, 3)
+    row["ret_5d"] = _pct_change(closes, 5)
+    row["ret_10d"] = _pct_change(closes, 10)
+    highs = [x["high"] if x["high"] is not None else x["close"] for x in clean]
+    for n in (20, 60, 120):
+        key = f"high_{n}d"
+        if len(highs) <= n:
+            row[key] = None
+            row[f"new_high_{n}d"] = None
+        else:
+            prior_max = max(highs[-n-1:-1])
+            row[key] = round(prior_max, 3)
+            row[f"new_high_{n}d"] = 1 if last["high"] is not None and last["high"] > prior_max else 0
+    row["ma_bullish"] = (1 if row["ma5"] is not None and row["ma10"] is not None
+                          and row["ma20"] is not None
+                          and row["ma5"] > row["ma10"] > row["ma20"] else
+                          (0 if row["ma5"] is not None and row["ma10"] is not None
+                           and row["ma20"] is not None else None))
+    volumes = [x["volume"] for x in clean]
+    if last["volume"] is not None and len(volumes) >= 6 and all(v is not None for v in volumes[-6:-1]):
+        avg5 = sum(volumes[-6:-1]) / 5
+        row["volume_ratio_5"] = round(last["volume"] / avg5, 3) if avg5 else None
+    else:
+        row["volume_ratio_5"] = None
+    if len(closes) < 20:
+        row["data_quality"].append("bars_lt_20")
+    if last["high"] is None:
+        row["data_quality"].append("missing_high")
+    if last["volume"] is None:
+        row["data_quality"].append("missing_volume")
+    return row
+
+
+def save_technical_derivative(derivative: dict[str, Any], *,
+                              db_path: str | Path | None = None) -> dict[str, Any]:
+    """幂等写入技术派生层；无 bar_date 的缺数结果只返回，不造一条假日记录。"""
+    code = normalize_code(derivative.get("code"))
+    bar_date = _coerce_date10(derivative.get("bar_date"))
+    if not code or not bar_date:
+        return {"ok": False, "reason": "缺 code/bar_date", "written": False}
+    conn = connect(db_path)
+    try:
+        _technical_schema(conn)
+        now = now_iso()
+        values = {k: derivative.get(k) for k in TECHNICAL_COLS}
+        values["code"] = code
+        values["bar_date"] = bar_date
+        values["source"] = values.get("source") or "unknown"
+        values["status"] = values.get("status") or "ok"
+        values["data_quality"] = json.dumps(values.get("data_quality") or [], ensure_ascii=False)
+        values["updated_ts"] = now
+        values["created_ts"] = now
+        cols = ["code", *TECHNICAL_COLS, "created_ts", "updated_ts"]
+        assignments = [f"{c}=excluded.{c}" for c in [*TECHNICAL_COLS, "updated_ts"]]
+        conn.execute("INSERT INTO stock_technical_daily(" + ",".join(cols) + ") VALUES(" +
+                     ",".join("?" for _ in cols) + ") ON CONFLICT(code,bar_date) DO UPDATE SET " +
+                     ",".join(assignments), tuple(values.get(c) for c in cols))
+        return {"ok": True, "written": True, "code": code, "bar_date": bar_date}
+    finally:
+        conn.close()
+
+
+def get_technical_derivative(code: str, *, bar_date: str | None = None,
+                             db_path: str | Path | None = None) -> Optional[dict[str, Any]]:
+    norm = normalize_code(code)
+    if not norm:
+        return None
+    conn = connect(db_path)
+    try:
+        if bar_date:
+            row = conn.execute("SELECT * FROM stock_technical_daily WHERE code=? AND bar_date=?",
+                               (norm, bar_date)).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM stock_technical_daily WHERE code=? ORDER BY bar_date DESC LIMIT 1",
+                               (norm,)).fetchone()
+        out = dict(row) if row else None
+        if out:
+            try:
+                out["data_quality"] = json.loads(out.get("data_quality") or "[]")
+            except Exception:
+                out["data_quality"] = []
+        return out
+    finally:
+        conn.close()
+
+
+def upsert_technical_derivatives(derivatives: Iterable[dict[str, Any]], *,
+                                  db_path: str | Path | None = None) -> dict[str, Any]:
+    """批量保存技术派生快照，单连接事务写入。"""
+    conn = connect(db_path)
+    written = skipped = 0
+    try:
+        _technical_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for item in derivatives:
+                code = normalize_code(item.get("code")) if isinstance(item, dict) else None
+                date10 = _coerce_date10(item.get("bar_date")) if isinstance(item, dict) else None
+                if not code or not date10:
+                    skipped += 1
+                    continue
+                now = now_iso()
+                vals = {k: item.get(k) for k in TECHNICAL_COLS}
+                vals.update({"code": code, "bar_date": date10, "source": vals.get("source") or "unknown",
+                             "status": vals.get("status") or "ok",
+                             "data_quality": json.dumps(vals.get("data_quality") or [], ensure_ascii=False),
+                             "created_ts": now, "updated_ts": now})
+                cols = ["code", *TECHNICAL_COLS, "created_ts", "updated_ts"]
+                assignments = [f"{c}=excluded.{c}" for c in [*TECHNICAL_COLS, "updated_ts"]]
+                conn.execute("INSERT INTO stock_technical_daily(" + ",".join(cols) + ") VALUES(" +
+                             ",".join("?" for _ in cols) + ") ON CONFLICT(code,bar_date) DO UPDATE SET " +
+                             ",".join(assignments), tuple(vals.get(c) for c in cols))
+                written += 1
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.close()
+    return {"ok": True, "written": written, "skipped": skipped}
+
+
+def enqueue_technical_derivatives(codes: Iterable[str], *, trade_date: str,
+                                   trigger: str = "daily_hit",
+                                   db_path: str | Path | None = None) -> dict[str, Any]:
+    """把当天命中的代码进入技术计算队列；命中来源可重复、队列幂等。"""
+    date10 = _coerce_date10(trade_date)
+    if not date10:
+        return {"ok": False, "reason": "非法 trade_date", "enqueued": 0}
+    normalized = sorted({c for c in (normalize_code(x) for x in codes) if c})
+    if not normalized:
+        return {"ok": True, "enqueued": 0}
+    conn = connect(db_path)
+    try:
+        _technical_schema(conn)
+        now = now_iso()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for code in normalized:
+                conn.execute("""INSERT INTO stock_technical_queue
+                    (code,trade_date,first_enqueued_ts,last_enqueued_ts,status,trigger)
+                    VALUES(?,?,?,?,?,?)
+                    ON CONFLICT(code,trade_date) DO UPDATE SET
+                      last_enqueued_ts=excluded.last_enqueued_ts,
+                      trigger=excluded.trigger,
+                      status=CASE WHEN stock_technical_queue.status='done' THEN 'pending'
+                                  ELSE stock_technical_queue.status END""",
+                             (code, date10, now, now, "pending", trigger))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        return {"ok": True, "enqueued": len(normalized), "trade_date": date10}
+    finally:
+        conn.close()
+
+
+def enqueue_daily_codes(*, trade_date: str, trigger: str = "daily_batch",
+                        db_path: str | Path | None = None) -> dict[str, Any]:
+    """把当天已有逐日观测的全部代码入队，覆盖历史库首次启用技术层的冷启动。"""
+    date10 = _coerce_date10(trade_date)
+    if not date10:
+        return {"ok": False, "reason": "非法 trade_date", "enqueued": 0}
+    conn = connect(db_path)
+    try:
+        codes = [r["code"] for r in conn.execute(
+            "SELECT code FROM stock_daily WHERE trade_date=? ORDER BY code", (date10,)).fetchall()]
+    finally:
+        conn.close()
+    return enqueue_technical_derivatives(codes, trade_date=date10, trigger=trigger,
+                                         db_path=db_path)
+
+
+def technical_queue_codes(*, trade_date: str, status: str = "pending",
+                          db_path: str | Path | None = None) -> list[str]:
+    date10 = _coerce_date10(trade_date)
+    if not date10:
+        return []
+    conn = connect(db_path)
+    try:
+        return [r["code"] for r in conn.execute(
+            "SELECT code FROM stock_technical_queue WHERE trade_date=? AND status=? ORDER BY code",
+            (date10, status)).fetchall()]
+    finally:
+        conn.close()
+
+
+def mark_technical_queue(*, code: str, trade_date: str, status: str,
+                         error: str | None = None,
+                         db_path: str | Path | None = None) -> None:
+    norm, date10 = normalize_code(code), _coerce_date10(trade_date)
+    if not norm or not date10:
+        return
+    conn = connect(db_path)
+    try:
+        conn.execute("UPDATE stock_technical_queue SET status=?, attempts=attempts+1, last_error=? WHERE code=? AND trade_date=?",
+                     (status, error, norm, date10))
+    finally:
+        conn.close()
+
+
+def process_technical_queue(*, trade_date: str, limit: int | None = None,
+                            db_path: str | Path | None = None,
+                            fetcher: Any | None = None,
+                            max_workers: int = 8) -> dict[str, Any]:
+    """盘后处理当天所有命中代码的技术派生队列。
+
+    默认使用统一腾讯前复权日K；测试/离线回放可注入 fetcher(code, n)。
+    这是 best-effort 派生层：缺K线只标记失败，不影响事实底库和盘后主链。
+    """
+    date10 = _coerce_date10(trade_date)
+    if not date10:
+        return {"ok": False, "reason": "非法 trade_date", "queued": 0}
+    codes = technical_queue_codes(trade_date=date10, status="pending", db_path=db_path)
+    if limit is not None:
+        codes = codes[:max(0, int(limit))]
+    if not codes:
+        return {"ok": True, "trade_date": date10, "queued": 0, "written": 0,
+                "failed": 0}
+    if fetcher is None:
+        from common.tencent_kline import fetch_kline_ohlc
+        fetcher = lambda code, n=130: fetch_kline_ohlc(code, n=n)
+
+    def one(code: str) -> tuple[str, dict[str, Any] | None, str | None]:
+        try:
+            bars = fetcher(code, 130)
+            derivative = calculate_technical_derivative(code, bars,
+                                                        source="tencent:qfq",
+                                                        trigger="eod_all_hits")
+            if derivative.get("bar_date"):
+                return code, derivative, None
+            return code, None, "missing_kline"
+        except Exception as exc:  # noqa: BLE001
+            return code, None, str(exc)[:300]
+
+    results: list[tuple[str, dict[str, Any] | None, str | None]] = []
+    workers = max(1, min(int(max_workers or 1), len(codes)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(one, code) for code in codes]
+        for future in as_completed(futures):
+            results.append(future.result())
+    derivatives = [item for _, item, error in results if item is not None and error is None]
+    saved = upsert_technical_derivatives(derivatives, db_path=db_path)
+    failed = 0
+    for code, derivative, error in results:
+        if derivative is not None:
+            mark_technical_queue(code=code, trade_date=date10, status="done", db_path=db_path)
+        else:
+            failed += 1
+            mark_technical_queue(code=code, trade_date=date10, status="error",
+                                 error=error, db_path=db_path)
+    return {"ok": True, "trade_date": date10, "queued": len(codes),
+            "written": saved.get("written", 0), "failed": failed}
+
 
 def is_limit_up_today(row: dict[str, Any]) -> tuple[Optional[int], str]:
     """「今日是否涨停」的统一取用口径 → `(值, basis)`。
@@ -1287,6 +1770,18 @@ def _decorate(row: dict[str, Any], conn: sqlite3.Connection) -> dict[str, Any]:
     #    不比对最新交易日就把 limit_up_close=1 读成"今天涨停"，是明确事故源。
     out["daily_is_latest_trading_day"] = bool(
         row.get("daily_asof_date") and row["daily_asof_date"] == latest_trading_day())
+    tech = conn.execute(
+        "SELECT * FROM stock_technical_daily WHERE code=? ORDER BY bar_date DESC LIMIT 1",
+        (row["code"],)).fetchone()
+    if tech:
+        out["technical"] = dict(tech)
+        try:
+            out["technical"]["data_quality"] = json.loads(
+                out["technical"].get("data_quality") or "[]")
+        except Exception:
+            out["technical"]["data_quality"] = []
+    else:
+        out["technical"] = None
     return out
 
 
@@ -1413,6 +1908,8 @@ def stats(*, db_path: str | Path | None = None) -> dict[str, Any]:
             "daily_rows": one("SELECT COUNT(*) FROM stock_daily") or 0,
             "observations": one("SELECT COUNT(*) FROM stock_observations") or 0,
             "aliases": one("SELECT COUNT(*) FROM stock_name_alias") or 0,
+            "technical_rows": one("SELECT COUNT(*) FROM stock_technical_daily") or 0,
+            "technical_pending": one("SELECT COUNT(*) FROM stock_technical_queue WHERE status='pending'") or 0,
             "pending_review": one(
                 "SELECT COUNT(*) FROM stock_pending_review WHERE resolved=0") or 0,
             "first_seen_min": one("SELECT MIN(first_seen_date) FROM stocks"),
@@ -1444,6 +1941,13 @@ def dump_json(out_path: str | Path | None = None, *, since: str | None = None,
                 "SELECT code, tag_type, tag_value FROM stock_tags"
                 " ORDER BY code, tag_type, tag_value").fetchall():
             tags_by_code.setdefault(t["code"], {}).setdefault(t["tag_type"], []).append(t["tag_value"])
+        # 技术派生一次取每票最新快照，保持投影导出不退化为 N+1 查询。
+        technical_by_code: dict[str, dict[str, Any]] = {}
+        for t in conn.execute(
+                "SELECT t.* FROM stock_technical_daily t "
+                "JOIN (SELECT code, MAX(bar_date) AS max_date FROM stock_technical_daily GROUP BY code) latest "
+                "ON latest.code=t.code AND latest.max_date=t.bar_date").fetchall():
+            technical_by_code[t["code"]] = dict(t)
         items = []
         name_index: dict[str, list[str]] = {}
         for row in rows:
@@ -1473,6 +1977,13 @@ def dump_json(out_path: str | Path | None = None, *, since: str | None = None,
                 "update_count": row["update_count"],
                 "source": row["source"],
             }
+            item["technical"] = technical_by_code.get(row["code"])
+            if item["technical"]:
+                try:
+                    item["technical"]["data_quality"] = json.loads(
+                        item["technical"].get("data_quality") or "[]")
+                except Exception:
+                    item["technical"]["data_quality"] = []
             items.append(item)
             if row["name"]:
                 name_index.setdefault(row["name"], []).append(row["code"])

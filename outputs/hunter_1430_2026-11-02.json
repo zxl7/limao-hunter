@@ -1,0 +1,237 @@
+{
+ "msg_type": "interactive",
+ "card": {
+  "config": {
+   "wide_screen_mode": true
+  },
+  "header": {
+   "template": "red",
+   "title": {
+    "tag": "plain_text",
+    "content": "盘中猎手·增量 | 14:30 | 短剧/互动影游·文投控股+9.80% | 涨停124"
+   }
+  },
+  "elements": [
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "**① 🎯 结论定调**\n**减仓不追·尾盘留现金，明天只做今天首板的低位接力；6 板以上和午后 20cm 高换手票一律不碰。**\n**依据：晋级率 21.3%、炸板率 20.1%，而大业股份、海洋王双双跌停——广度在爆、高度已死。**"
+    }
+   },
+   {
+    "tag": "hr"
+   },
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "**② 📡 信号摘要**\n📉 情绪演变：<text_tag color='red'>8.2/10·偏强 → 9.5/10·亢奋｜转好 +1.3 分（涨停 82→124、昨涨停今均 +2.48%）</text_tag>\n🆕新0　🔥跃升0　↗持续10"
+    }
+   },
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "可买Top3：\n<text_tag color='purple'>华策影视 +14.42% 现价9.68 [短剧/互动影游]</text_tag>\n<text_tag color='purple'>值得买 +14.44% 现价30.99 [AI大模型/智能体]</text_tag>\n<text_tag color='purple'>长盈精密 +11.82% 现价29.24 [机器人]</text_tag>"
+    }
+   },
+   {
+    "tag": "hr"
+   },
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "**③ 🔥 题材与情绪核心**\n<text_tag color='red'>👑 市场总核心：青岛食品 6天6板〔大消费〕｜生命周期：加速（第 6 板，换手 19.6%）</text_tag>\n高位票开始被清算：大业股份、海洋王今天双双跌停，5 板以上只剩两根。"
+    }
+   },
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "<text_tag color='red'>短剧/互动影游 涨停25只〔↗持续〕｜动因：AI漫剧海外用户超1.5亿，付费前十中国厂商占九席</text_tag>\n<text_tag color='red'>文投控股 9天5板 +9.80% 现价2.24〔带领性►·突破性✗·唯一性►〕</text_tag>\n较上卡 13→25 只，13:00 后再封 12 只（华智数媒/因赛集团/捷成股份 14:12 齐封 20cm）；但板块没有新高度，龙头仍是断板回封。"
+    }
+   },
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "<text_tag color='red'>业绩增长 涨停21只〔↗持续〕｜动因：三季报密集披露，净利同比高增</text_tag>\n<text_tag color='red'>桂林三金 3天3板 +10.01% 现价16.48〔带领性✗·突破性✗·唯一性✗〕</text_tag>\n21 只里 18 只是首板，靠业绩数字铺广度不是接力；桂林三金与医药同源，一字封板换手 1.9%。"
+    }
+   },
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "<text_tag color='red'>大消费 涨停14只〔↗持续〕｜动因：扩大内需战略实施方案（2026-2030年）在研究制定</text_tag>\n<text_tag color='red'>东方海洋 9天5板 +9.89% 现价3.11（龙一青岛食品见上，不重复）</text_tag>"
+    }
+   },
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "↗ 机器人 涨停13只｜龙一 襄阳轴承 6板 +10.01%（8天6板·断板回封，14:26 和泰机电补板）\n↗ AI大模型/智能体 涨停10只｜龙一 生意宝 +9.99%，整条线全首板、无连板\n↗ 大金融 涨停5只｜龙一 国金证券 +10.03%，券商首板带动"
+    }
+   },
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "📌 依据：唯一性 中（全场最高 6 板只有青岛食品一家纯连板，文投 5 板、东方海洋 5 板都是断板回封）｜带领性 强（短剧线 25 只居首且午后还在扩）｜突破性 弱（无 7 板以上，两只前高标跌停）"
+    }
+   },
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "📌 明日看点：青岛食品能不能 7 板；短剧线今天 7 只 20cm 新增，明天能不能出 2 板——这决定它是主线还是一日游。"
+    }
+   },
+   {
+    "tag": "hr"
+   },
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "**④ 📡 核心标的·补充广度**\n<text_tag color='red'>澳洋健康 +9.98% 现价6.50〔医药 4天4板〕</text_tag>\n<text_tag color='red'>沪光股份 +10.02% 现价20.43〔机器人 6天3板〕</text_tag>\n<text_tag color='red'>皇台酒业 +10.01% 现价15.60〔白酒 6天3板〕</text_tag>"
+    }
+   },
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "<text_tag color='red'>银之杰 +20.02% 现价26.68〔大金融 首板〕</text_tag>\n<text_tag color='red'>阳光照明 +10.02% 现价4.50〔航天 8天4板〕</text_tag>\n只列盘面事实，不作可买判断；20cm 波动大。"
+    }
+   },
+   {
+    "tag": "hr"
+   },
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "**⑤ 💰 板块资金流向**"
+    }
+   },
+   {
+    "tag": "div",
+    "fields": [
+     {
+      "is_short": true,
+      "text": {
+       "tag": "lark_md",
+       "content": "<text_tag color='red'>华为概念 +92.2亿</text_tag>"
+      }
+     },
+     {
+      "is_short": true,
+      "text": {
+       "tag": "lark_md",
+       "content": "<text_tag color='green'>银行 -22.0亿</text_tag>"
+      }
+     },
+     {
+      "is_short": true,
+      "text": {
+       "tag": "lark_md",
+       "content": "<text_tag color='red'>人工智能 +71.4亿</text_tag>"
+      }
+     },
+     {
+      "is_short": true,
+      "text": {
+       "tag": "lark_md",
+       "content": "<text_tag color='green'>中特估 -18.3亿</text_tag>"
+      }
+     },
+     {
+      "is_short": true,
+      "text": {
+       "tag": "lark_md",
+       "content": "<text_tag color='red'>AI应用 +64.8亿</text_tag>"
+      }
+     },
+     {
+      "is_short": true,
+      "text": {
+       "tag": "lark_md",
+       "content": "<text_tag color='green'>绿色电力 -14.0亿</text_tag>"
+      }
+     },
+     {
+      "is_short": true,
+      "text": {
+       "tag": "lark_md",
+       "content": "<text_tag color='red'>AIGC概念 +57.8亿</text_tag>"
+      }
+     },
+     {
+      "is_short": true,
+      "text": {
+       "tag": "lark_md",
+       "content": ""
+      }
+     },
+     {
+      "is_short": true,
+      "text": {
+       "tag": "lark_md",
+       "content": "<text_tag color='red'>电子 +56.7亿</text_tag>"
+      }
+     },
+     {
+      "is_short": true,
+      "text": {
+       "tag": "lark_md",
+       "content": ""
+      }
+     }
+    ]
+   },
+   {
+    "tag": "hr"
+   },
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "**⑥ 🧠 AI综合研判**\n① 主线定性：\n<text_tag color='purple'>短剧/互动影游 ⭐确定性最强主线</text_tag>\n<text_tag color='blue'>业绩增长 确定性次强</text_tag>\n<text_tag color='yellow'>大消费 只做低位观察</text_tag>"
+    }
+   },
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "② 资金与情绪：\n钱从银行、中字头流向 AI 应用和华为链，指数是被题材抬起来的，不是权重。这种结构明天要么扩散加速，要么一日游——看竞价给答案。"
+    }
+   },
+   {
+    "tag": "div",
+    "text": {
+     "tag": "lark_md",
+     "content": "③ 风险与纪律：\nA. 高位已开始清算：大业股份、海洋王跌停，5 板以上只剩青岛食品、襄阳轴承两根。\nB. 104 只首板是主战场，明天晋级率跌破 20% 就是一日游，不隔夜追高。\nC. 短剧线 7 只 20cm 集中在 14:12-14:13 封板，明天高开即走。\nD. 尾盘不加仓、不接飞刀。"
+    }
+   },
+   {
+    "tag": "note",
+    "elements": [
+     {
+      "tag": "plain_text",
+      "content": "选股宝+东财守护快照｜2026-11-02 14:30行情，14:30情绪｜卡头124为原始家数（剔除科创板及ST后123）；反馈分沿用原始模型口径。"
+     }
+    ]
+   },
+   {
+    "tag": "note",
+    "elements": [
+     {
+      "tag": "plain_text",
+      "content": "⚠️ 本报告基于公开信息分析，投资需谨慎"
+     }
+    ]
+   }
+  ]
+ }
+}

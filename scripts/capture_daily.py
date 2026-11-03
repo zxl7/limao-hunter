@@ -517,14 +517,14 @@ def capture_emotion(today: str) -> dict:
         "date": d.get("date") or today,
         "prev_date": d.get("prev_date"),
         "prev_zt_count": d.get("prev_zt_count"),
-        "zt_count": d.get("zt_count"),
+        "zt_count": d.get("zt_count", d.get("now_zt_count")),
         "promote_rate": d.get("promote_rate"),
         "lb_promote_rate": d.get("lb_promote_rate"),
         "avg_pct": d.get("avg_pct"),
         "up_rate": d.get("up_rate"),
         "nuke_count": d.get("nuke_count"),
         "break_count": d.get("break_count"),
-        "max_boards": d.get("max_boards"),
+        "max_boards": d.get("max_boards", d.get("now_max_boards")),
         "prev_max_boards": d.get("prev_max_boards"),
         "sentiment_score": d.get("sentiment_score"),
         "sentiment_label": d.get("sentiment_label"),
@@ -738,6 +738,24 @@ def audit_archive_date_sets(window: int = ARCHIVE_AUDIT_WINDOW) -> str:
             f"（窗口{win[0]}~{win[-1]}·{len(win)}日·只告警不回补）")
 
 
+def _process_stock_technical():
+    """盘后数据归档完成后，为当天所有命中系统的股票计算技术派生层。
+
+    失败只留日志/队列错误态，不影响既有盘后沉淀链；不产生任何交易结论。
+    """
+    try:
+        from common import stock_registry as registry
+        today = _today()
+        registry.enqueue_daily_codes(trade_date=today, trigger="capture_daily:eod")
+        result = registry.process_technical_queue(trade_date=today)
+        return (f"technical={result.get('queued', 0)}入队/"
+                f"{result.get('written', 0)}写入/"
+                f"{result.get('failed', 0)}失败")
+    except Exception as exc:  # noqa: BLE001 — 派生层不阻断盘后主链
+        print(f"[capture_daily] ⚠️ 技术派生失败(不影响主链): {exc}")
+        return f"technical=ERR:{exc}"
+
+
 def main():
     ERUPT_DIR.mkdir(parents=True, exist_ok=True)
     ZT_DIR.mkdir(parents=True, exist_ok=True)
@@ -942,7 +960,26 @@ def main():
     else:
         th_msg = "top5_history=skip(开关关闭)"
 
-    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {arch_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {gg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | {th_msg} | pruned={removed}")
+    # 12) 全量命中股票技术派生：事实归档、股性、题材库均完成后再算，避免半成品。
+    technical_msg = _process_stock_technical()
+
+    # 13) 🐉 连板日观察台账（2026-10-27 用户「我们要做好每一个连板日的观察」）。
+    #     依赖两件已就绪的产物：① 当日 `zt_history/zt_<date>.json`（本脚本第 2 步写）
+    #     ② 当日题材快照 `theme_snapshot/theme_<date>.json`（15:30 eod 首跑落盘）。
+    #     ⛔ 必须排在盘后链而不是 15:30 的 eod：实测同一交易日 15:30 与 17:18 的涨停池
+    #       会不一致（10-27：42 只 → 41 只，个别票封单 0.24% → 1.65%），
+    #       台账要记**收盘定稿口径**，否则「连板日」会记成盘中的样子。
+    #     ⛔ 失败只降级不阻断（与其余末步同一纪律）。
+    try:
+        import subprocess as _sp
+        _ld = _sp.run([sys.executable, str(Path(__file__).resolve().parent / "board_leader_daily.py"),
+                       "build"], capture_output=True, text=True, timeout=60)
+        _ldl = (_ld.stdout or "").strip().splitlines()[-1:]
+        ld_msg = (_ldl[0][:70] if _ld.returncode == 0 else f"ERR:{_ld.stderr.strip()[:80]}")
+    except Exception as e:
+        ld_msg = f"leader_daily ERR:{e}"
+
+    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {arch_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {gg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | {th_msg} | {ld_msg} | {technical_msg} | pruned={removed}")
 
 
 if __name__ == "__main__":

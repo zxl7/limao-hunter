@@ -92,10 +92,11 @@ def test_eod_card_shows_dynamic_position_two_numbers(monkeypatch):
     assert hits, "盘后卡必须包含动态仓位块"
     body = hits[0]
     # 弱档基数：1 只 / 每只 ≤30% / 总仓 ≤30%；回撤 -19.64% → ×0.2751 → 实际 8.2%
-    assert "按行情档位能给到：最多 1 只 · 每只不超过 30% · 总仓位不超过 30%" in body
+    assert "行情好的话能给到：最多 1 只 · 每只不超过 30% · 总仓位不超过 30%" in body
     assert "实际压到：明天最多同时持有 1 只" in body
     assert "每只不超过 8.2%" in body
-    assert "动态控制不禁买" in body
+    # ⚠️ 2026-10-21：原「·动态控制不禁买」是系统注释词 → 改「按比例收着做」（语义等价）
+    assert "按比例收着做" in body
     fails, _ = ccr.scan(body)
     assert fails == [], f"白话门禁命中机器黑话: {fails}"
 
@@ -109,7 +110,7 @@ def test_eod_card_position_block_uncompressed_when_no_drawdown(monkeypatch):
     assert hits
     assert "明天最多同时持有 3 只 · 每只不超过 50% · 总仓位不超过 100%" in hits[0]
     assert "实际压到" not in hits[0]
-    assert "按行情档位能给到" not in hits[0]
+    assert "行情好的话能给到" not in hits[0]
 
 
 def test_eod_card_position_block_uses_relay_single_source(monkeypatch):
@@ -140,10 +141,30 @@ def test_eod_card_shows_ai_plan_with_bias_only(monkeypatch):
     assert "新经典(603096)" in joined and "4板" in joined
     # 风险段由 `_narr_render` 转成 turquoise 标签并收尾（段名带冒号被剥掉）
     assert "turquoise'>⚠️ 风险</text_tag>：封单很薄、换手 22%" in joined
-    assert "其余 1 只只做观察：超声电子" in joined
+    assert "一般候选 1 只（前排都不达标才轮到）：超声电子" in joined
     # ⛔ 盘后不拍板：不得出现「买入」结论行
     assert ">买入</text_tag>" not in joined
     assert "今日买入" not in joined
+    fails, _ = ccr.scan(joined)
+    assert fails == [], f"白话门禁命中机器黑话: {fails}"
+
+
+def test_eod_card_plan_block_separates_avoid_from_normal(monkeypatch):
+    """「回避」与「一般」必须分开写（2026-10-30 修）。
+
+    ⛔ 回归背景：旧实现把所有非 focus 的票合成一句「其余 N 只只做观察」，
+    明确判「回避」的票会被说成观察票 —— 卡面口径自相矛盾。
+    """
+    plan = dict(_AI_PLAN)
+    plan["views"] = dict(_AI_PLAN["views"])
+    plan["views"]["603200"] = {"name": "洗霸股份", "bias": "avoid",
+                               "reason": "封单只剩 4 万，等于没封。\n⚠️风险：同方向只有它一家。"}
+    card = _build(monkeypatch, None, ai_plan=plan)
+    joined = "\n".join(_texts(card))
+    assert "回避 1 只：洗霸股份" in joined
+    # 回避票不得混进「一般候选」名单
+    _normal_lines = [ln for ln in joined.split("\n") if "一般候选" in ln]
+    assert _normal_lines and all("洗霸股份" not in ln for ln in _normal_lines)
     fails, _ = ccr.scan(joined)
     assert fails == [], f"白话门禁命中机器黑话: {fails}"
 

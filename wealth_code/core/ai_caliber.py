@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -62,8 +61,22 @@ DEFAULT_ENTRY_MAX_GAP = 3.0     # AI 决策缺 entry_max_gap 时的兜底值（�
 #   AI 自定的 entry_max_gap 降级为留痕字段（ai_declared_limit），⛔ 不参与裁决。
 #   与 signal_eval.CAUTION_GAP_PCT = 5.0 同源同值（用户 2026-08-17 定的同一条纪律）。
 USER_ENTRY_MAX_GAP_PCT = 5.0
-# 单票仓位上限（2026-09-14 用户「买入仓位不超过 50%」）——AI 给的操作建议仓位一律裁剪到此。
-MAX_POSITION_PER_STOCK = 0.5
+# 单票仓位上限（2026-09-14 用户「买入仓位不超过 50%」·2026-10-30 再次强调）
+# ⛔ 单一源 = core/risk_limits.MAX_POSITION_PER_STOCK（此处仅转出，禁再写数字）
+#   双路径兜底（`core.*` 与 `wealth_code.core.*` 两种顶层包都要能取到同一个数）
+try:  # noqa: E402
+    from wealth_code.core.risk_limits import (  # noqa: E402
+        MAX_POSITION_PER_STOCK,
+        clamp_per_stock as _rl_clamp_per_stock,
+    )
+except ImportError:  # pragma: no cover
+    from core.risk_limits import (  # type: ignore[no-redef]  # noqa: E402
+        MAX_POSITION_PER_STOCK,
+        clamp_per_stock as _rl_clamp_per_stock,
+    )
+
+# 导入后立即做一次范围守卫：上限必须落在 (0,1] 内（0 会让所有仓位变 None，>1 等于没上限）
+assert 0 < MAX_POSITION_PER_STOCK <= 1.0, "单票仓位上限必须在 (0,1] 内"
 
 # ── 预期区间门（2026-09-17 用户「A 计划」）────────────────────────────────
 # 背景：此前「卡面动态结论」与「账本成交」是**两套独立逻辑**——卡面看预期区间给三档，
@@ -222,17 +235,11 @@ def clamp_position(p: Any, cap: float | None = None) -> float | None:
     （动态方案只在行情转弱时收紧·绝不放大）。
 
     非法/非正/缺失 → None（诚实留空，不编造仓位）。
+
+    ⛔ 2026-10-30：裁剪逻辑收敛到 `core/risk_limits.clamp_per_stock`（单一源），
+       本函数只做转出，避免「同一上限两套实现」各自演化。
     """
-    try:
-        v = float(p)
-    except (TypeError, ValueError):
-        return None
-    if v <= 0:
-        return None
-    _cap = MAX_POSITION_PER_STOCK
-    if isinstance(cap, (int, float)) and cap > 0:
-        _cap = min(_cap, float(cap))
-    return round(min(v, _cap), 4)
+    return _rl_clamp_per_stock(p, cap)
 
 
 def decide(decision: dict | None, gap_pct: float | None,

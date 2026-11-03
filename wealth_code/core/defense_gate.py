@@ -410,16 +410,10 @@ def _boards_of_row(r: dict[str, Any]) -> int:
     return 0
 
 
-def load_zt_series(*, days: int = POSITION_LOOKBACK_DAYS,
-                   upto: str | None = None,
-                   root: Path | None = None) -> tuple[dict[str, list[tuple[str, int]]], list[str]]:
-    """读 `zt_history/` → 逐票涨停序列 + 交易日历。
-
-    返回 `(series, trading_days)`：
-      · series[code] = [(date10, boards), ...] 按日期升序，仅含 ≤ `upto`（依据日 T-1）的记录
-      · trading_days  = 窗口内**真实有涨停票**的交易日升序（空文件＝节假日占位，不计入）
-    ⛔ 缺失/异常 → `({}, [])`（诚实降级，调用方据此不裁决）。
-    """
+def _load_zt_series_legacy(*, days: int = POSITION_LOOKBACK_DAYS,
+                            upto: str | None = None,
+                            root: Path | None = None) -> tuple[dict[str, list[tuple[str, int]]], list[str]]:
+    """旧归档读取实现；显式传 root 时只走这里，供回放和测试隔离。"""
     d = Path(root) if root else ZT_HISTORY_DIR
     if not d.exists():
         return {}, []
@@ -455,6 +449,28 @@ def load_zt_series(*, days: int = POSITION_LOOKBACK_DAYS,
         series = {c: [(d0, b) for d0, b in v if d0 in keep] for c, v in series.items()}
     series = {c: sorted(v, key=lambda x: x[0]) for c, v in series.items() if v}
     return series, days_list
+
+
+def load_zt_series(*, days: int = POSITION_LOOKBACK_DAYS,
+                   upto: str | None = None,
+                   root: Path | None = None) -> tuple[dict[str, list[tuple[str, int]]], list[str]]:
+    """读取统一个股底库的收盘涨停序列，旧归档仅作显式回放/缺料降级。
+
+    ``root`` 是测试/历史回放注入点，传入时保持旧 JSON 读取语义；生产默认
+    优先读 ``stock_registry.stock_daily``，避免业务层继续把 zt_history 当事实主源。
+    """
+    if root is not None:
+        return _load_zt_series_legacy(days=days, upto=upto, root=root)
+    try:
+        from adapters.stock_registry_reader import load_zt_series_from_registry
+
+        series, trading_days = load_zt_series_from_registry(days=days, upto=upto)
+        if series and trading_days:
+            return series, trading_days
+    except Exception:
+        pass
+    # 读取灰度/底库冷启动缺料时，保留旧归档作为可逆降级，不改变裁决结果形状。
+    return _load_zt_series_legacy(days=days, upto=upto)
 
 
 def _high_position(it: dict[str, Any]) -> tuple[bool, dict[str, Any]]:

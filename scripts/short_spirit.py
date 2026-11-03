@@ -20,6 +20,7 @@ import json
 import pathlib
 import re
 import sys
+import time
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path  # 2026-09-04 --send 统一出口用
@@ -152,10 +153,62 @@ BS_EXCLUDE_NAME_KEYS = ("京能", "金能")   # 黑名单（宪法：京能系 /
 ENABLE_SPIRIT_THEME_BACKSEAT = True
 
 ENABLE_SPIRIT_RELAY_HINT = True
-RELAY_HINT_MIN_PCT = 7.5        # 后排可参与票涨幅下限（确保是「强势」而非滞涨跟风）
+RELAY_HINT_MIN_PCT = 7.5        # 后排可参与票涨幅下限（**仅 leaders 兜底路径**用；确保是「强势」而非滞涨跟风）
 RELAY_HINT_MAX_ITEMS = 3        # 后排可参与票最多列几只（防刷屏）
 RELAY_HINT_LADDER_MAX = 4       # 已封板参考行最多列几只
 RELAY_EXCLUDE_NAME_KEYS = ("京能", "金能")   # 黑名单（宪法：京能系 / 金能科技）
+
+# ── 后排「现在能买」真后排池（2026-10-20 用户「推的票都涨停了 没意义」）──────────────
+# 病灶：原 tradable 只从 latest.leaders 取（那是**连板龙头/人气榜**，常年已封板），
+#   加 RELAY_HINT_MIN_PCT=7.5 的门槛 → 低空经济这类「2 家涨停、其余没动」的板块必然全空，
+#   卡面只剩前排（买不进）+ 后排关联（也都封着）→ 对用户等于无信息。
+# 修法：直接取**该板块东财 BK 成分涨幅榜**（一次请求），按「已启动未封 + 放量 + 非断板」筛。
+ENABLE_SPIRIT_RELAY_BACKSEAT = True   # False → 完全不联网，退回旧 leaders 兜底路径（测试默认关）
+RELAY_BACKSEAT_MIN_PCT = 3.0          # 已启动下限：低于 3% 视为没动，不是「可参与」
+RELAY_BACKSEAT_VOL_MIN = 1.3          # 量比下限（缩量不动）
+# ⚠️ 上限放宽到 15 而不是 6：量比 = 当日均量/过去 5 日同时段均量，**开盘半小时天然虚高**
+#   （实测 10-20 09:35 万向钱潮 14 / 杰创智能 6.9 / 保隆科技 95）。卡 6.0 会把真启动票全杀掉，
+#   只剩「没动」的票——正是本次要修的病。真正该挡的爆量（>15）留着。
+RELAY_BACKSEAT_VOL_MAX = 15.0
+RELAY_BACKSEAT_MAX_ITEMS = 2          # 用户口径：推两个就够
+# ⚠️ 2026-10-20 10:30 实测：**主域 `push2.eastmoney.com` 可用，四个子域全 RemoteDisconnected**。
+#   原实现只轮询子域（33/21/98/82）→ 盘中持续抓取失败 → 卡面「该方向已无未封板票」。
+#   那是把「抓不到数据」当成「结论」。主域放第一位，子域做备胎。
+RELAY_BACKSEAT_HOSTS = (
+    "push2.eastmoney.com",
+    "33.push2.eastmoney.com",
+    "21.push2.eastmoney.com",
+    "98.push2.eastmoney.com",
+    "82.push2.eastmoney.com",
+)
+RELAY_BACKSEAT_URL = (
+    "https://{h}/api/qt/clist/get?"
+    "ut=bd1d9ddb04089700cf9c27f6f7426281&pn=1&pz=60&po=1&np=1&fltt=2&invt=2&fid=f3"
+    "&fs=b:{bk}&fields=f2,f3,f6,f8,f10,f12,f14,f21")
+
+# ── 口径融合 · 辨识度 & 溢价可能性（2026-10-20 用户「两个口径融合 并推送辨识度和溢价可能性」）
+# 病灶（用户原话「🔒 后排关联：博敏电子 显示涨幅！！」）：
+#   ① 卡面「🔒 后排关联」只打印 `名字(板数)` —— **连涨幅都没有**（博敏电子裸名一个）；
+#   ② 已封板(pct 来自面板快照) 与 未封板(pct 来自东财实时) **两个源、两个时刻**并排 → 无法比较，
+#      违反宪法「对齐铁律：比较必须同刻」；
+#   ③ 每只票只报「涨了多少」，不报**它是谁**（辨识度）和**明天能给多少溢价** —— 而这才是决策依据。
+# 修法：
+#   ① 一次取板块成分快照 → **已封板与未封板共用同一份 pct/换手/量比**（同源同刻）；
+#   ② 每只票补 辨识度标签（板数/板块龙一/身位/人气榜/炸板）；
+#   ③ 每只票给 溢价可能性（高/中/低 + 依据），依据必须是数得出来的字段。
+ENABLE_SPIRIT_RELAY_ENRICH = True     # False → 卡面回到「裸名 + 无溢价」的改动前形态
+PREMIUM_HIGH = 2.0                    # 溢价打分 ≥ 此值 → 高
+PREMIUM_MID = 0.5                     # ≥ 此值 → 中；其余 → 低
+# 换手率分区（%）：一字锁筹给半档加成，巨量换手是筹码散了
+TURN_LOCK_MAX = 1.5
+TURN_HEALTHY = (2.0, 10.0)
+TURN_HEAVY = 15.0
+# 板块强度分档（今日涨停家数）
+ZT_STRONG = 5
+ZT_WEAK = 2
+# 高度分档（连板数）：2~3 板有晋级空间；≥5 板高位风险
+BOARDS_SWEET = (2, 3)
+BOARDS_HIGH = 5
 # 触发口径（用户原话「捕获到这个板块的强势股涨停时」）：只在卡内含**涨停/接近涨停**信号时给方向；
 # 快速拉升（低强度）不给 —— 避免每张卡都挂一行方向。
 RELAY_TRIGGER_TYPES = ("涨停", "接近涨停")
@@ -500,6 +553,370 @@ def _relay_mark(r, fp, now) -> None:
     p.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _yzt_codes(date_str: str = "") -> set:
+    """昨日涨停票 code 集合（判「断板」用）。读失败 → 空集（降级放行，⛔ 不阻断）。"""
+    try:
+        p = ROOT / "cache" / "yesterday_zt.json"
+        d = json.loads(p.read_text(encoding="utf-8"))
+        if date_str and str(d.get("date") or "") == date_str:
+            return set()          # 同一天（盘中/盘后回放）→ 不是"昨日"，不判断板
+        out = set()
+        for it in (d.get("zt_list") or d.get("stocks") or []):
+            c = str(it.get("code") or it.get("dm") or "").split(".")[0][:6]
+            if c:
+                out.add(c)
+        return out
+    except Exception:
+        return set()
+
+
+def _board_snapshot(bk: str) -> dict | None:
+    """该板块**全成分实时行情快照**（2026-10-20 口径融合新增·一次请求喂所有段）。
+
+    返回 `{code6: {name, pct, vol_ratio, turnover, amount_yi, float_cap_yi}}`；
+    **抓不到返回 None**（=「不知道」），与 `{}`（=「板块确实没数据」）严格区分。
+
+    ⛔ 为什么必须区分 None / {}：卡面曾把抓取失败渲染成
+      「🎯 该方向已无未封板票 → 等明日竞价看不追高」。10-20 10:26 PCB 板即如此——
+      实测该板块 205 只成分、涨幅榜第 4 的矩子科技 +9.99% 明明能买。
+      把「抓不到」当「没有」= 对用户报了一个假结论（宪法①数据即事实）。
+    """
+    if not ENABLE_SPIRIT_RELAY_BACKSEAT or not bk:
+        return None
+    rows = None
+    # 主域 + 四个子域轮询两轮（实测盘中限频是**按时刻**的：同一秒全挂、10 秒后全通）
+    for _round in range(2):
+        for h in RELAY_BACKSEAT_HOSTS:
+            try:
+                d = http_get(RELAY_BACKSEAT_URL.format(h=h, bk=bk), t=5)
+                diff = ((d.get("data") or {}).get("diff") or [])
+                if diff:
+                    rows = diff
+                    break
+            except Exception:
+                continue
+        if rows:
+            break
+        time.sleep(0.6)
+    FETCH_STATUS["relay_backseat"] = {"bk": bk, "ok": bool(rows), "rows": len(rows or [])}
+    if not rows:
+        return None
+
+    snap = {}
+    for r in rows:
+        code = str(r.get("f12") or "")[:6]
+        if not code:
+            continue
+        try:
+            snap[code] = {
+                "name": str(r.get("f14") or ""),
+                "pct": round(float(r.get("f3") or 0), 2),
+                "vol_ratio": round(float(r.get("f10") or 0), 1),
+                "turnover": round(float(r.get("f8") or 0), 2),
+                "amount_yi": round(float(r.get("f6") or 0) / 1e8, 2),
+                "float_cap_yi": round(float(r.get("f21") or 0) / 1e8, 1),
+            }
+        except (TypeError, ValueError):
+            continue
+    return snap
+
+
+def _seal_line(code: str) -> float:
+    """该票涨停线（20cm / 10cm / 北交所 30cm）。"""
+    if code.startswith(("920", "8", "4")):
+        return 30.0
+    return 20.0 if code[:3] in ("300", "301") else 10.0
+
+
+def _rankable(code: str, q: dict) -> bool:
+    """是否参与板块身位排序：ST / 科创板 / 北交所 / 黑名单 不占身位（用户无权限或不做）。"""
+    name = str((q or {}).get("name") or "")
+    if not name or not code:
+        return False
+    if code.startswith("688") or code.startswith(("920", "8", "4")):
+        return False
+    if "ST" in name.upper().replace(" ", "") or "退" in name:
+        return False
+    return not any(k in name for k in RELAY_EXCLUDE_NAME_KEYS)
+
+
+def _relay_seg(it: dict) -> str:
+    """接力段**统一渲染**（2026-10-20 口径融合的呈现层·三段共用·⛔ 不要各写一套）。
+
+    格式：`名字(代码) 涨幅｜辨识度｜溢价中(依据)`
+    为什么必须共用：原来 👑前排 用一套、🎯后排用一套、🔒后排关联只打印名字(板数) →
+    同一个板块三段口径不一，用户看不出谁跟谁比（2026-10-20 用户「博敏电子 显示涨幅！！」）。
+    """
+    code = str(it.get("code") or "")[:6]
+    name = str(it.get("name") or "")
+    s = name + (f"({code})" if code else "")
+    raw_b = str(it.get("boards") or "")
+    if "板" in raw_b:                     # 保留「6天3板」的原始口径（几天几板是辨识度的一部分）
+        s += f" {raw_b}"
+    s += f" {_pct_tag(float(it.get('pct') or 0))}"
+    extras = []
+    tags = [str(t) for t in (it.get("ident") or []) if t]
+    if tags:
+        extras.append("·".join(tags))
+    p = it.get("premium") or {}
+    if p.get("level"):
+        t = f"溢价{p['level']}"
+        if p.get("why"):
+            t += f"({p['why']})"
+        extras.append(t)
+    else:
+        # 溢价算不出（依据不足）→ 至少给换手，⛔ 不拿空结论糊弄
+        turn = float(it.get("turnover") or 0)
+        if turn > 0:
+            extras.append(f"换手{turn:.1f}%")
+    if extras:
+        s += "｜" + "｜".join(extras)
+    return s
+
+
+def _board_backseat(bk: str, zt_codes: set, pushed_codes: set, limit: int = 2,
+                    date_str: str = "", snap: dict | None = None) -> list:
+    """该板块**真后排池**：现在还能买的票（2026-10-20 新增·纯筛选不联网）。
+
+    判据（对应用户「短线精灵逻辑」）：
+      ① 已启动未封：`RELAY_BACKSEAT_MIN_PCT ≤ pct < 涨停线-0.2`
+      ② 放量但不爆量：量比 ∈ [1.3, 15]（缺量比 → 放行，只降权不误杀）
+      ③ **不是断板**：昨日涨停、今日没封 → 属「高度衰减」，⛔ 不算后排可买
+      ④ 排除：ST / 科创板688 / 北交所(920·8x·4x) / 黑名单 / 本轮已推 / 已在涨停清单
+    ⛔ 任何异常（东财限频/断网）→ 返回 []，由调用方退回旧 leaders 兜底路径。盘中链路安全第一。
+    `snap` 传入 → 复用调用方已取的快照（**卡面所有段共用同一份数据 = 同源同刻**）。
+    """
+    if not ENABLE_SPIRIT_RELAY_BACKSEAT or not bk:
+        return []
+    if snap is None:
+        snap = _board_snapshot(bk)
+    if not snap:
+        return []
+
+    yzt = _yzt_codes(date_str)
+    # 身位分母只算「可交易池」：ST / 688 / 北交所不算身位（用户无权限，不参与排序）
+    tradeable_pcts = []
+    for code, q in snap.items():
+        nm = q.get("name") or ""
+        if not nm or code.startswith("688") or code.startswith(("920", "8", "4")):
+            continue
+        if "ST" in nm.upper().replace(" ", "") or "退" in nm:
+            continue
+        tradeable_pcts.append(float(q.get("pct") or 0))
+    out = []
+    for code, q in snap.items():
+        name = q.get("name") or ""
+        if not code or not name:
+            continue
+        if code in zt_codes or code in pushed_codes:
+            continue
+        if code.startswith("688") or code.startswith(("920", "8", "4")):
+            continue
+        if "ST" in name.upper().replace(" ", "") or "退" in name:
+            continue
+        if any(k in name for k in RELAY_EXCLUDE_NAME_KEYS):
+            continue
+        pct = float(q.get("pct") or 0)
+        seal = _seal_line(code)
+        if pct < RELAY_BACKSEAT_MIN_PCT or pct >= seal - 0.2:
+            continue
+        vr = float(q.get("vol_ratio") or 0)
+        if vr and not (RELAY_BACKSEAT_VOL_MIN <= vr <= RELAY_BACKSEAT_VOL_MAX):
+            continue
+        if code in yzt:
+            continue                    # 昨板今断 → 高度衰减，不是后排可买
+        # 板块内实时身位（涨幅排名·仅可交易池）—— 同一份快照里算，不另取数
+        rank = 1 + sum(1 for p2 in tradeable_pcts if p2 > pct)
+        out.append({"name": name, "code": code, "pct": round(pct, 2),
+                    "turnover": round(float(q.get("turnover") or 0), 2),
+                    "vol_ratio": vr,
+                    "amount_yi": float(q.get("amount_yi") or 0),
+                    "float_cap_yi": float(q.get("float_cap_yi") or 0),
+                    "rank": rank, "state": "open", "sealed": False})
+    out.sort(key=lambda x: -x["pct"])
+    return out[:limit]
+
+
+def _parse_boards(v) -> int:
+    """连板数解析：`'6天3板'` → **3**（⛔ 不能取第一个数字，取 6 会把 3 板票说成 6 板）。
+
+    兼容 `3` / `'3板'` / `'4天3板'` / `''` / `None`。解析不出 → 0（⛔ 不猜）。
+    """
+    if isinstance(v, int):
+        return v
+    s = str(v or "")
+    m = re.search(r"(\d+)\s*板", s)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"(\d+)", s)
+    return int(m.group(1)) if m else 0
+
+
+def _relay_board_ctx(d) -> dict:
+    """板块上下文（辨识度/溢价要用到的**面板侧权威字段**·2026-10-20 新增）。
+
+    ⛔ 全部只读 `latest.json`，不联网。字段缺失就给空值，⛔ 绝不猜。
+      boards     : 名字 → 连板数（真源 = 面板 `ladder` 连板天梯；辅以 limit_up_stocks.boards）
+      broken     : 今日炸过板的名字集（溢价要扣分 —— 炸过板 = 筹码松过）
+      leaders    : 人气榜 code 集（辨识度加分）
+      zt_names   : 今日涨停名字集（判封板用）
+      max_boards : 全市场最高板（判「是不是总龙头」）
+    """
+    out = {"boards": {}, "broken": set(), "leaders": set(),
+           "zt_names": set(), "max_boards": 0, "max_boards_count": 0}
+    try:
+        # 连板天梯：`[{"boards":4,"stocks":["吉大正元"]}, ...]` —— 板数唯一权威
+        for row in (d.get("ladder") or []):
+            if not isinstance(row, dict):
+                continue
+            nb = row.get("boards")
+            try:
+                nb_i = int(nb)
+            except (TypeError, ValueError):
+                continue
+            for nm in (row.get("stocks") or []):
+                nm = str(nm or "").strip()
+                if nm:
+                    out["boards"][nm] = max(out["boards"].get(nm, 0), nb_i)
+                    out["max_boards"] = max(out["max_boards"], nb_i)
+        # 涨停清单里的 boards（"3天2板" 形式）
+        for x in (d.get("limit_up_stocks") or []):
+            nm = str(x.get("name") or "").strip()
+            if not nm:
+                continue
+            out["zt_names"].add(nm)
+            b = x.get("boards")
+            if not b:
+                continue
+            nb = _parse_boards(b)
+            if nb and nb > out["boards"].get(nm, 0):
+                out["boards"][nm] = nb
+                out["max_boards"] = max(out["max_boards"], nb)
+        br = d.get("broken")
+        if isinstance(br, dict):
+            out["broken"] = {str(n).strip() for n in (br.get("names") or []) if n}
+        for l in (d.get("leaders") or []):
+            c = str(l.get("code") or "").split(".")[0][:6]
+            if c:
+                out["leaders"].add(c)
+        # 最高板是否唯一（并列最高 = 分歧，不叫龙一/总龙头 → 卡面不写）
+        out["max_boards_count"] = sum(
+            1 for v in out["boards"].values() if v == out["max_boards"]) if out["max_boards"] else 0
+    except Exception as e:      # ⛔ 上下文异常不得影响接力段
+        print(f"[short_spirit] 接力上下文降级(已忽略): {e}")
+    return out
+
+
+def _ident_tags(item: dict, ctx: dict) -> list:
+    """辨识度标签（用户「推送辨识度」·只写数得出来的事实，⛔ 不形容词堆砌）。
+
+    判定顺序 = 体系口径：板数（高度）→ 龙一（身位）→ 人气榜 → 炸板。
+    """
+    tags = []
+    code = str(item.get("code") or "")[:6]
+    name = str(item.get("name") or "")
+    nb = ctx["boards"].get(name) or int(item.get("boards_n") or 0)
+    # ⛔ 原始板数串（`6天3板` 含「几天」信息，比裸「3板」有意义：3天2板=洗过盘）
+    #    → 有原串时由 `_relay_seg` 直接打在代码后面，此处不重复。
+    has_raw = "板" in str(item.get("boards") or "")
+    if nb >= 2 and not has_raw:
+        tags.append(f"{nb}板")
+    elif nb == 1 and not has_raw:
+        tags.append("首板")
+    elif nb == 0 and item.get("sealed") and name in ctx.get("zt_names", ()):
+        # 在今日涨停清单、又不在连板天梯（天梯只收 2 板+）→ **首板**（推断有依据，不是猜）
+        tags.append("首板")
+    # 板块龙一 = 板块内**唯一**最高板。⛔ 并列最高不写（并列 = 分歧，不是龙头）
+    if nb >= 2 and nb >= int(item.get("sector_max_boards") or 0) \
+            and int(item.get("sector_max_count") or 0) <= 1:
+        tags.append("板块龙一")
+    # 总龙头 = 全市场最高板（宪法口径：只做总龙头/最高辨识度）
+    if nb >= 2 and nb >= int(ctx.get("max_boards") or 0) \
+            and int(ctx.get("max_boards_count") or 0) <= 1:
+        tags.append("全场最高")
+    if code in ctx["leaders"]:
+        tags.append("人气榜")
+    if name in ctx["broken"]:
+        tags.append("炸过板")
+    r = item.get("rank")
+    if isinstance(r, int) and r > 0:
+        if r == 1:
+            tags.append("板块第1")
+        elif r <= 5:
+            tags.append(f"板块第{r}")
+    return tags
+
+
+def _premium(item: dict, ctx: dict) -> dict | None:
+    """溢价可能性（用户「推送溢价可能性」·2026-10-20 新增）。
+
+    回答的是「**明天竞价能拿多少溢价**」——已封板票是明天的预期，未封板票是「封住之后的预期」。
+
+    打分依据全部是**数得出来的字段**（⛔ 无封单数据，故不拿封单说事）：
+      板块强度  +1（≥5 家涨停）/+0.5（≥3 家）/ −1（≤2 家·独苗没人接）
+      换手分区  +1（2%~10%·分歧中上行）/ +0.5（<1.5%·一字锁筹）/ −1（>15%·筹码散了）
+      高度分档  +1（2~3 板·有晋级空间）/ −1（≥5 板·高位风险）
+      板块身位  +0.5（前 3）
+      炸过板    −1.5（筹码松过一次，次日竞价易低开）
+    返回 `{"level": "高|中|低", "why": "板块3家·换手4.4%·首板"}`；
+    **依据不足（换手/家数都拿不到）→ 返回 None，卡面不显示溢价**，⛔ 不编。
+    """
+    if not ENABLE_SPIRIT_RELAY_ENRICH:
+        return None
+    score = 0.0
+    why = []
+    zt = int(item.get("sector_zt") or 0)
+    turn = float(item.get("turnover") or 0)
+    nb = int(ctx["boards"].get(str(item.get("name") or "")) or item.get("boards_n") or 0)
+    name = str(item.get("name") or "")
+
+    evidence = 0
+    if zt >= ZT_STRONG:
+        score += 1.0
+        why.append(f"板块{zt}家")
+        evidence += 1
+    elif zt >= 3:
+        score += 0.5
+        why.append(f"板块{zt}家")
+        evidence += 1
+    elif zt <= ZT_WEAK and zt > 0:
+        score -= 1.0
+        why.append(f"板块仅{zt}家")
+        evidence += 1
+
+    if turn > 0:
+        evidence += 1
+        why.append(f"换手{turn:.1f}%")
+        if TURN_HEALTHY[0] <= turn <= TURN_HEALTHY[1]:
+            score += 1.0
+        elif turn < TURN_LOCK_MAX:
+            score += 0.5          # 一字锁筹：明天大概率高开，但今天买不到
+        elif turn > TURN_HEAVY:
+            score -= 1.0
+
+    if nb >= BOARDS_HIGH:
+        score -= 1.0
+        why.append(f"{nb}板高位")
+    elif BOARDS_SWEET[0] <= nb <= BOARDS_SWEET[1]:
+        score += 1.0
+        why.append(f"{nb}板")
+
+    r = item.get("rank")
+    if isinstance(r, int) and r <= 3:
+        score += 0.5
+
+    if name in ctx["broken"]:
+        score -= 1.5
+        why.append("炸过板")
+
+    if evidence == 0:
+        return None               # 依据不足 → 不给（⛔ 不编）
+    level = "高" if score >= PREMIUM_HIGH else ("中" if score >= PREMIUM_MID else "低")
+    return {"level": level, "why": "·".join(why), "score": round(score, 1)}
+
+
+
+
 def _relay_hint(signals, d):
     """板块接力方向（2026-10-08 用户核心功能·A 盘中即时）。
 
@@ -528,7 +945,7 @@ def _relay_hint(signals, d):
             continue
         ladder.append({"name": x.get("name"), "code": str(x.get("code") or "")[:6],
                        "boards": x.get("boards"), "pct": float(x.get("pct") or 0)})
-    ladder.sort(key=lambda x: (-_b(x["boards"]), -x["pct"]))
+    ladder.sort(key=lambda x: (-_parse_boards(x.get("boards")), -x["pct"]))
     zt_codes = {x["code"] for x in ladder}
 
     # B 档（2026-10-12 用户「取选股宝题材分类下的数据·含已封板」）：
@@ -546,14 +963,33 @@ def _relay_hint(signals, d):
                                        "boards": None, "pct": float(z.get("pct") or 0)})
                         zt_codes.add(c)
                 break
-            ladder.sort(key=lambda x: (-_b(x["boards"]), -x["pct"]))
+            ladder.sort(key=lambda x: (-_parse_boards(x.get("boards")), -x["pct"]))
         except Exception as e:  # ⛔ 盘中链路安全第一：补全异常不得影响 relay 主流程
             print(f"[short_spirit] 后排关联补全降级(已忽略): {e}")
 
-    # ② 后排可参与（leaders 同板块，排除已推/已封/ST/科创/黑名单/涨幅不足）
+    # ② 后排可参与（2026-10-20 重写·用户「推的票都涨停了 没意义」）
+    #    优先级：**真后排池**（该板块东财 BK 成分涨幅榜·已启动未封）→ 取不到才退回旧 leaders 路径。
+    #    ⚠️ 2026-10-20 二改（用户「两个口径融合」）：快照**只取一次**，
+    #       已封板段(ladder)与后排段(tradable)共用同一份 pct/换手/量比 → 同源同刻，可比。
     pushed_codes = {str(s.get("code") or "")[:6] for s in (signals or [])}
     tradable = []
+    backseat_src = ""
+    _bk = ""
+    try:
+        _m = re.search(r"BK\d+", (_official_tag(sector) if _official_tag else "") or "")
+        _bk = _m.group(0) if _m else ""
+    except Exception:
+        _bk = ""
+    snap = _board_snapshot(_bk) if _bk else None     # ⛔ None = 抓不到（≠ 板块没票）
+    if _bk:
+        tradable = _board_backseat(
+            _bk, zt_codes, pushed_codes, RELAY_BACKSEAT_MAX_ITEMS,
+            date_str=str(d.get("date") or ""), snap=snap)
+        if tradable:
+            backseat_src = "board"
     for l in (d.get("leaders") or []):
+        if backseat_src == "board":     # 真后排池已给出 → 不再用连板龙头顶替
+            break
         if not isinstance(l, dict):
             continue
         code = str(l.get("code") or "")[:6]
@@ -571,13 +1007,66 @@ def _relay_hint(signals, d):
         pct = float(l.get("pct") or 0)
         if pct < RELAY_HINT_MIN_PCT:
             continue
-        tradable.append({"name": name, "code": code, "pct": pct})
+        # 兜底路径也吃快照（有快照就用实时值，没有就用 leaders 自带值）
+        q = (snap or {}).get(code) or {}
+        tradable.append({"name": name, "code": code, "pct": pct,
+                         "turnover": float(q.get("turnover") or 0),
+                         "vol_ratio": float(q.get("vol_ratio") or 0),
+                         "state": "open", "sealed": False})
     tradable.sort(key=lambda x: -x["pct"])
+    if tradable and not backseat_src:
+        backseat_src = "leaders"
 
     if not ladder and not tradable:
         return None
 
-    # ③ 前排定位（2026-10-08 用户：「如果他是前排，记得把这个后排也给我标记出来」）：
+    # ③ 口径融合 + 辨识度/溢价（2026-10-20 用户「博敏电子 显示涨幅！！…推送辨识度和溢价可能性」）
+    #    ⛔ 病灶：ladder 原来只有 {name, boards, pct}，卡面还只打印 name(boards) → 博敏电子裸名一个。
+    #    修：ladder 与 tradable 走**同一套 enrich**（同一份快照 + 同一套上下文 + 同一组标签函数），
+    #        卡面再用**同一个渲染函数**输出 → 这才叫「两个口径融合」。
+    ctx = _relay_board_ctx(d)
+    zt_all = len(ladder)
+    # 身位分母：可交易池（ST/688/北交所不参与排序 —— 用户无权限，不该占身位）
+    _rank_pool = [(c2, float(q2.get("pct") or 0)) for c2, q2 in (snap or {}).items()
+                  if _rankable(c2, q2)]
+    if ENABLE_SPIRIT_RELAY_ENRICH:
+        # 第一遍：先把「身份字段」全部落定（ident 依赖 sealed / boards_n，⛔ 顺序不能反）
+        for grp in (ladder, tradable):
+            for it in grp:
+                code = str(it.get("code") or "")[:6]
+                q = (snap or {}).get(code)
+                if q:
+                    # 同源同刻：已封板票也改用快照涨幅（原来用面板 pct，与后排段不同刻 → 不可比）
+                    if q.get("pct") is not None:
+                        it["pct"] = round(float(q["pct"]), 2)
+                    it.setdefault("turnover", round(float(q.get("turnover") or 0), 2))
+                    it.setdefault("vol_ratio", float(q.get("vol_ratio") or 0))
+                it["pct"] = round(float(it.get("pct") or 0), 2)
+                it["boards_n"] = ctx["boards"].get(str(it.get("name") or ""), 0) \
+                    or _parse_boards(it.get("boards"))
+                it["state"] = "sealed" if code in zt_codes else "open"
+                it["sealed"] = it["state"] == "sealed"
+                # 身位：已封板票也要给（原来 ladder 没这个字段 → 卡面只说「已封板」不说第几）
+                if not it.get("rank") and q:
+                    it["rank"] = 1 + sum(1 for _c, _p in _rank_pool if _p > it["pct"])
+                it["rank"] = int(it.get("rank") or 0)
+        # 板块最高板（只认已封板段）→ 并列最高不叫龙一，故要数个数
+        _smb = max([int(x.get("boards_n") or 0) for x in ladder] or [0])
+        _smb_cnt = sum(1 for x in ladder if int(x.get("boards_n") or 0) == _smb) if _smb else 0
+        # 第二遍：辨识度 / 溢价
+        for grp in (ladder, tradable):
+            for it in grp:
+                it["sector_max_boards"] = _smb
+                it["sector_max_count"] = _smb_cnt
+                it["sector_zt"] = zt_all
+                it["ident"] = _ident_tags(it, ctx)
+                it["premium"] = _premium(it, ctx)
+        # ⛔ 排序必须在融合**之后**：口径统一成快照涨幅后，前排要按同一个数排，
+        #    否则会出现「面板 pct 排出来的前排」与「卡面显示的快照 pct」自相矛盾。
+        ladder.sort(key=lambda x: (-int(x.get("boards_n") or 0), -float(x.get("pct") or 0)))
+        tradable.sort(key=lambda x: -float(x.get("pct") or 0))
+
+    # ④ 前排定位（2026-10-08 用户：「如果他是前排，记得把这个后排也给我标记出来」）：
     #    板块内今日身位最高者 = 已封板里板数最高（ladder 已按板数降序）。
     #    卡面顺序 = 谁领涨(前排) → 买谁(后排可参与) → 其余已封板(参考)。
     #    ⛔ 前排只在「已封板」里取；ladder 空时退回本轮信号（罕见：板块在 top5 但无涨停清单）。
@@ -595,6 +1084,10 @@ def _relay_hint(signals, d):
             "front_in_signal": bool(front) and front["code"] in pushed_codes,
             "signal_in_ladder": bool(pushed_codes & zt_codes),
             "ladder": ladder[:RELAY_HINT_LADDER_MAX],
+            "backseat_src": backseat_src,          # board=真后排池 / leaders=旧兜底 / ""=无
+            "backseat_bk": _bk,
+            # ⛔ 关键：快照抓不到 ≠ 板块没有未封板票。卡面据此改口，不出假结论。
+            "backseat_unknown": bool(_bk) and snap is None,
             "tradable": tradable[:RELAY_HINT_MAX_ITEMS]}
 
 
@@ -1344,10 +1837,14 @@ def build_card(signals, sess, now, relay=None, backseat=None):
         fr = relay.get("front") or {}
         fcode = str(fr.get("code") or "")
         if fr.get("name"):
-            fseg = f"{fr['name']}" + (f"({fcode})" if fcode else "")
-            if fr.get("boards"):
-                fseg += f" {fr['boards']}"
-            fseg += f" {_pct_tag(float(fr.get('pct') or 0))}"
+            # 2026-10-20：前排也走统一渲染（带辨识度/溢价）——原来只给「名字 板数 涨幅」
+            if ENABLE_SPIRIT_RELAY_ENRICH:
+                fseg = _relay_seg(fr)
+            else:
+                fseg = f"{fr['name']}" + (f"({fcode})" if fcode else "")
+                if fr.get("boards"):
+                    fseg += f" {fr['boards']}"
+                fseg += f" {_pct_tag(float(fr.get('pct') or 0))}"
             # 本轮这只到底是前排还是后排 —— 用户「逻辑就很清晰」的关键一句
             if relay.get("front_in_signal"):
                 mark = "　← 本轮捕捉"
@@ -1358,18 +1855,37 @@ def build_card(signals, sess, now, relay=None, backseat=None):
             lines.append(f"　👑 前排：{fseg}{mark}")
         tr = relay.get("tradable") or []
         if tr:
-            seg2 = "｜".join(f"{x['name']}({x['code']}) {_pct_tag(x['pct'])}" for x in tr)
-            lines.append(f"　🎯 后排可参与：{seg2}")
+            label = "🎯 后排可参与"
+            if (relay.get("backseat_src") or "") == "board":
+                label += "（未封板·现在能买）"
+            lines.append(f"　{label}：")
+            for x in tr:
+                # ⛔ 每只一行：融合后字段变多，挤一行会看不清（用户要的是能决策的信息密度）
+                if ENABLE_SPIRIT_RELAY_ENRICH:
+                    lines.append(f"　　{_relay_seg(x)}")
+                else:
+                    lines.append(
+                        f"　　{x['name']}({x['code']}) {_pct_tag(float(x['pct'] or 0))}"
+                        + (f" 换手{x['turnover']:.1f}%" if x.get("turnover") else ""))
+        elif relay.get("backseat_unknown"):
+            # ⛔ 抓不到 ≠ 没有。10-20 PCB 板曾把限频渲染成「已无未封板票」，而实际涨幅榜第 4 就能买。
+            lines.append("　🎯 ⚠️ 板块实时行情未取到 → 本段留空（不代表没有未封板票）")
         else:
             lines.append("　🎯 该方向已无未封板票 → 等明日竞价看前排溢价，不追高")
         # 其余已封板（前排与本轮已捕捉的不重复列 → 卡面不自我重复）
         seen = {fcode} | {str(s.get("code") or "")[:6] for s in (signals or [])}
         others = [x for x in (relay.get("ladder") or []) if str(x.get("code") or "") not in seen]
         if others:
-            seg3 = "｜".join(
-                f"{x['name']}({x['boards']})" if x.get("boards") else f"{x['name']}"
-                for x in others)
-            lines.append(f"　🔒 后排关联：{seg3}")
+            label3 = "🔒 后排关联"
+            if ENABLE_SPIRIT_RELAY_ENRICH:
+                label3 += "（已封板·看明日竞价溢价）"
+            lines.append(f"　{label3}：")
+            for x in others:
+                if ENABLE_SPIRIT_RELAY_ENRICH:
+                    lines.append(f"　　{_relay_seg(x)}")
+                else:
+                    lines.append("　　" + (f"{x['name']}({x['boards']})" if x.get("boards")
+                                           else f"{x['name']}"))
     lines.append("")
     return {
         "title": f"短线精灵·异动信号 | {now.strftime('%H:%M')} | 命中{len(signals)}只",

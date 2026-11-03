@@ -1,0 +1,13 @@
+[Unit]
+Description=Limao pipeline SHADOW (writes to shadow/cache, never pushes)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=LIMAO_ROOT=/home/ubuntu/limao/shadow
+Environment=LIMAO_PY=/usr/bin/python3
+Environment=LIMAO_LOG_DIR=/home/ubuntu/limao/shadow/logs
+Environment=SHADOW=1
+Environment=TZ=Asia/Shanghai
+ExecStart=/bin/bash /home/ubuntu/limao/remote_pipeline.sh
+TimeoutStartSec=180

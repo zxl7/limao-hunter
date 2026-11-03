@@ -1,0 +1,11 @@
+[Unit]
+Description=Limao intraday pulse fetcher (30s tick, script self-throttles)
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=__ROOT__/remote_env.sh
+ExecStart=/bin/bash __ROOT__/current/scripts/pulse_fetcher.sh
+TimeoutStartSec=120
+StandardOutput=append:__ROOT__/logs/pulse.log
+StandardError=append:__ROOT__/logs/pulse.err

@@ -71,6 +71,15 @@ NEST_LEVEL = "FAIL"
 #    （按卡片文件名内嵌的生成时刻判定·契约 §1「mtime 不能替代内容日期」）。
 #    ⛔ 测试侧勿另写日期，一律 import 本常量。
 NEST_FAIL_SINCE = "2026-10-14T17:35"
+# 2026-10-21 17:45 用户「这是商业性项目，不要显示解释性质的语录」→ 新增一批机制解释词
+# （机械口径/机械强龙/行情档位/已并到/不另列…）。这批词生效前的历史卡仍带旧文案，
+# ⛔ 不该被追责（那不是「lint 误伤生产卡」，是「历史文件没重跑」）。
+# 用法与 `NEST_FAIL_SINCE` 同：fixture 只取此后的卡判「真实代码生成卡必须全过」。
+PLAIN_MECH_WORDS_SINCE = "2026-10-21T17:45"
+# 2026-10-22 17:30 用户「不要叫惯犯，叫连板/连板龙/老龙头」→ 「惯犯/偶犯」入 Tier-1 阻断。
+# ⛔ 同类举证边界：此前生成的生产卡（含 10-22 15:37 那张盘后卡）里仍带「惯犯」，
+#    那是旧代码产物、不是 lint 误伤。测试一律 import 本常量，只追责此刻之后的卡。
+PLAIN_JUDGE_WORDS_SINCE = "2026-10-22T17:30"
 
 # 允许缺失标题标注的卡类型（脚本类代码生成的已由代码保证；AI 拼卡必须带）
 TITLE_WHITELIST = {"盘中脉搏", "盘中快照", "盘中猎手"}  # 前缀匹配视为必须带标注
@@ -183,6 +192,50 @@ def lint_card(card: dict, fix: bool = False) -> tuple[bool, list[dict], list[dic
                     warns.append({"level": "WARN", "msg": msg})
         except Exception as e:      # 词表缺失/异常不得阻断推送
             warns.append({"level": "WARN", "msg": f"白话门禁执行异常（不阻断）: {e}"})
+
+    # 2.7) ⛔ 禁「研究/调试标注」上卡（2026-10-21 23:01 用户）
+    #      用户原话：「这些研究型的文案！！不要出现在推送的卡片里！！！！！！！」
+    #      事故：我为了给用户看改版效果，在卡片**最前面**插了一行
+    #        `🧪 断板措辞修正 · 已断板不再说「开板就走」，改为盯自己 + 标断板天数 · 10-20 盘后 + 10-21 竞价重渲`
+    #      —— 那是**写给我们自己看的开发说明**，推到了生产/测试群里。读者打开卡片，
+    #      第一眼看到的是「措辞修正」「重渲」，而不是"今天买什么"。
+    #      ⛔ 卡片是交付给读者的成品，不是开发日志。任何"我们改了什么/怎么改的/用什么数据重跑"
+    #         都不属于卡片内容，一律不得上卡（要留档请写 `cache/`、commit message 或记忆文件）。
+    #      ⛔ 这一项**没有观察期、不降级为 WARN**：它是内容性质错误（放错了东西），
+    #         不是措辞风格问题。误伤概率极低（正常卡片不会出现这些词）。
+    _DEV_MARKERS = (
+        # 版本/改版叙述
+        "🧪", "重渲", "重渲染", "改版", "措辞修正", "配色改版", "版式改版",
+        "文案修正", "节流修正", "修正版", "调整版", "新版式",
+        # 改动说明叙述
+        "已清掉", "已移除", "已修复", "本次修改", "改动说明", "变更说明",
+        "已改成", "已改为", "本次改",
+        # 测试/调试标记
+        "测试卡", "测试版", "调试卡", "debug", "DEBUG", "dry-run", "dry run", "干跑",
+        # 数据重跑叙述
+        "盘后 + ", "盘后+", "竞价重渲", "用 10-", "用 09-",
+    )
+    _dev_hits: list[str] = []
+    # ⚠️ 只扫**卡片正文元素**，不扫 title —— title 已有自己的门禁；
+    #    且测试夹具/内部预览常把标题写成「📊 测试卡·增量」，
+    #    扫 title 会把它误判成"开发标注上卡"（实测 test_card_copy_rules 3 例红）。
+    _body_strings: list[str] = []
+    _els = card.get("elements")
+    if not isinstance(_els, list) and isinstance(card.get("card"), dict):
+        _els = card["card"].get("elements")
+    if isinstance(_els, list):
+        walk_strings(_els, _body_strings)
+    else:
+        _body_strings = list(strings)      # 结构未知则退回全量（宁可严一点）
+    for _s in _body_strings:
+        for _m in _DEV_MARKERS:
+            if _m in _s and _m not in _dev_hits:
+                _dev_hits.append(_m)
+    if _dev_hits:
+        _ctx = next((s for s in _body_strings if any(m in s for m in _dev_hits)), "")[:80]
+        errors.append({"level": "FAIL",
+                       "msg": f"禁研究/调试标注上卡（读者只看结论，不看我们改了什么）: "
+                              f"{'、'.join(_dev_hits[:4])} ← {_ctx}"})
 
     # 3) 圆点 emoji 警告
     if DOT_EMOJI_RE.search(t or ""):

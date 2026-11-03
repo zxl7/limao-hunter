@@ -277,10 +277,22 @@ def test_card_render_daily_structure():
     contents = [e["text"]["content"] for e in card["elements"] if e["tag"] == "div"]
     # 结论置底：最后一个 div 含学习建议
     assert "自我学习建议" in contents[-1] or "R1_range_low" in contents[-1]
-    # 语义色板：命中率 0% → green（恶化）
+    # 语义色板：候选命中率 0% → green（恶化）
     first = contents[0]
     assert "green'>0.0%</text_tag>" in first
-    assert "green'>10.0%</text_tag>" in first
+    # ⛔ 2026-10-18 用户拍板：区间命中率不作对错判据 → 卡面只报落区只数，不报比率红绿
+    assert gc.RANGE_HIT_VERDICT is False
+    assert "区间落区 1/10" in first
+    assert "10.0%" not in first
+    # 判决模式（恢复开关）时仍能渲染旧观感
+    orig = gc.RANGE_HIT_VERDICT
+    try:
+        gc.RANGE_HIT_VERDICT = True
+        first_verdict = [e["text"]["content"] for e in gc.render_daily(report, sugs)["elements"]
+                         if e["tag"] == "div"][0]
+        assert "green'>10.0%</text_tag>" in first_verdict
+    finally:
+        gc.RANGE_HIT_VERDICT = orig
     # 无 hex 颜色
     assert "#" not in json.dumps(card, ensure_ascii=False)
 

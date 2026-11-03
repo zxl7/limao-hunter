@@ -247,14 +247,19 @@ def annotate_lone(scored: list[dict[str, Any]], pool: list[dict[str, Any]] | Non
         for em_name, zt_n in em_zt.items():
             if _em_theme_match(th, em_name):
                 em_cnt = max(em_cnt, zt_n)
+        # 保留完整涨停池与东财板块两套观测，不能只取 max 后丢掉来源。
+        # 联动纪律以完整涨停池的 pool_cnt 判“是否独苗”；东财值只作覆盖面/冲突审计，
+        # 防止单个外部异常大值把真实独苗直接写成“板块联动”。
         theme_cnt = max(pool_cnt, em_cnt)
+        it["theme_pool_zt_count"] = pool_cnt
+        it["theme_reported_zt_count"] = em_cnt if em_cnt > 0 else None
         it["theme_mates_cnt"] = theme_cnt
         it["theme_name"] = th
         it["theme_em_name"] = next((em for em, zn in em_zt.items() if _em_theme_match(th, em)), "")
-        it["theme_is_lone"] = theme_cnt <= 1
-        it["theme_has_sector_effect"] = theme_cnt >= 2
-        # 最终孤军 = 行业孤军 且 题材层也无梯队（真·板块无承接）
-        it["sector_is_lone"] = len(members) == 1 and theme_cnt <= 1
+        it["theme_is_lone"] = pool_cnt <= 1
+        it["theme_has_sector_effect"] = pool_cnt >= 2
+        # 旧字段继续保留兼容卡片/旧逻辑；题材是否真独苗改以完整池为准。
+        it["sector_is_lone"] = len(members) == 1 and pool_cnt <= 1
     return scored
 
 

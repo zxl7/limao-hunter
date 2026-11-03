@@ -29,6 +29,11 @@ spec = importlib.util.spec_from_file_location("short_spirit_relay", SCRIPTS / "s
 ss = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ss)
 
+# ⛔ 本文件回归「旧 leaders 兜底路径」的行为，必须断网：
+#   2026-10-20 新增的真后排池会发东财请求（板块 BK 成分），测试里一律关掉，
+#   否则既拖慢用例又引入外部抖动。新路径的覆盖见 tests/test_relay_backseat.py。
+ss.ENABLE_SPIRIT_RELAY_BACKSEAT = False
+
 REAL_DT = ss.datetime
 TODAY = "2026-10-08"
 NOW = REAL_DT(2026, 10, 8, 14, 5)
@@ -208,14 +213,17 @@ def test_build_card_renders_relay_block():
     assert "👑 前排：时代万恒(600241) 4天4板" in body
     assert "（本轮这只属后排）" in body, "本轮捕捉的领湃非前排 → 卡面须点明"
     # ② 后排可参与 = 买谁 + 涨幅（用户核心诉求：「带上可参与后排的涨幅」）
-    #    涨幅走 _pct_tag → 卡面是 `<text_tag color='red'>+16.53%</text_tag>`，故分别断言。
-    back = body.split("🎯 后排可参与：")[1].split("\n")[0]
+    #    2026-10-20 起每只**独立一行**（融合辨识度/溢价后单行挤不下），故按块截取。
+    back = body.split("🎯 后排可参与")[1].split("🔒")[0]
     assert "金银河(300619)" in back and "理奇智能(301599)" in back
     assert "+16.53%" in back and "+11.04%" in back, "后排必须带可参与涨幅"
     # ③ 其余已封板 = 参考（前排/本轮已捕捉的不重复列）
-    assert "🔒 后排关联：" in body and "紫竹高科(3天3板)" in body
-    assert "时代万恒" not in body.split("🔒 后排关联：")[1], "前排不重复出现在后排关联"
-    assert "领湃科技" not in body.split("🔒 后排关联：")[1], "本轮捕捉的不重复出现在后排关联"
+    assert "🔒 后排关联" in body and "紫竹高科(002058) 3天3板" in body
+    tail = body.split("🔒 后排关联")[1]
+    assert "时代万恒" not in tail, "前排不重复出现在后排关联"
+    assert "领湃科技" not in tail, "本轮捕捉的不重复出现在后排关联"
+    # ④ 已封板票**必须带涨幅**（2026-10-20 用户「博敏电子 显示涨幅！！」）
+    assert "+10.00%" in tail, "已封板票不得只给名字，必须带涨幅"
 
 
 def test_build_card_marks_front_when_captured_this_round():

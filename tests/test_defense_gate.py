@@ -611,8 +611,20 @@ def test_verify_card_names_defense_blocked_stocks():
              "ai_view": "watch", "gap_pct": 0.40, "defense_gate": "high_position",
              "pool_reason": "这是第二波反抽，位置已经很高"}}},
     ]
-    blocks = bc._ai_plan_block(raw, records,
-                               pool_summary={"participate": [], "quota": 2, "pool_size": 3})
+    # ⚠️ 2026-10-21 融合后（`VERIFY_CARD_UNIFY_MECH` 默认开）：🛡️ 名单不再单列，
+    #    压成标题行胶囊 `🛡️ 防守拦下（原因）`——理由仍由个股段渲染，不重复。
+    #    本条显式关融合，锁住**回退路径**的旧行为。
+    import os
+    _old = os.environ.get("VERIFY_CARD_UNIFY_MECH")
+    os.environ["VERIFY_CARD_UNIFY_MECH"] = "0"
+    try:
+        blocks = bc._ai_plan_block(raw, records,
+                                   pool_summary={"participate": [], "quota": 2, "pool_size": 3})
+    finally:
+        if _old is None:
+            os.environ.pop("VERIFY_CARD_UNIFY_MECH", None)
+        else:
+            os.environ["VERIFY_CARD_UNIFY_MECH"] = _old
     txt = "\n".join(b.get("text", {}).get("content", "") for b in blocks if b.get("text"))
     assert "🛡️ 竞价达标但没买" in txt
     assert "襄阳轴承(000678)" in txt and "资金一直在往外走" in txt
