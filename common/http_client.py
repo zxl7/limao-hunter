@@ -91,6 +91,88 @@ def _log_sampled(key: str, msg: str) -> None:
         st["count"] += 1
 
 
+# ────────────────────────────────────────────────────────────────
+# 熔断 / per-host 配额 / 告警解耦（数据基座 · 工件 A 增强）
+#
+# 全部「默认关闭」：当且仅当对应环境变量为 "1" 时生效，否则行为与此前
+# 完全一致（_circuit_allow / _rate_allow 恒返回 True，_circuit_record 空操作）。
+# 可逆：unset 环境变量即回退原始无熔断/无限流行为，不破坏任何调用方。
+# ────────────────────────────────────────────────────────────────
+
+# 告警解耦：调用方（守护进程/serve）可注入自己的告警通道（如飞书推卡），
+# 默认 None = 不告警。熔断/限流触发时调用，失败不影响主流程。
+_alert_sink = None
+
+
+def set_alert_sink(fn) -> None:
+    """注入告警回调 fn(msg:str)。传 None 关闭。"""
+    global _alert_sink
+    _alert_sink = fn
+
+
+def _alert(msg: str) -> None:
+    if _alert_sink is not None:
+        try:
+            _alert_sink(msg)
+        except Exception:
+            pass
+
+
+# 熔断器（HTTP_CIRCUIT_BREAKER=1 启用）
+_CIRCUIT_ENABLED = os.getenv("HTTP_CIRCUIT_BREAKER", "") == "1"
+_CB_STATE: dict[str, dict] = {}
+CB_FAILURE_THRESHOLD = 5
+CB_OPEN_SEC = 60
+
+
+def _circuit_allow(host: str) -> bool:
+    if not _CIRCUIT_ENABLED:
+        return True
+    st = _CB_STATE.get(host)
+    if not st or not st.get("opened_at"):
+        return True
+    now = time.time()
+    if now - st["opened_at"] < CB_OPEN_SEC:
+        return False
+    # 熔断窗口已过 → 半开试探一次
+    st["half_open_at"] = now
+    return True
+
+
+def _circuit_record(host: str, success: bool) -> None:
+    if not _CIRCUIT_ENABLED:
+        return
+    st = _CB_STATE.setdefault(host, {"failures": 0, "opened_at": None})
+    if success:
+        st["failures"] = 0
+        st["opened_at"] = None
+    else:
+        st["failures"] += 1
+        if st["failures"] >= CB_FAILURE_THRESHOLD:
+            st["opened_at"] = time.time()
+            _alert(f"[熔断开启] host={host} 连续失败 {st['failures']} 次，{CB_OPEN_SEC}s 内跳过请求")
+
+
+# per-host 令牌桶配额（HTTP_RATE_LIMIT=1 启用）
+_RATE_ENABLED = os.getenv("HTTP_RATE_LIMIT", "") == "1"
+_RATE: dict[str, list[float]] = {}
+RATE_MAX = int(os.getenv("HTTP_RATE_MAX", "20") or "20")
+RATE_WINDOW = float(os.getenv("HTTP_RATE_WINDOW", "1.0") or "1.0")
+
+
+def _rate_allow(host: str) -> bool:
+    if not _RATE_ENABLED:
+        return True
+    now = time.time()
+    ring = _RATE.setdefault(host, [])
+    while ring and now - ring[0] > RATE_WINDOW:
+        ring.pop(0)
+    if len(ring) >= RATE_MAX:
+        return False
+    ring.append(now)
+    return True
+
+
 def http_get(
     url: str,
     t: int = 10,
@@ -148,6 +230,14 @@ def _request(
     req_headers = {"User-Agent": DEFAULT_UA}
     if headers:
         req_headers.update(headers)
+    host = _host_of(url)
+    # 熔断 / per-host 配额（默认关闭时均为放行，行为不变）
+    if not _circuit_allow(host):
+        _alert(f"[熔断] {host} 已开启熔断，本次请求跳过")
+        return None
+    if not _rate_allow(host):
+        _alert(f"[限流] {host} 触发 per-host 配额，本次请求跳过")
+        return None
     data = None
     if method == "POST" and body is not None:
         if isinstance(body, (dict, list)):
@@ -163,19 +253,24 @@ def _request(
             with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
                 raw = resp.read().decode("utf-8")
                 if not parse_json:
+                    _circuit_record(host, True)
                     return raw
                 try:
-                    return json.loads(raw)
+                    obj = json.loads(raw)
+                    _circuit_record(host, True)
+                    return obj
                 except json.JSONDecodeError as e:
-                    _log_sampled(f"json|{_host_of(url)}",
+                    _circuit_record(host, False)
+                    _log_sampled(f"json|{host}",
                                  f"JSON 解析失败 {url[:80]}: {e} (前200字={raw[:200]})")
                     return None
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
             last_err = e
+            _circuit_record(host, False)
             if attempt < retries:
                 time.sleep(RETRY_BACKOFF * (2**attempt))
     # 降噪：同主机 + 同异常类型合并（真实异常仍会落首条，不会被静默吞掉）
-    _log_sampled(f"req|{_host_of(url)}|{type(last_err).__name__}",
+    _log_sampled(f"req|{host}|{type(last_err).__name__}",
                  f"请求失败(重试{retries}次后) {method} {url[:100]} | {last_err}")
     return None
 

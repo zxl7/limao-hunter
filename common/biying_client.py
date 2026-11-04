@@ -28,7 +28,6 @@ Token 绝不写死在本文件或任何项目源码里。读取优先级：
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import sys
@@ -75,18 +74,16 @@ def get_token() -> str:
 
 
 def _http_get(url: str, *, timeout: int = 15) -> Any:
-    req = urllib.request.Request(url, headers=_UA)
-    # ⚠️ SSL 证书过期应急开关（2026-09-08 api.biyingapi.com 证书 09-07 过期）：
-    # HTTP_SSL_VERIFY_NONE=1 时跳过 TLS 校验，与 common.http_client 同款开关，
-    # 上游续期后必须 unset 恢复（默认关闭=零回归）。
-    try:
-        from common.http_client import _ssl_context
+    # 数据基座（工件 A）：底层统一走 common.http_client.http_get，复用其
+    # 重试 / 降噪 / SSL 应急开关 /（可选）熔断与配额，消除此前自实现的 urllib 请求。
+    # 保留 biyingapi 专属 UA + Referer（透传 headers）；失败返回 None 时抛异常，
+    # 与旧行为一致（上层 fetch_* 按异常进行重试/降级）。
+    from common.http_client import http_get
 
-        ctx = _ssl_context()
-    except Exception:
-        ctx = None
-    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    data = http_get(url, t=timeout, headers=dict(_UA))
+    if data is None:
+        raise RuntimeError(f"biyingapi 请求失败(网络/404): {url}")
+    return data
 
 
 def _unwrap(payload: Any) -> Any:

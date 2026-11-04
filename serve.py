@@ -44,6 +44,12 @@ from urllib.parse import urlparse, parse_qs
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
+# 数据基座单一登记处（工件 E）：路由/治理元数据单一真源
+from common import data_catalog
+
+# 严格过期模式（可逆开关）：数据超 stale 阈值直接 404（默认关闭=温和标注）
+_STRICT_STALE = os.getenv("SERVE_STRICT_STALE", "") == "1"
+
 PROJECT_ROOT = HERE  # 狸猫猎手 根目录（routes.ts 的 file 路径以 cache/ 开头，故 DATA_ROOT 指向根）
 DATA_ROOT = os.environ.get("LIMAO_DATA_ROOT") or PROJECT_ROOT
 DIST_DIR = os.environ.get("LIMAO_DIST_DIR") or os.path.normpath(
@@ -55,7 +61,7 @@ SHARE_HOST = os.environ.get("SHARE_HOST", "127.0.0.1")  # 默认只监听本机
 SHARE_PORT = int(os.environ.get("SHARE_PORT", "8000"))
 SHARE_TOKEN = os.environ.get("SHARE_TOKEN") or ""  # 空 = 不鉴权（仅允许本机监听）
 # 2026-10-26 用户要求「持链接即可访问全部业务页面」 ⇒ 默认放开 ai/decision/account。
-# 回退：SHARE_PRIVATE=0 恢复旧行为（这三类 404，其余业务路由照常）。
+# 回退：SHARE_PRIVATE=0 拒绝私有业务路由（含聚合快照），其余业务路由照常。
 SHARE_PRIVATE = (os.environ.get("SHARE_PRIVATE") or "1").strip().lower() not in {"0", "false", "no", "off"}
 LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
 
@@ -159,13 +165,73 @@ def read_route(data_root, defn):
     return None
 
 
+# ────────────────────────────────────────────────────────────────
+# 数据基座增强（工件 C）：投影契约 + 新鲜度标注
+# ────────────────────────────────────────────────────────────────
+def route_freshness(route, defn):
+    """该路由产物的新鲜度（基于 data_catalog 治理元数据 + 实际文件 mtime）。
+    返回 dict：exists / mtime / age_sec / stale(bool|None) / retired / producer / stale_sec。
+    stale=None 表示不检查（retired / manual / on-demand）。"""
+    meta = data_catalog.meta_for(route) or {}
+    target = defn.get("file") or defn.get("dir")
+    if not target:
+        return {"exists": False, "stale": None, "retired": bool(meta.get("retired")),
+                "producer": meta.get("producer"), "stale_sec": meta.get("stale_sec")}
+    abs_p = os.path.join(DATA_ROOT, target)
+    probe = abs_p
+    if not defn.get("file") and defn.get("dir"):
+        names = safe_listdir(abs_p) or []
+        if names:
+            probe = os.path.join(abs_p, sorted(names)[-1])
+        else:
+            return {"exists": False, "stale": None, "retired": bool(meta.get("retired")),
+                    "producer": meta.get("producer"), "stale_sec": meta.get("stale_sec")}
+    try:
+        st = os.stat(probe)
+    except OSError:
+        return {"exists": False, "stale": None, "retired": bool(meta.get("retired")),
+                "producer": meta.get("producer"), "stale_sec": meta.get("stale_sec")}
+    age = int(time.time() - st.st_mtime)
+    stale_sec = meta.get("stale_sec")
+    is_stale = None if stale_sec is None else (age > stale_sec)
+    return {"exists": True, "mtime": st.st_mtime, "age_sec": age,
+            "stale": is_stale, "retired": bool(meta.get("retired")),
+            "producer": meta.get("producer"), "stale_sec": stale_sec}
+
+
+def project_fields(payload, fields):
+    """字段投影（?fields=a,b,c）：仅保留白名单字段。非 dict/list 原样返回。"""
+    if not fields:
+        return payload
+    fset = set(fields)
+    if isinstance(payload, dict):
+        return {k: v for k, v in payload.items() if k in fset}
+    if isinstance(payload, list):
+        return [
+            {k: v for k, v in it.items() if k in fset} if isinstance(it, dict) else it
+            for it in payload
+        ]
+    return payload
+
+
+def paginate_list(payload, cursor, limit):
+    """分页游标（?cursor=N&limit=M）：对 list 结果再切片。非 list 原样返回。"""
+    if not isinstance(payload, list):
+        return payload
+    start = cursor if (cursor and cursor > 0) else 0
+    if limit and limit > 0:
+        return payload[start:start + limit]
+    return payload[start:]
+
+
 CODE_RE = re.compile(r"^\d{6}$")
 MARKET_DAILY_LIMIT_MAX = 20
 
 
 def read_data_query(path, query):
     """数据底座的受限查询边界；绝不开放SQL、路径或数据库文件。"""
-    if path not in {"/api/data/stock-registry", "/api/data/market-daily"}:
+    if path not in {"/api/data/stock-registry", "/api/data/market-daily",
+                    "/api/data/stock-profile"}:
         return None
 
     raw_code = (query.get("code") or [""])[0]
@@ -177,6 +243,12 @@ def read_data_query(path, query):
             return 400, {"error": "invalid_request", "route": path, "message": "stock-registry 仅接受 code 参数"}
         from common import data_gateway
         return 200, data_gateway.stock_registry(raw_code)
+
+    if path == "/api/data/stock-profile":
+        if set(query) != {"code"}:
+            return 400, {"error": "invalid_request", "route": path, "message": "stock-profile 仅接受 code 参数"}
+        from common import data_gateway
+        return 200, data_gateway.stock_profile(raw_code)
 
     if not set(query).issubset({"code", "limit"}):
         return 400, {"error": "invalid_request", "route": path, "message": "market-daily 仅接受 code 与 limit 参数"}
@@ -270,7 +342,10 @@ PUBLIC_ROUTES = {
                             "desc": "题材序列（⚠️ 已停更·已被 theme/series 取代·仅留档）"},
     "/api/flow/history": {"dir": "cache/sector_flow_history", "pattern": r"^sector_flow_\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "cadence": "daily", "desc": "板块资金历史"},
     # 三、板块核心票
-    "/api/board/core": {"dir": "cache/board_core", "pattern": r"^board_core_.+\.json$", "mode": "all", "cadence": "daily", "desc": "板块核心票"},
+    # ⚠️ 2026-11-04 维度审计：cache/board_core/ 全部停在 2026-09-09 15:46（近 2 月无写入方）。
+    #    与 /api/market/auction 同处置：retired + cadence manual，明确它是留档而非日频在产。
+    #    ⛔ 只标注不删脚本/产物；恢复日常产出后把 retired/cadence 改回即可。
+    "/api/board/core": {"dir": "cache/board_core", "pattern": r"^board_core_.+\.json$", "mode": "all", "cadence": "manual", "retired": True, "desc": "板块核心票（⚠️ 已停更·停在 09-09·仅留档）"},
     # 三·二、连板日观察（scripts/board_leader_daily.py · 2026-10-27）
     #   ⚠️ 与 routes.ts 对齐：原系统已产出 cache/board_leader_daily/leader_<date>.json，
     #   LeaderDailyPage 会请求本路由；此前漏登导致 prod 404（dev 正常）——2026-10-27 补登。
@@ -291,12 +366,21 @@ PUBLIC_ROUTES = {
     # 数据底座静态事实档（数据库型单票查询在 read_data_query 中专门处理）
     "/api/data/exit-peaks": {"dir": "cache", "pattern": r"^intraday_exit_peaks_\d{8}\.json$", "mode": "latest", "cadence": "intraday", "desc": "昨日涨停池封单与Top5题材日内峰值"},
     "/api/data/theme-snapshot": {"dir": "cache/theme_snapshot", "pattern": r"^theme_\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "limit": 20, "cadence": "daily", "desc": "题材冻结快照"},
+    # 十六、数据源聚合层（2026-11-04 用户「展现可分散，源必须聚合」·纯新增只读入口）
+    #   一个文件＝当日全部结论层：8 section + health（一致性守门）+ 维度状态台账。
+    #   ⛔ 现有 /api/decision/* 照旧直读原始产物，行为逐字不变（渐进迁移，不一刀切）。
+    #   ⛔ 判定链不读它（CQRS 读写分离，避免「自己算完再读自己」＝自我印证）。
+    "/api/data/market-snapshot": {"dir": "cache/snapshot", "pattern": r"^\d{4}-\d{2}-\d{2}\.json$", "mode": "latest", "cadence": "daily", "desc": "当日聚合数据源（8 section + health 守门 + 维度状态·单一事实源）"},
     "/api/data/top5-history": {"dir": "cache/top5_history", "pattern": r"^top5_\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "limit": 20, "cadence": "daily", "desc": "每日Top5题材原始归档"},
     # 七、盘中时间轴（jsonl）
     "/api/intraday/timeline": {"dir": "cache", "pattern": r"^intraday_timeline_\d{8}\.jsonl$", "mode": "all", "limit": 4, "lines": 1200, "format": "jsonl", "cadence": "intraday", "desc": "盘中情绪时间轴"},
     # 十、龙虎榜
-    "/api/lhb/tencent": {"dir": "cache", "pattern": r"^lhb_\d{8}\.json$", "mode": "all", "limit": 10, "cadence": "daily", "desc": "龙虎榜(腾讯)"},
-    "/api/lhb/hithink": {"dir": "cache", "pattern": r"^hithink_lhb_\d{8}\.json$", "mode": "all", "limit": 10, "cadence": "daily", "desc": "龙虎榜(同花顺)"},
+    # ⚠️ 2026-11-04 维度审计：三套龙虎榜产物互不统一、且均无 tasks.yaml 日常登记 ——
+    #    lhb_*.json 停 09-16 / lhb_card_* 停 09-29 / hithink_lhb_* 停 10-19。
+    #    这本身就是「数据分散、没有单一源」的典型症状：三个路由读三套不同口径的文件。
+    #    同 /api/market/auction 处置：retired + cadence manual，⛔ 只标注不删产物。
+    "/api/lhb/tencent": {"dir": "cache", "pattern": r"^lhb_\d{8}\.json$", "mode": "all", "limit": 10, "cadence": "manual", "retired": True, "desc": "龙虎榜(腾讯)（⚠️ 已停更·停在 09-16·仅留档）"},
+    "/api/lhb/hithink": {"dir": "cache", "pattern": r"^hithink_lhb_\d{8}\.json$", "mode": "all", "limit": 10, "cadence": "manual", "retired": True, "desc": "龙虎榜(同花顺)（⚠️ 已停更·停在 10-19·仅留档）"},
     # 十一、同花顺专业数据
     "/api/hithink/ladder": {"file": "cache/hithink_ladder.json", "cadence": "daily", "desc": "连板天梯"},
     "/api/hithink/zt": {"dir": "cache", "pattern": r"^hithink_zt_\d{8}\.json$", "mode": "all", "limit": 10, "cadence": "daily", "desc": "同花顺涨停池"},
@@ -333,6 +417,8 @@ PUBLIC_ROUTES = {
     "/api/decision/zt-pool": {"dir": "cache/decision_log", "dirPattern": r"^\d{4}-\d{2}-\d{2}$", "file": "zt_pool.json", "mode": "latest", "cadence": "daily", "desc": "决策时点涨停池明细"},
     "/api/decision/manifest": {"dir": "cache/decision_log", "dirPattern": r"^\d{4}-\d{2}-\d{2}$", "file": "manifest.json", "mode": "latest", "cadence": "daily", "desc": "存档清单"},
     "/api/decision/pool-call": {"dir": "wealth_code/cache", "pattern": r"^pool_call-\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "limit": 3, "cadence": "daily", "desc": "09:25 池内裁决终态"},
+    # 「今天 48 只涨停为什么只剩这几只」—— 全量过筛逐票结论（pass/watch_only/reject + 理由链）
+    "/api/decision/screen": {"dir": "cache/daily_screen", "pattern": r"^screen_\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "limit": 5, "cadence": "daily", "desc": "全量涨停逐票过筛结论"},
     # 15.3 AI 判断 / 净值
     "/api/ai/view": {"dir": "cache", "pattern": r"^ai_view_\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "limit": 20, "cadence": "daily", "desc": "AI 判断（参与/放弃/观察 + 理由）"},
     "/api/ai/decisions": {"file": "wealth_code/cache/ai_decisions.jsonl", "format": "jsonl", "cadence": "daily", "desc": "AI 判断台账"},
@@ -371,8 +457,10 @@ PUBLIC_ROUTES = {
     "/api/promo/backtest": {"dir": "cache/promo", "pattern": r"^backtest_.+[.]json$", "mode": "all", "cadence": "daily", "desc": "晋级量化回测报告"},
 }
 
-# 需要放开的三族前缀（SHARE_PRIVATE=0 时整族 404）
-PRIVATE_PREFIXES = ("/api/ai/", "/api/decision/", "/api/account/")
+# 私有业务路由前缀（聚合快照含决策数据，SHARE_PRIVATE=0 时整路由 404）。
+PRIVATE_PREFIXES = (
+    "/api/ai/", "/api/decision/", "/api/account/", "/api/data/market-snapshot",
+)
 
 # ────────────────────────────────────────────────────────────────
 # 凭据脱敏（业务数据放开 ≠ 凭据放开）
@@ -565,7 +653,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return None
 
-    def _send_json(self, code, body, etag=None):
+    def _send_json(self, code, body, etag=None, extra_headers=None):
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         ctype = "application/json; charset=utf-8"
         payload, gz = self._maybe_gzip(data, ctype)
@@ -576,6 +664,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache" if etag else "no-store")
         if etag:
             self.send_header("ETag", etag)
+        if extra_headers:
+            for _k, _v in extra_headers.items():
+                _vs = str(_v)
+                # HTTP 头值必须是 latin-1 可编码；非 ASCII（如误入的中文）兜底转义，避免崩溃
+                try:
+                    _vs.encode("latin-1")
+                except UnicodeEncodeError:
+                    _vs = _vs.encode("utf-8", "ignore").decode("latin-1")
+                self.send_header(_k, _vs)
         if gz:
             self.send_header("Content-Encoding", "gzip")
             self.send_header("Vary", "Accept-Encoding")
@@ -625,6 +722,15 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path.startswith("/api/"):
+            # 先拒绝私有路由，再查询数据或校验缓存，不能只做字段脱敏。
+            if not SHARE_PRIVATE and path.startswith(PRIVATE_PREFIXES):
+                self._send_json(404, {
+                    "error": "not_found",
+                    "route": path,
+                    "message": "private route disabled by SHARE_PRIVATE=0",
+                })
+                write_access(ts, ip, path, 404, False, token_present)
+                return
             try:
                 data_query = read_data_query(path, query)
             except Exception as exc:
@@ -650,18 +756,6 @@ class Handler(BaseHTTPRequestHandler):
                         "error": "not_found",
                         "route": path,
                         "message": "route not in public whitelist",
-                    },
-                )
-                write_access(ts, ip, path, 404, False, token_present)
-                return
-            # 回退开关：SHARE_PRIVATE=0 恢复三族拒绝
-            if not SHARE_PRIVATE and path.startswith(PRIVATE_PREFIXES):
-                self._send_json(
-                    404,
-                    {
-                        "error": "not_found",
-                        "route": path,
-                        "message": "private route disabled by SHARE_PRIVATE=0",
                     },
                 )
                 write_access(ts, ip, path, 404, False, token_present)
@@ -692,7 +786,49 @@ class Handler(BaseHTTPRequestHandler):
                 return
             # 文本型（tasks.yaml）走行级掩码，结构化走递归掩码
             payload = redact_text(payload) if isinstance(payload, str) else redact_secrets(payload)
-            self._send_json(200, payload, etag=etag)
+
+            # ── 数据基座（工件 C）：投影契约 + 新鲜度标注（加性，不影响现有响应结构）──
+            cursor = query.get("cursor")
+            if cursor:
+                try:
+                    cursor = int(cursor[0])
+                except (TypeError, ValueError):
+                    cursor = None
+            limit_q = query.get("limit")
+            if limit_q:
+                try:
+                    limit_q = int(limit_q[0])
+                except (TypeError, ValueError):
+                    limit_q = None
+            if isinstance(payload, list):
+                payload = paginate_list(payload, cursor, limit_q)
+            fields = query.get("fields")
+            payload = project_fields(payload, fields[0].split(",") if fields else None)
+
+            fresh = route_freshness(path, defn)
+            extra = {
+                "X-Data-Age": str(fresh.get("age_sec") or 0),
+                "X-Data-Stale": "1" if fresh.get("stale") else "0",
+                "X-Data-Retired": "1" if fresh.get("retired") else "0",
+                "X-Data-Producer": str(fresh.get("producer") or ""),
+            }
+            # 单文件 dict 顺带内嵌 _meta，前端免解析响应头
+            if isinstance(payload, dict):
+                payload = {**payload, "_meta": {
+                    "stale": fresh.get("stale"), "age_sec": fresh.get("age_sec"),
+                    "retired": fresh.get("retired"), "producer": fresh.get("producer"),
+                    "stale_sec": fresh.get("stale_sec"),
+                }}
+            # 严格过期模式（SERVE_STRICT_STALE=1）：超阈值直接 404，拒绝返回陈旧内容
+            if _STRICT_STALE and fresh.get("stale") is True:
+                self._send_json(404, {
+                    "error": "data_stale", "route": path,
+                    "age_sec": fresh.get("age_sec"), "stale_sec": fresh.get("stale_sec"),
+                    "message": "数据已超过过期阈值，严格模式下拒绝返回陈旧内容",
+                })
+                write_access(ts, ip, path, 404, False, token_present)
+                return
+            self._send_json(200, payload, etag=etag, extra_headers=extra)
             write_access(ts, ip, path, 200, True, token_present)
             return
 
@@ -747,6 +883,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    # 数据基座一致性自检：data_catalog 是否与本服务 PUBLIC_ROUTES 同步（不一致只告警不阻断）
+    diffs = data_catalog.verify_against(PUBLIC_ROUTES)
+    if diffs:
+        print(f"[serve] ⚠️ data_catalog 与本服务路由不一致（{len(diffs)} 项），请同步：")
+        for d in diffs[:20]:
+            print(f"   - {d}")
+    else:
+        print("[serve] ✓ data_catalog 与 PUBLIC_ROUTES 一致")
+
     # 安全默认（2026-10-18）：默认只监听 127.0.0.1；对外监听必须显式配 SHARE_TOKEN。
     # ⛔ 旧行为（默认 0.0.0.0 + 空 token 仅打印警告）等于把盘面/持仓/审计数据无鉴权暴露到局域网。
     if not SHARE_TOKEN and SHARE_HOST not in LOOPBACK_HOSTS:
