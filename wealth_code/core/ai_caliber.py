@@ -257,6 +257,9 @@ def decide(decision: dict | None, gap_pct: float | None,
     if decision is None:
         return False, "AI 昨日未对这只票下判断 → 不买", {"ai_view": None, **base}
 
+    from core.two_pool import observation_only
+    if observation_only(decision):
+        return False, "板块观察参照，不参与交易", {"ai_view": "watch", **base}
     raw_view = str(decision.get("view") or "").strip()
     if not raw_view:
         # 新版盘后预案以 bias 表达意图；只有 focus 才是 AI 明确参与。

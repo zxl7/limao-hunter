@@ -352,6 +352,50 @@ def lint_card(card: dict, fix: bool = False) -> tuple[bool, list[dict], list[dic
                                           f"2026-10-14 起硬阻断）: ...{ctx}..."})
             stack.append(name)
 
+    # 5.7) text_tag 内不得含 markdown 加粗（2026-11-04 用户「布局乱了，丑的很」）
+    #      事故：复盘 v5 卡资金块 10 个字段全写成 `<text_tag color='red'>**电子**</text_tag>`，
+    #      飞书 lark_md 的 text_tag 内**不解析** `**`，星号被当字面字符原样输出
+    #      → 群里显示「**电子** +307.0」，整块像没渲染完的源码。
+    #      宪法【视觉样式管控规范】已明写「⛔ text_tag 内禁 **」，但此前全靠 prompt，
+    #      实测全仓仅 2 个手工拼的复盘卡命中（review_2026-11-02 / fupan_card_2026-09-10），
+    #      生成器产物零命中 → 升 FAIL 不会丢卡。
+    #      ⛔ 正确写法：加粗放标签外（`**电子** <text_tag>+307.0</text_tag>`），
+    #         或整段进胶囊（`<text_tag>电子 +307.0</text_tag>`），二者不可叠加。
+    _TT_RE = re.compile(r"<text_tag[^>]*>(.*?)</text_tag>", re.S)
+    for s in strings:
+        if "<text_tag" not in s:
+            continue
+        for _m in _TT_RE.finditer(s):
+            if "**" in _m.group(1):
+                errors.append({"level": "FAIL",
+                               "msg": f"text_tag 内含 markdown 加粗（飞书不解析·星号原样出屏·"
+                                      f"2026-11-04 复盘卡「丑」事故）: {_m.group(0)[:60]}"})
+
+    # 5.8) div 单块密度（宪法【卡片版式】div≤5 行 / ≤330 字）
+    #      2026-11-04 复盘卡「布局乱」的另一半原因：正文被写成 5 只票 + 十几个数据点挤在
+    #      一个 div 里（单块 175 字、折行 4~5 行），窄列流式下没有任何对齐参照，读起来像乱码。
+    #      ⚠️ 观察期定 WARN：历史卡有 490 字单块（review_2026-10-28），定 FAIL 会大面积误伤；
+    #         连续 10 个交易日无新增超限块后再议升级。
+    MAX_DIV_LINES, MAX_DIV_CHARS = 5, 330
+    for e in (card.get("elements") or []):
+        if not isinstance(e, dict) or e.get("tag") != "div":
+            continue
+        c = (e.get("text") or {}).get("content")
+        if not isinstance(c, str):
+            continue
+        n_lines = len([x for x in c.split("\n") if x.strip()])
+        if n_lines > MAX_DIV_LINES or len(c) > MAX_DIV_CHARS:
+            warns.append({"level": "WARN",
+                          "msg": f"div 单块过密（{n_lines} 行 / {len(c)} 字，规范 ≤{MAX_DIV_LINES} 行 ≤{MAX_DIV_CHARS} 字"
+                                 f"·窄列下会折成一团）: {c.splitlines()[0][:36]}"})
+
+    # 5.9) fields 双列须为偶数项（奇数会留半个空格子 → 版面歪斜）
+    for e in (card.get("elements") or []):
+        if isinstance(e, dict) and isinstance(e.get("fields"), list):
+            if len(e["fields"]) % 2:
+                warns.append({"level": "WARN",
+                              "msg": f"fields 项数为奇数（{len(e['fields'])}）→ 双列末行留空格，版面歪斜"})
+
     ok = not any(e["level"] == "FAIL" for e in errors)
     return ok, errors, warns
 

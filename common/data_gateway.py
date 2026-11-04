@@ -111,3 +111,23 @@ def stock_registry(code: Any) -> dict[str, Any]:
         "found": row is not None,
         "stock": _project_stock(row) if row else None,
     }
+
+
+def stock_profile(code: Any) -> dict[str, Any]:
+    """单票事实画像（跨日：身份/当日/历史/技术/题材/股性/连板轨迹）。
+
+    与 `stock_registry` 的区别：那个是底库单表投影，这个是**跨源聚合**，
+    每维带 `status`（ok/stale/missing/error）与 `asof`，缺失不等于 0。
+    仍不返回数据库路径、SQL 或文件系统信息。
+    """
+    token = normalize_code(code)
+    if not token:
+        raise ValueError("code 必须为 6 位数字")
+
+    from common import stock_profile as profile
+
+    view = profile.build_profile(token)
+    if not view.get("enabled", True):
+        return {"code": token, "found": False, "disabled": True,
+                "reason": "stock_profile 已关闭（ENABLE_STOCK_PROFILE=0）"}
+    return {"code": token, "found": bool(view.get("found")), "profile": view}

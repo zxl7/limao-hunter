@@ -30,6 +30,13 @@ from typing import Any
 from common.http_client import http_get
 from common.json_io import load_json, save_json
 
+# 题材基座（2026-11-03 用户「以选股宝的题材分类为核心基座」）：
+#   `theme_base.theme_of_plates()` 从选股宝 plates 取**它自己分好的板块名**，
+#   用于取代本文件 `_extract_theme()` 的关键词二次提炼。
+#   ⛔ 依赖方向：本文件 import 基座（正向）；基座内部用**函数内延迟 import** 取本文件的
+#      快照读写，不存在循环导入。
+from common import theme_base as _theme_base
+
 # 选股宝 surge_stock 接口（盘中活·盘后关闭属正常；返回结构 2026-08-17 已兼容双形态）
 XGB_BASE = "https://flash-api.xuangubao.cn/api"
 
@@ -125,6 +132,20 @@ HEAT_MID_ZT = 3    # 板块 ≥3 涨停 → M 中热
 THEME_SNAPSHOT_SCHEMA = "theme_map_snapshot_v1"
 THEME_SNAPSHOT_DIRNAME = "theme_snapshot"
 _BJ = timezone(timedelta(hours=8))
+
+# ── 板块名口径（2026-11-03）────────────────────────────────────────────────
+# `plates`     = 选股宝自己的分类（**默认**·基座）。它已按炒作分好类，
+#                我们再做一层关键词提炼只会覆盖它、且会出错（详见 theme_base 模块头）。
+# `keywords`   = 旧的 `THEME_KEYWORDS` 二次提炼（保留可回退）。
+# `plates_kw`  = plates 优先，取不到再用 keywords（最保守的兼容档）。
+#
+# 11-03 实证差异（11-02 涨停池 233 只）：
+#   keywords 口径：「影视传媒 44」——把短剧/传媒/游戏混成一类，还把华是科技(机器人)、
+#                  联赢激光(半导体)错误吞进来。
+#   plates   口径：「短剧/互动影游 40 + 游戏 7 + 传媒 4」，每只票归位准确；
+#                  按族看 = 传媒族 51 家，正是用户口中的「传媒大爆发」。
+THEME_BASE_SOURCE = os.environ.get("THEME_BASE_SOURCE", "plates").strip().lower()
+VALID_THEME_BASE_SOURCES = ("plates", "plates_kw", "keywords")
 
 
 def _snapshot_enabled() -> bool:
@@ -301,7 +322,14 @@ class ThemeFetcher:
                         logic = ""
                     out[code] = {
                         "name": name,
-                        "theme": theme or "—",
+                        # `theme` 是**下游唯一消费的板块名字段**（pipeline_eod 用它回填
+                        # core_theme → 算 theme_mates_cnt → 进评分）。口径由
+                        # THEME_BASE_SOURCE 决定，默认走选股宝 plates 基座。
+                        "theme": _pick_theme(theme, plate_names),
+                        # 基座原名（永远保留，供溯源与族归并；⛔ 不受开关影响）
+                        "theme_base": _theme_base.theme_of_plates(plate_names) or "",
+                        # 关键词提炼名（旧口径留存，对照用）
+                        "theme_kw": theme or "",
                         "logic": logic,
                         "plates": plate_names[:4],
                         "desc": desc[:120],
@@ -320,13 +348,33 @@ class ThemeFetcher:
 
 
 def _extract_theme(desc: str) -> tuple[str, str]:
-    """从 description 提炼（题材名, 题材逻辑简述）。关键词规则匹配，命中首个即返回。"""
+    """从 description 提炼（题材名, 题材逻辑简述）。关键词规则匹配，命中首个即返回。
+
+    ⚠️ 2026-11-03 起**只用于 `logic`**（题材逻辑一句话）与 `theme_kw`（对照/回退），
+    板块名默认走 `theme_base.theme_of_plates()`。原因见 `common/theme_base.py` 模块头。
+    """
     if not desc:
         return "", ""
     for kw, theme, logic in THEME_KEYWORDS:
         if kw in desc:
             return theme, logic
     return "", ""
+
+
+def _pick_theme(kw_theme: str, plate_names: list[str]) -> str:
+    """决定写进 `theme` 的板块名（口径由 `THEME_BASE_SOURCE` 控制）。
+
+    `plates`（默认）   基座名；取不到 → ""（诚实空标注，下游 `or ... or sector` 会回落行业名）
+    `plates_kw`        基座名；取不到 → 关键词名（保守兼容档）
+    `keywords`         旧行为（关键词优先，取不到才用 plates[0]）
+    """
+    base = _theme_base.theme_of_plates(plate_names) or ""
+    src = THEME_BASE_SOURCE
+    if src == "keywords":
+        return kw_theme or base
+    if src == "plates_kw":
+        return base or kw_theme
+    return base
 
 
 def annotate_candidate(

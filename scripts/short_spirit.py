@@ -17,6 +17,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import os
 import pathlib
 import re
 import sys
@@ -31,6 +32,19 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.json_io import append_jsonl, load_json, load_jsonl, save_json
+
+# 题材基座（2026-11-03）：属性标签过滤。选股宝 top5 里会混进「业绩增长」这类
+#   **涨停原因归属**（11-03 10:32 实测 top5 第 4 位就是「业绩增长」3 家），
+#   它不是题材、没有接力语义，⛔ 不能当「接力方向」推给用户。
+try:
+    from common.theme_base import is_attr_plate as _is_attr_plate
+    from common.theme_base import family_of as _family_of
+except Exception:                                  # pragma: no cover - 环境缺失降级
+    def _is_attr_plate(_n):  # type: ignore[misc]
+        return False
+
+    def _family_of(_n):  # type: ignore[misc]
+        return None
 
 # 东财官方板块映射（2026-10-08 用户「系统自造聚合名改为东财官方板块名！！」）：
 # 板块名后挂官方 BK 码，让「系统说的锂电池 = 东财 锂电池 BK1303」一目了然，
@@ -117,6 +131,16 @@ LEADER_FALLBACK_20CM_MIN_PCT = 19.0  # C 兜底池纳入「首板 20cm 涨停」
 ENABLE_SPIRIT_SECTOR_GROUP = True
 SECTOR_GROUP_MIN_ITEMS = 2      # 至少 N 只才列为「联动」（单只不成板块联动）
 SECTOR_GROUP_MAX = 8            # 最多列几个板块（防刷屏）
+# 板块联动的**聚合数据源**（2026-11-03）：True = 用过滤后全池；False = 回到截断后的 signals。
+#   背景：strength 里成交额占 0.2 权重，一字板成交额天然小 → 被挤出 max_signals 名额 →
+#   「板块联动」段跟着丢票。11-03 实证：涨停池 51 只里短剧/互动影游 5 只，卡面只剩 1 只。
+#   ⛔ 只影响**展示聚合**，不改推送名额/排序/评分/裁决；关掉即回改动前行为。
+ENABLE_SPIRIT_GROUP_FULL_POOL = os.environ.get("ENABLE_SPIRIT_GROUP_FULL_POOL", "1") != "0"
+# 板块联动**按族归并**（2026-11-03）：传媒线在东财口径下被拆成 游戏Ⅱ/影视院线/数字媒体/
+#   广告营销 四条 2 只的小线 → 用户看到「一堆杂毛」而非「传媒大爆发」。
+#   归族后显示「传媒 9只」——与用户心智、与选股宝 plates 口径对齐。
+#   ⛔ 纯展示层，不改 signals 的 theme 字段、不改推送/排序/评分。
+ENABLE_SPIRIT_GROUP_FAMILY = os.environ.get("ENABLE_SPIRIT_GROUP_FAMILY", "1") != "0"
 
 # ── 后排预判（2026-10-14 用户「再给我推一个今天有可能涨停的个股，就是后排的」）────────
 # 用户原话：「短线精灵，现在除了个股和板块联动，再给我推一个今天有可能涨停的个股；
@@ -244,10 +268,21 @@ EARLY_REALTIME_END_MIN = 9 * 60 + 55     # 09:55
 # 东财两页请求是否完整。仅用于审计和前端展示，不因单页失败丢弃已取得的信号。
 FETCH_STATUS = {"up": {}, "down": {}}
 
+# 板块全成分快照缓存（2026-11-03）：东财 clist **按时刻**限频，密集重试会被临时封禁。
+#   {bk: (抓取时刻, 结果|None, 有效期秒)}；成功 60s、失败 20s（短退避）。
+_BOARD_SNAP_CACHE: dict = {}
+BOARD_SNAP_TTL_SEC = 60
+BOARD_SNAP_FAIL_TTL_SEC = 20
+
 # 原始候选池缓存（2026-10-14：「今日可能涨停的后排」段需要**未过滤**的涨幅榜，
 #   而 `signals` 只含已异动票 → 后排候选必须回到原始池里找）。
 # ⛔ 只写不读业务状态，与 FETCH_STATUS 同套路；东财抓取失败 → 空池 → 后排段自然降级为空。
 POOL_CACHE = {"up": [], "down": []}
+
+# 板块联动的聚合数据源（2026-11-03）：`build_signals` 每轮写入**过滤后全池**的 signal 视图，
+#   `build_card` 取它做「🔥 板块联动」聚合（而非截断后的推送序列）。
+#   ⛔ 只用于展示聚合，不参与推送名额/排序/评分；开关 ENABLE_SPIRIT_GROUP_FULL_POOL=0 时写 None。
+GROUP_VIEW_CACHE = {"view": None}
 
 
 def _lock_path() -> Path:
@@ -255,8 +290,18 @@ def _lock_path() -> Path:
     return ROOT / "cache" / "short_spirit.lock"
 
 
-def http_get(url, t=8):
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+def http_get(url, t=8, headers=None):
+    """本文件专用轻量 GET（裸 urllib，**无重试** —— 重试由调用方按限频策略控制）。
+
+    ⚠️ 2026-11-03：原来只带 `User-Agent`。东财 push2 接口对**缺 Referer** 的请求
+    会直接 `RemoteDisconnected`（实测：带 Referer 能拿到 20 行成分，不带则空回）。
+    现在允许调用方补齐请求头。
+    """
+    hdr = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"}
+    if headers:
+        hdr.update(headers)
+    req = urllib.request.Request(url, headers=hdr)
     with urllib.request.urlopen(req, timeout=t) as resp:
         return json.loads(resp.read().decode())
 
@@ -366,6 +411,156 @@ def fetch_pool(cfg):
     return pool
 
 
+# ── 全量涨停池·已封板事实源（2026-11-03 用户「立即处理！人工决断可改生产链路」）────
+# 【病灶·11-03 实证】整个上午精灵手里只有 7~16 只，而真实涨停 **49 只**。
+#   根因链条：`fetch_pool`（东财涨幅榜）盘中反复 RemoteDisconnected → 降级
+#   `_leaders_as_pool`（latest.json 的**连板龙头**，7~16 只）→ 兜底池**天然不含
+#   「今天新封的首板/一字」** → **抓取越失败，越只能看到昨天的老面孔，越看不见今天的一字潮**。
+#   11-03 当天：竞价即封 11 只、传媒线 4 只 9:25 一字（大晟10分/华阳9/浙文9/龙版8），
+#   全部落在池外 → 家数永远凑不够 → 「板块联动」不出 → 用户看到的「系统没发现传媒爆发」。
+#
+# 【修法】把东财**实时涨停池**（getTopicZTPool）作为「已封板事实源」并入候选池：
+#   ① 独立接口、独立降级 —— 不再依赖涨幅榜抓取成败；
+#   ② 一次请求拿到全字段 amount(成交额)/fund(封单)/ltsz(流通)/fbt(首封时刻)/
+#      zbc(炸板)/lbc(板数)/hybk(行业) → 正是 seal_gate 四因素所需，无需二次请求；
+#   ③ 涨停池的票 = **已确认封住**（不是「看到涨了」），其成交额小是**一字锁死的特征**
+#      而非流动性缺陷 → 豁免成交额门槛（与 08-14 情绪核心战法、11-03 seal_gate 回测同向）。
+#
+# ⛔ 边界（与既有铁律一致）：
+#   - 只决定「这只票能不能进候选池」，⛔ 不改评分权重/排序/名额/仓位/09:25 裁决；
+#   - 涨幅榜（fetch_pool）继续负责**未封板/冲板/后排**，职责不合并、不互相顶替；
+#   - 涨停池抓取失败 → 返回 []，退回改动前行为（⛔ 绝不用空池当「今天没涨停」）；
+#   - 688（无权限）/北交所 / ST 在源头剔除，不吃下游过滤的运气。
+# ⛔ 可逆开关：ENABLE_SPIRIT_ZT_POOL=0 一键回到「只看涨幅榜」的改动前行为。
+ENABLE_SPIRIT_ZT_POOL = os.environ.get("ENABLE_SPIRIT_ZT_POOL", "1") != "0"
+ENABLE_SPIRIT_ZT_AMT_EXEMPT = os.environ.get("ENABLE_SPIRIT_ZT_AMT_EXEMPT", "1") != "0"
+# 涨停池事实票 **市值门槛** 豁免（2026-11-03 13:20）：与上面成交额豁免同源。
+#   已封涨停的票，市值大小只影响「买不买得起」，不影响「这个板块今天几家涨停」。
+#   实证：时代万恒 27 亿 → 被 30 亿 LOWCAP 挡掉 → 锂电 8 家看成 7 家。
+ENABLE_SPIRIT_ZT_CAP_EXEMPT = os.environ.get("ENABLE_SPIRIT_ZT_CAP_EXEMPT", "1") != "0"
+ZT_POOL_URL = ("https://push2ex.eastmoney.com/getTopicZTPool?"
+               "ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=0&pagesize=300"
+               "&sort=fbt%3Aasc&date={date}")
+# ⚠️ 东财 push2ex **必须带 Referer**（缺则 RemoteDisconnected，与 push2 同坑）
+ZT_POOL_HEADERS = {"Referer": "https://quote.eastmoney.com/"}
+ZT_POOL_TTL_SEC = 60          # 成功缓存 60s（涨停状态不会秒变；避免每轮多打一次）
+ZT_POOL_FAIL_TTL_SEC = 20     # 失败短退避，防密集重试被限频
+_ZT_POOL_CACHE: dict = {}
+
+# 涨停池里的「已封板事实」标记字段（下游 noise_filter 据此豁免成交额门槛）
+ZT_FACT_KEY = "_zt_fact"
+
+
+def _zt_date_str(now=None) -> str:
+    return (now or datetime.now()).strftime("%Y%m%d")
+
+
+def fetch_zt_pool(now=None, *, enabled=None) -> list:
+    """东财**实时全量涨停池** → 标准候选池结构（附 `_zt_rich` 原始字段）。
+
+    与 `fetch_pool`（涨幅榜）的分工：
+      · 涨幅榜 = 「谁在涨」（含未封板/冲板，用于后排预判）；
+      · 涨停池 = 「谁已经封住了」（事实源，用于已封板播报与题材家数）。
+    ⛔ 抓取失败返回 []（= 不知道），⛔ 不返回伪造的空结构冒充「今天没涨停」。
+    """
+    if enabled is None:
+        enabled = ENABLE_SPIRIT_ZT_POOL
+    if not enabled:
+        return []
+    date_s = _zt_date_str(now)
+    hit = _ZT_POOL_CACHE.get(date_s)
+    if hit and (time.time() - hit[0]) < hit[2]:
+        return list(hit[1])
+    rows: list = []
+    ttl = ZT_POOL_TTL_SEC
+    try:
+        d = http_get(ZT_POOL_URL.format(date=date_s), t=8, headers=ZT_POOL_HEADERS)
+        pool = ((d.get("data") or {}).get("pool") or []) if isinstance(d, dict) else []
+        for it in pool:
+            try:
+                code = str(it.get("c") or "").strip()
+                name = str(it.get("n") or "").strip()
+                if len(code) != 6 or not name:
+                    continue
+                # 源头剔除：科创板 688（用户无权限）/ 北交所(4/8/9 开头) / ST·退市
+                if code[:3] == "688" or code[0] in ("4", "8", "9"):
+                    continue
+                if "ST" in name.upper() or "退" in name:
+                    continue
+                pct = float(it.get("zdp") or 0)
+                price = round(float(it.get("p") or 0) / 1000.0, 3)
+                # prev_close 由 price 反推（与 _leaders_as_pool 同法）→ signal_type 判「涨停」而非「炸板」
+                prev_close = round(price / (1 + pct / 100.0), 3) if pct > 0 and price > 0 else 0.0
+                rows.append({
+                    "code": code,
+                    "name": name,
+                    "pct": pct,
+                    "price": price,
+                    "amount_yi": round(float(it.get("amount") or 0) / 1e8, 2),
+                    "market_cap_yi": round(float(it.get("tshare") or 0) / 1e8, 1),
+                    "float_cap_yi": round(float(it.get("ltsz") or 0) / 1e8, 1),
+                    "list_date": None,          # 涨停池不提供上市日 → 次新过滤放行（与兜底池一致）
+                    "prev_close": prev_close,
+                    "main_flow_yi": 0.0,        # 涨停池无主力净额 → 0（⛔ 不编造）
+                    "industry": str(it.get("hybk") or ""),
+                    "vol_ratio": 0.0,           # 涨停池无量比 → 0（后排判据不适用已封板票）
+                    "turnover": float(it.get("hs") or 0),
+                    ZT_FACT_KEY: True,
+                    # 富字段：seal_gate 可直接消费（亿为单位，与 seal_gate 口径一致）
+                    "_zt_rich": {
+                        "fbt": it.get("fbt"),
+                        "zbc": it.get("zbc"),
+                        "boards": it.get("lbc"),
+                        "seal_amt": round(float(it.get("fund") or 0) / 1e8, 3),
+                        "lt_mktcap": round(float(it.get("ltsz") or 0) / 1e8, 2),
+                        "cje_yi": round(float(it.get("amount") or 0) / 1e8, 3),
+                        "boards_days": (it.get("zttj") or {}).get("days"),
+                        "boards_ct": (it.get("zttj") or {}).get("ct"),
+                    },
+                })
+            except Exception:
+                continue
+    except Exception as e:
+        FETCH_STATUS["zt_pool"] = {"ok": False, "err": str(e)[:120], "date": date_s}
+        ttl = ZT_POOL_FAIL_TTL_SEC
+        rows = []
+    else:
+        FETCH_STATUS["zt_pool"] = {"ok": True, "n": len(rows), "date": date_s}
+    _ZT_POOL_CACHE[date_s] = (time.time(), list(rows), ttl)
+    return rows
+
+
+def _merge_zt_pool(pool: list, zt_rows: list) -> list:
+    """把涨停池并入候选池（按 code 去重，**涨停池优先**）。
+
+    为什么涨停池优先：两者都是东财同一时刻的口径，但涨停池多带
+    `fund/ltsz/fbt/zbc` 四个 seal_gate 必需字段；涨幅榜带量比/主力净额。
+    合并后：结构字段以涨停池为准（已确认封板的事实更硬），量比/主力净额保留涨幅榜原值。
+    """
+    if not zt_rows:
+        return pool
+    by_code = {}
+    for s in pool:
+        c = str(s.get("code") or "")
+        if c:
+            by_code[c] = s
+    for z in zt_rows:
+        c = str(z.get("code") or "")
+        if not c:
+            continue
+        base = by_code.get(c)
+        if base is None:
+            pool.append(z)
+            by_code[c] = z
+            continue
+        # 已在涨幅榜 → 只补富字段与事实标记，⛔ 不覆盖涨幅榜的真实成交额/量比口径
+        base[ZT_FACT_KEY] = True
+        base["_zt_rich"] = z.get("_zt_rich")
+        if not base.get("industry"):
+            base["industry"] = z.get("industry")
+    return pool
+
+
 def fetch_pool_down(cfg):
     """东财跌幅榜两页 → 原始下跌信号池（2026-09-21 盲区补强，与 fetch_pool 平行）。"""
     raw = []
@@ -462,6 +657,20 @@ def _sector_match(a: str, b: str) -> bool:
     return False
 
 
+def _sector_match_any(a: str, b: str) -> bool:
+    """板块匹配·族感知（2026-11-03）。
+
+    `_sector_match` 只认字面：「传媒」vs「影视院线」长度不足且不包含 → False。
+    但板块联动段归族后显示的是「传媒」，而跟风候选的 sector 仍是东财行业名
+    （游戏Ⅱ / 数字媒体 / 广告营销 …）→ 跟风段会被整段饿死。
+    故先按字面判，再按 `THEME_FAMILIES` 同族判。
+    """
+    if _sector_match(a, b):
+        return True
+    fa, fb = _family_of(a), _family_of(b)
+    return bool(fa and fb and fa == fb)
+
+
 def _code_sector_map(d):
     """code → {板块名...}（来自 limit_up_stocks / leaders 各自的 `sector` 字段）。
 
@@ -498,8 +707,47 @@ def _relay_sector_of(signals, d):
         code = str(sig.get("code") or "")[:6]
         names = {sec} | csmap.get(code, set())
         for nm in top5:
+            if _is_attr_plate(nm):
+                continue          # ⛔「业绩增长/ST股」是涨停原因不是题材，不接这条线
             if any(_sector_match(nm, x) for x in names if x):
                 return nm
+    return None
+
+
+def _theme_members(d, sector):
+    """选股宝 top5 中该题材的**权威成分**（2026-11-03 基座化）。
+
+    ⛔ 为什么不能用名字匹配（11-03 传媒实证）：
+      `limit_up_stocks[].sector` 是**东财行业名**（广告营销/游戏Ⅱ/出版/纺织制造…），
+      `top5[].name` 是**选股宝题材名**（短剧/互动影游）——两套体系，`_sector_match`
+      天然判不中，于是 ladder 只剩靠 zt_stocks 补的几只，卡面把「8 家」写成「4 家」。
+      而 top5 自己就带 `zt_stocks`（**带 code**）和 `zt_count`（题材涨停家数）——直接取用。
+
+    返回 {name, codes:set[str], zt_count:int|None, stocks:list} 或 None（该题材不在 top5）。
+    """
+    for t5 in (d.get("top5") or []):
+        if not isinstance(t5, dict):
+            continue
+        if not _sector_match(sector, str(t5.get("name") or "")):
+            continue
+        codes: set[str] = set()
+        stocks: list[dict] = []
+        for z in (t5.get("zt_stocks") or []):
+            if not isinstance(z, dict):
+                continue
+            c = str(z.get("code") or "").split(".")[0][:6]
+            if not c:
+                continue
+            codes.add(c)
+            stocks.append({"name": z.get("name"), "code": c,
+                           "pct": float(z.get("pct") or 0)})
+        try:
+            n = int(t5.get("zt_count"))
+        except (TypeError, ValueError):
+            n = None
+        # ⛔ zt_count 取不到时返回 None（不是 0）——0 会被当成「该题材没涨停」的错误结论
+        return {"name": str(t5.get("name") or ""), "codes": codes,
+                "zt_count": n, "stocks": stocks}
     return None
 
 
@@ -580,26 +828,42 @@ def _board_snapshot(bk: str) -> dict | None:
       「🎯 该方向已无未封板票 → 等明日竞价看不追高」。10-20 10:26 PCB 板即如此——
       实测该板块 205 只成分、涨幅榜第 4 的矩子科技 +9.99% 明明能买。
       把「抓不到」当「没有」= 对用户报了一个假结论（宪法①数据即事实）。
+
+    ⚡ 2026-11-03 加 TTL 缓存（**原实现把自己打死了**）：
+      东财 clist 是**按时刻**限频，不是按次数——密集重试会触发临时封禁，
+      封禁期内连原本能成功的 URL 也一律 `RemoteDisconnected`（实测：成功 1 次后
+      连续 8 次全挂，含此前成功的完全相同 URL）。
+      原实现 5 host × 2 轮 = 单次调用最多 10 个请求，盘中每 30s 一轮 → 必然被封。
+      现在：成功缓存 60s（盘中行情滞后 60s 可接受，卡面自带时间戳）；
+      失败缓存 20s（短退避，防立刻重试加剧封禁）；单次最多 5 个请求、不 sleep 重试。
     """
     if not ENABLE_SPIRIT_RELAY_BACKSEAT or not bk:
         return None
+    _now = time.time()
+    _hit = _BOARD_SNAP_CACHE.get(bk)
+    if _hit is not None:
+        _ts, _val, _ttl = _hit
+        if _now - _ts < _ttl:
+            return _val                      # 成功（60s）/ 失败（20s）各自的有效期
     rows = None
-    # 主域 + 四个子域轮询两轮（实测盘中限频是**按时刻**的：同一秒全挂、10 秒后全通）
-    for _round in range(2):
-        for h in RELAY_BACKSEAT_HOSTS:
-            try:
-                d = http_get(RELAY_BACKSEAT_URL.format(h=h, bk=bk), t=5)
-                diff = ((d.get("data") or {}).get("diff") or [])
-                if diff:
-                    rows = diff
-                    break
-            except Exception:
+    # ⚠️ 本条链路**不能依赖 http_get 的内部重试**（本文件的 http_get 是裸 urllib、无重试）。
+    #   限频是东财按时刻控制的，密集重试只会延长封禁 → 策略是
+    #   「最多 3 个 host、每个 1 次、失败即退避」，由上面的 TTL 缓存兜住重复调用。
+    for h in RELAY_BACKSEAT_HOSTS[:3]:
+        try:
+            d = http_get(RELAY_BACKSEAT_URL.format(h=h, bk=bk), t=5,
+                         headers={"Referer": "https://quote.eastmoney.com/"})
+            if not isinstance(d, dict):
                 continue
-        if rows:
-            break
-        time.sleep(0.6)
+            diff = ((d.get("data") or {}).get("diff") or [])
+            if diff:
+                rows = diff
+                break
+        except Exception:
+            continue
     FETCH_STATUS["relay_backseat"] = {"bk": bk, "ok": bool(rows), "rows": len(rows or [])}
     if not rows:
+        _BOARD_SNAP_CACHE[bk] = (_now, None, BOARD_SNAP_FAIL_TTL_SEC)
         return None
 
     snap = {}
@@ -618,6 +882,8 @@ def _board_snapshot(bk: str) -> dict | None:
             }
         except (TypeError, ValueError):
             continue
+    if snap:
+        _BOARD_SNAP_CACHE[bk] = (_now, snap, BOARD_SNAP_TTL_SEC)
     return snap
 
 
@@ -937,13 +1203,23 @@ def _relay_hint(signals, d):
         return int(m.group(1)) if m else 0
 
     # ① 已封板（按板数降序，其次涨幅降序）→ ladder[0] 即「前排」
+    #    🎯 2026-11-03 基座化：**选股宝题材成分（code）为权威**，名称匹配退为兜底。
+    #    11-03 实证：limit_up_stocks[].sector 是东财行业名（广告营销/游戏Ⅱ/纺织制造…），
+    #    与 top5 的「短剧/互动影游」永远匹配不上 → ladder 只剩 zt_stocks 补的几只
+    #    → 卡面把「今日 8 家涨停」写成「4 家」，用户看到的是「系统没发现传媒爆发」。
+    mem = _theme_members(d, sector) if ENABLE_SPIRIT_THEME_BACKSEAT else None
+    mem_codes = set((mem or {}).get("codes") or ())
     ladder = []
     for x in (d.get("limit_up_stocks") or []):
         if not isinstance(x, dict):
             continue
-        if not _sector_match(sector, str(x.get("sector") or "")):
-            continue
-        ladder.append({"name": x.get("name"), "code": str(x.get("code") or "")[:6],
+        code = str(x.get("code") or "")[:6]
+        if mem_codes:
+            if code not in mem_codes:       # 有权威成分 → 只收成分内（⛔ 不再靠名字猜）
+                continue
+        elif not _sector_match(sector, str(x.get("sector") or "")):
+            continue                         # 无成分数据 → 退回旧名称匹配（降级不阻断）
+        ladder.append({"name": x.get("name"), "code": code,
                        "boards": x.get("boards"), "pct": float(x.get("pct") or 0)})
     ladder.sort(key=lambda x: (-_parse_boards(x.get("boards")), -x["pct"]))
     zt_codes = {x["code"] for x in ladder}
@@ -951,18 +1227,15 @@ def _relay_hint(signals, d):
     # B 档（2026-10-12 用户「取选股宝题材分类下的数据·含已封板」）：
     # 用选股宝题材 top5[题材].zt_stocks 补全该题材涨停票（选股宝权威口径·含 code），
     # 合并进 ladder（去重）→ 「后排关联」列全，不依赖全市场 limit_up 的 sector 名称匹配。
-    if ENABLE_SPIRIT_THEME_BACKSEAT:
+    # 2026-11-03：成分已在上面从 `mem` 取过，此处只补 `limit_up_stocks` 里缺的那几只。
+    if ENABLE_SPIRIT_THEME_BACKSEAT and mem:
         try:
-            for t5 in (d.get("top5") or []):
-                if not _sector_match(sector, str(t5.get("name") or "")):
-                    continue
-                for z in (t5.get("zt_stocks") or []):
-                    c = str(z.get("code") or "").split(".")[0]
-                    if c and c not in zt_codes:
-                        ladder.append({"name": z.get("name"), "code": c,
-                                       "boards": None, "pct": float(z.get("pct") or 0)})
-                        zt_codes.add(c)
-                break
+            for z in (mem.get("stocks") or []):
+                c = str(z.get("code") or "")[:6]
+                if c and c not in zt_codes:
+                    ladder.append({"name": z.get("name"), "code": c,
+                                   "boards": None, "pct": float(z.get("pct") or 0)})
+                    zt_codes.add(c)
             ladder.sort(key=lambda x: (-_parse_boards(x.get("boards")), -x["pct"]))
         except Exception as e:  # ⛔ 盘中链路安全第一：补全异常不得影响 relay 主流程
             print(f"[short_spirit] 后排关联补全降级(已忽略): {e}")
@@ -980,6 +1253,26 @@ def _relay_hint(signals, d):
         _bk = _m.group(0) if _m else ""
     except Exception:
         _bk = ""
+    _bk_src = "official_tag" if _bk else ""
+    # 📌 2026-11-03（传媒实证）：选股宝题材名「短剧/互动影游」在 sector_official 里没有映射，
+    #   `_official_tag` 直接返回空 → 后排池整段拿不到；而下游 `backseat_unknown` 只在
+    #   「有 bk 但抓不到」时才为真 → 卡面被渲染成「该方向已无未封板票」。
+    #   实测该题材真实存在东财 **传媒(BK0486)**，覆盖率 0.8，海看股份(301262)就在其中。
+    #   兜底：用运行时 payload 自带的 `official.boards[0].bk`（由成分匹配得出，非猜）。
+    #   ⛔ 仍取不到就留空，由下游写「未取到」，⛔ 绝不许编「没有票」。
+    if not _bk:
+        try:
+            for t5 in (d.get("top5") or []):
+                if not _sector_match(sector, str(t5.get("name") or "")):
+                    continue
+                for b in ((t5.get("official") or {}).get("boards") or []):
+                    _bk_b = str(b.get("bk") or "")
+                    if _bk_b.startswith("BK"):
+                        _bk, _bk_src = _bk_b, "theme_official"
+                        break
+                break
+        except Exception:
+            pass
     snap = _board_snapshot(_bk) if _bk else None     # ⛔ None = 抓不到（≠ 板块没票）
     if _bk:
         tradable = _board_backseat(
@@ -1080,14 +1373,27 @@ def _relay_hint(signals, d):
                 front = {"name": sig.get("name"), "code": str(sig.get("code") or "")[:6],
                          "boards": None, "pct": float(sig.get("pct") or 0)}
                 break
-    return {"sector": sector, "zt_count": len(ladder), "front": front,
+    # 家数口径（2026-11-03）：`zt_count` 原来是 `len(ladder)`——即「我们列出来几只」，
+    #   与「该题材今日几家涨停」是两回事。11-03 传媒：选股宝 zt_count=8，而按东财行业名
+    #   只收到 4 只 → 卡面写「今日 4 家涨停」，用户看到真实盘面 8 家全一字 → 判定系统漏报。
+    #   现在：**有选股宝权威家数就用它**；没有才退回 len(ladder)。
+    #   `ladder_count` 单独留存（= 卡面实际列出几只），供卡面区分「8 家·列 5 只」。
+    _zt_n = (mem or {}).get("zt_count")
+    zt_count_final = _zt_n if isinstance(_zt_n, int) and _zt_n > 0 else len(ladder)
+    return {"sector": sector, "zt_count": zt_count_final,
+            "zt_count_src": "xgb" if isinstance(_zt_n, int) and _zt_n > 0 else "ladder",
+            "ladder_count": len(ladder), "front": front,
             "front_in_signal": bool(front) and front["code"] in pushed_codes,
             "signal_in_ladder": bool(pushed_codes & zt_codes),
             "ladder": ladder[:RELAY_HINT_LADDER_MAX],
             "backseat_src": backseat_src,          # board=真后排池 / leaders=旧兜底 / ""=无
             "backseat_bk": _bk,
+            "backseat_bk_src": _bk_src,            # official_tag / theme_official / ""
             # ⛔ 关键：快照抓不到 ≠ 板块没有未封板票。卡面据此改口，不出假结论。
-            "backseat_unknown": bool(_bk) and snap is None,
+            # 2026-11-03 修：原来写 `bool(_bk) and snap is None` —— 板块码**根本没解析出来**
+            # 时为 False → 卡面渲染成「该方向已无未封板票」（当天传媒就是这么错的）。
+            # 现在：只要没拿到快照（无码 or 抓取失败）→ 一律「未取到」，⛔ 不许当成「没有」。
+            "backseat_unknown": snap is None,
             "tradable": tradable[:RELAY_HINT_MAX_ITEMS]}
 
 
@@ -1269,15 +1575,32 @@ def noise_filter(pool, cfg, now, exempt_codes=None, boards_map=None,
         if s["pct"] < cfg["min_pct"]:
             continue
         # ── 市值门槛（2026-09-07 A/B 方案·开关默认关）──
+        # 2026-11-03：板数判据补上**涨停池自带板数**（`_zt_rich.boards`）。
+        #   原实现只从 latest.json 的 leaders 取 `_boards_map` → 盘前/降级轮 leaders 为空时
+        #   板数恒 0 → A 豁免（连板≥2 免市值门槛）整体失效 → 大晟文化(2板/流通27亿)
+        #   这类情绪核心被 30 亿 LOWCAP 门槛挡在池外。涨停池的 lbc 是同日权威字段。
+        _zt_boards = int((s.get("_zt_rich") or {}).get("boards") or 0)
+        # 2026-11-03 13:20：**涨停池事实票豁免市值门槛**（与成交额豁免同源）。
+        #   实证：时代万恒 27 亿流通、成交 3.77 亿、10:21 封板 → 被 30 亿 LOWCAP 挡在池外，
+        #   于是 8 只锂电只剩 7 只。它已经用「封住涨停」证明了自己，市值大小属于
+        #   「买不买」的范畴，⛔ 不该由它决定「这条线几家涨停」。
+        #   开关 ENABLE_SPIRIT_ZT_CAP_EXEMPT=0 可单独关掉这一条。
+        _zt_cap_exempt = bool(s.get(ZT_FACT_KEY)) and ENABLE_SPIRIT_ZT_CAP_EXEMPT
         mc = s["market_cap_yi"]
-        _exempt = ENABLE_SPIRIT_CAPEXEMPT and (
-            s["code"] in _exempt_set or int(_bmap.get(s["code"], 0) or 0) >= 2)
+        _exempt = _zt_cap_exempt or (ENABLE_SPIRIT_CAPEXEMPT and (
+            s["code"] in _exempt_set or int(_bmap.get(s["code"], 0) or 0) >= 2
+            or _zt_boards >= 2))
         if not _exempt:
             _cap_thr = SPIRIT_LOWCAP_YI if ENABLE_SPIRIT_LOWCAP else min_cap
             if mc < _cap_thr:
                 continue
         # 成交额门槛（2026-10-08：20cm 高辨识度票可豁免，见 _amount_exempt）
-        if s["amount_yi"] < amt_thr and not _amount_exempt(s, _ident, _bmap, _hot):
+        # 2026-11-03：**涨停池事实票豁免**——一字/竞价封的成交额天然极小（筹码锁死，
+        #   没换手），这是特征不是缺陷。11-03 实证：大晟文化成交 0.26 亿但封单 4.55 亿
+        #   （占流通 16.9%），旧门槛把它和整条短剧线一起挡在池外。
+        #   ⛔ 只豁免「已确认封板」的票；涨幅榜里未封板的小成交额票照旧被挡。
+        _zt_fact = bool(s.get(ZT_FACT_KEY)) and ENABLE_SPIRIT_ZT_AMT_EXEMPT
+        if s["amount_yi"] < amt_thr and not _zt_fact and not _amount_exempt(s, _ident, _bmap, _hot):
             continue
         # 次新：上市日期距今 < max_new_stock_days
         if s["list_date"] and len(s["list_date"]) == 8:
@@ -1375,6 +1698,13 @@ def strength(s, res, flow_ratio, cfg):
 def build_signals(d, now, cfg):
     """主流程：拉池 → 过滤 → 龙头保留 → 共振 → 排序"""
     pool = fetch_pool(cfg)
+    # 【2026-11-03 用户「立即处理」】涨停池（已封板事实源）**无条件并入**：
+    #   涨幅榜抓取成功也要并 —— 因为涨幅榜只有两页 200 条、按涨幅排序，
+    #   而涨停池是「今天所有封住的票」的权威全集。
+    #   ⛔ 失败返回 []，此时行为与改动前完全一致（不冒充「今天没涨停」）。
+    _zt_rows = fetch_zt_pool(now)
+    if _zt_rows:
+        pool = _merge_zt_pool(pool, _zt_rows)
     # ⛔ C 降级：东财涨幅榜抓取失败（沙箱下午常 RemoteDisconnected→池0）时，
     # 用本地面板快照 latest.json 的连板龙头(boards>=2)兜底，确保连板龙头盘中任何时段可推
     if ENABLE_SPIRIT_LEADER_FALLBACK and len(pool) < 5:
@@ -1401,7 +1731,6 @@ def build_signals(d, now, cfg):
         arr.sort(key=lambda x: -x["pct"])
         core.extend(arr[: cfg["top_per_sector"]])
     # 共振 + 强度 + 题材/逻辑（2026-08-18 用户定：只显示题材+逻辑，去掉标签词）
-    signals = []
     # code → top5 题材名映射（强共振的题材化表达，替代"主线核心"标签）
     code_t5 = {}
     for s5 in (d.get("top5") or [])[:5]:
@@ -1412,7 +1741,13 @@ def build_signals(d, now, cfg):
         for f in (s5.get("followers") or []):
             if f.get("code"):
                 code_t5[str(f["code"])[:6]] = nm
-    for s in core:
+    _mk_memo: dict = {}
+
+    def _mk(s: dict) -> dict:
+        """单个池票 → signal 字段（提取自原内联循环·纯计算）。"""
+        _k = s["code"]
+        if _k in _mk_memo:
+            return dict(_mk_memo[_k])
         res, hit = resonance(s, kws, t5codes, t5names)
         typ, tags = signal_type(s)
         sc = strength(s, res, 0, cfg)
@@ -1424,7 +1759,7 @@ def build_signals(d, now, cfg):
         if not t5 and "题材名" in hit:
             t5 = "题材共振"
         reason = f"共振[{t5[:8]}]" if t5 else typ
-        signals.append({
+        out = {
             "name": s["name"], "code": s["code"], "sector": s["industry"],
             # 板块联动口径（2026-10-12）：题材名优先（top5 成分票）、东财行业兜底 ——
             #   与「🎯 接力方向」同为题材名，卡面板块口径一致；非 top5 票才落到行业。
@@ -1433,8 +1768,23 @@ def build_signals(d, now, cfg):
             "pct": s["pct"], "type": typ, "tags": tags,
             "resonance": round(res * 100), "flow_yi": s["main_flow_yi"],
             "strength": sc, "reason": reason,
-        })
+        }
+        _mk_memo[_k] = out
+        return dict(out)
+
+    signals = [_mk(s) for s in core]
     signals.sort(key=lambda x: -x["strength"])
+    # 【2026-11-03 二次修】全池视图 = **截断前**的 `keep`，不是 `core`/`signals`。
+    #   ⚠️ 上一版写成 `list(signals)` 仍然看不出「一条线几家」——`core` 已过
+    #      `arr[:top_per_sector]`（每行业最多 2 只）：13:07 实盘锂电 8 家，
+    #      卡面「🔥 板块联动」只显示「电池 2只」，那条线等于不存在。
+    #   `top_per_sector` 是**推送名额**规则，⛔ 无权决定「这个板块今天几家涨停」这个事实。
+    #   病根同源：把「说什么」和「推多少」混在同一个变量上。
+    #   ⛔ 只改展示聚合的数据源，不改推送名额（max_signals / top_per_sector）、不改排序、不改评分。
+    #   ⚠️ 走模块级缓存而非第 5 个返回值：本文件 POOL_CACHE / FETCH_STATUS 同套路，
+    #      且 build_signals 返回值被 5 处测试 mock，改签名等于无谓地打断它们。
+    GROUP_VIEW_CACHE["view"] = ([_mk(s) for s in keep]
+                                if ENABLE_SPIRIT_GROUP_FULL_POOL else None)
     # ⛔ 涨停当下性硬门（2026-09-07 用户「时间顺序第一」）：剔除上轮已观测为涨停的存量票
     if ENABLE_SPIRIT_TIMELINESS:
         signals = _timeliness_gate(signals, pool, now)
@@ -1565,16 +1915,32 @@ def _pct_tag(pct: float) -> str:
     return f"<text_tag color='neutral'>{pct:+.2f}%</text_tag>"
 
 
-def _sector_group_summary(signals):
+def _sector_group_summary(signals, *, merge_family=None):
     """板块联动归纳（纯函数·2026-10-12 用户「尽量进行板块联动的观察归纳」）。
 
     把本轮信号按板块聚合（题材名 `theme` 优先·东财行业 `sector` 兜底 → 与接力段同口径）。
     返回 [(sector, total, zt_count, top_signal), ...]，
     排序 = 涨停数降 → 家数降 → 组内最强强度降（「有涨停 + 家数多」的板块顶到前面）。
+
+    `merge_family`（2026-11-03）：是否按 `theme_base.THEME_FAMILIES` 归族后再聚合。
+      病根：盘中板块名来自东财 hybk → 传媒线被拆成 游戏Ⅱ/影视院线/数字媒体/广告营销
+      四条 2 只的小线，用户看到的是「一堆杂毛」而不是「传媒大爆发」。
+      ⛔ 只改**这一段的展示聚合口径**，不改 signals 的 theme 字段、不改推送/排序/评分。
+
+    归族的第二判据（2026-11-03 13:07 补）：`theme` 不中族时再拿 `sector` 试一次。
+      实证：8 只锂电里圣阳股份 theme=「锂电池」（top5 命中）、其余 theme 落到东财行业
+      「电池」→ 同一批票被拆成「电池 6只」+「锂电池 1只」。同一批票的两种叫法，
+      必须归到同一组，否则家数永远算不对。
     """
+    if merge_family is None:
+        merge_family = ENABLE_SPIRIT_GROUP_FAMILY
     groups: dict = {}
     for s in (signals or []):
         sec = str(s.get("theme") or s.get("sector") or "").strip() or "其他"
+        if merge_family:
+            fam = _family_of(sec) or _family_of(str(s.get("sector") or "").strip())
+            if fam:
+                sec = fam[:-1] if fam.endswith("族") else fam   # 「传媒族」→「传媒」
         g = groups.setdefault(sec, {"items": [], "zt": 0})
         g["items"].append(s)
         if s.get("type") == "涨停":
@@ -1715,7 +2081,28 @@ def backseat_pick(pool, signals, d, sess, cfg=None):
         return {"potential": [], "candidates": []}
 
 
-def build_card(signals, sess, now, relay=None, backseat=None):
+ENABLE_SPIRIT_LINKAGE_DELTA = True  # 同板块只报首次及家数/涨停数新高，关闭恢复全量附带
+
+
+def _linkage_delta(summary, sent):
+    """仅比较成功送达的高水位；排名/涨幅/最强票抖动不算新联动。纯函数。"""
+    rows, updates = [], {}
+    for row in summary:
+        sector, count, sealed, _ = row
+        if count < SECTOR_GROUP_MIN_ITEMS and sealed < 1:
+            continue
+        previous = sent.get(sector)
+        if (not ENABLE_SPIRIT_LINKAGE_DELTA or previous is None
+                or count > previous.get("count", 0) or sealed > previous.get("sealed", 0)):
+            rows.append(row)
+            updates[sector] = {
+                "count": max(count, (previous or {}).get("count", 0)),
+                "sealed": max(sealed, (previous or {}).get("sealed", 0)),
+            }
+    return rows[:SECTOR_GROUP_MAX], {row[0]: updates[row[0]] for row in rows[:SECTOR_GROUP_MAX]}
+
+
+def build_card(signals, sess, now, relay=None, backseat=None, group_view=None, group_summary=None):
     """飞书卡（2026-08-18 用户定·向窗口卡事件流风格看齐）：
     按异动类型分组（🔥涨停/🚀冲板/⚡快速拉升），一行一只，字段压缩到一行。
     ⛔ 2026-08-25 修复（用户抓包「又忘了红涨绿跌」+「红色颜色不对」）：
@@ -1767,7 +2154,11 @@ def build_card(signals, sess, now, relay=None, backseat=None):
     #   把本轮异动按板块聚合 → 「风电 3只(涨停1)｜最强 X」。纯呈现层；异常降级不影响主卡。
     if ENABLE_SPIRIT_SECTOR_GROUP:
         try:
-            _summ = _sector_group_summary(signals)
+            # 2026-11-03：聚合数据源 = 过滤后**全池**（`group_view`），不是截断后的推送序列。
+            #   strength 里成交额占 0.2 权重 → 一字板被挤出 max_signals 名额 → 板块段跟着丢票。
+            #   ⛔ 只影响这一段的家数展示，不改上面「涨停信号」推送的名额与排序。
+            _summ = (group_summary if group_summary is not None else
+                     _sector_group_summary(group_view if group_view is not None else signals))
             _linked = [x for x in _summ if x[1] >= SECTOR_GROUP_MIN_ITEMS or x[2] >= 1]
             if _linked:
                 lines.append("")
@@ -1787,7 +2178,7 @@ def build_card(signals, sess, now, relay=None, backseat=None):
                         _fol = [c for c in _bs_cands
                                 if str(c.get("code") or "") not in _bs_followed
                                 and str(c.get("code") or "") != _top_code
-                                and _sector_match(_sec, str(c.get("sector") or ""))][:BS_FOLLOW_MAX]
+                                and _sector_match_any(_sec, str(c.get("sector") or ""))][:BS_FOLLOW_MAX]
                         if _fol:
                             _bs_followed |= {str(x.get("code") or "") for x in _fol}
                             lines.append("　　↳ 跟风：" + "｜".join(
@@ -1832,6 +2223,12 @@ def build_card(signals, sess, now, relay=None, backseat=None):
         head = f"**🎯 接力方向｜{sec}{o_tag}**"
         if zt_n:
             head += f"（今日 {zt_n} 家涨停）"
+            # 2026-11-03：`zt_count` 现在是选股宝权威家数，可能多于本卡能列出的只数
+            #   （limit_up_stocks 覆盖不全 / 前排与本轮已单独列）。差 ≥2 才标注，
+            #   ⛔ 否则用户看到「8 家」却只数到 5 只 → 以为系统又漏了。
+            _ld = relay.get("ladder_count")
+            if isinstance(_ld, int) and zt_n - _ld >= 2:
+                head += f"·本卡列 {_ld} 只"
         lines.append("")
         lines.append(head)
         fr = relay.get("front") or {}
@@ -2171,7 +2568,12 @@ def _run(args):
             _backseat = backseat_pick(POOL_CACHE.get("up") or [], card_signals, d, sess, cfg)
         except Exception as e:
             print(f"[short_spirit] 后排预判降级(已忽略): {e}")
-    card = build_card(card_signals, sess, now, relay=relay, backseat=_backseat)
+    _group_view = GROUP_VIEW_CACHE.get("view")
+    _group_rows, _group_updates = _linkage_delta(
+        _sector_group_summary(_group_view if _group_view is not None else card_signals),
+        pushed.get("linkage_sent") or {}) if ENABLE_SPIRIT_SECTOR_GROUP else ([], {})
+    card = build_card(card_signals, sess, now, relay=relay, backseat=_backseat,
+                      group_view=_group_view, group_summary=_group_rows)
     cf = ROOT / "cache" / "short_spirit_card.json"
     save_json(cf, card)
     # ⛔ 有界修复（2026-09-17）：入池后、任何发送尝试之前可靠落盘 pending（update_last=False）。
@@ -2180,6 +2582,7 @@ def _run(args):
     save_pushed(pushed, now, update_last=False)
     rc = __import__("os").system(f'"{sys.executable}" "{ROOT}/scripts/push_card.py" --webhook feishu_webhook_intraday "{cf}"')
     if rc == 0:
+        pushed.setdefault("linkage_sent", {}).update(_group_updates)
         pushed["codes"] = (pushed.get("codes", []) or []) + [s["code"] for s in card_signals]
         # 池内超出 max_signals 的部分保留，不丢（下次触发再推）
         pushed["pending"] = [s for s in pending if s["code"] not in {x["code"] for x in card_signals}]

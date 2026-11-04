@@ -31,6 +31,7 @@ AI 短线情绪·龙头战法 期望层（确定性引擎版）
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -199,11 +200,16 @@ def sentiment_phase(env: dict[str, Any]) -> tuple[str, str]:
     a-stock-sentiment 框架判定的权威结论），保证 AI 层与实时情绪一致；仅当该标签
     缺失/不可识别时，才用下方阈值推导兜底。
     """
+    # 缺分不能被旧标签或 `or 5` 重新包装成修复；风险事实仍在原字段保留。
+    raw_score = env.get("sentiment_score")
+    if (isinstance(raw_score, bool) or not isinstance(raw_score, (int, float))
+            or not math.isfinite(raw_score) or not 1 <= raw_score <= 10):
+        return "未知", "情绪评分未就绪；核按钮、破位等独立风险仍须单独核对"
     # —— 优先用真实标签 ——
     label = str(env.get("sentiment_label") or "").strip()
     KNOWN = {"冰点", "修复", "分歧", "亢奋"}
     if label in KNOWN:
-        sscore = float(env.get("sentiment_score") or 5.0)
+        sscore = float(raw_score)
         nuke = int(env.get("nuke_count") or 0)
         broken = float(env.get("broken_rate") or 0.0)
         note_map = {
@@ -215,7 +221,7 @@ def sentiment_phase(env: dict[str, Any]) -> tuple[str, str]:
         return (label, note_map[label])
 
     # —— 兜底：无真实标签时用阈值推导 ——
-    sscore = float(env.get("sentiment_score") or 5.0)
+    sscore = float(raw_score)
     nuke = int(env.get("nuke_count") or 0)
     broken = float(env.get("broken_rate") or 0.0)
     promote = float(env.get("promote_rate") or 0.0)
@@ -384,7 +390,6 @@ def build_ai_expectation(
       expected_text / super_text / low_text
       phase / dragon_diagnosis / theme_phase / confidence / ai_note
     """
-    boards = int(cand.get("boards") or 1)
     is_20cm = bool(cand.get("is_20cm"))
 
     # —— 一字板：无法在竞价买入，不给可交易竞价预期（无参与机会）——
@@ -437,7 +442,8 @@ def build_ai_expectation(
         blk = lp.get("capacity_only") or {}
     else:
         blk = lp.get("follower") or {}
-    env_gate = float((lp.get("env_gate") or {}).get(phase, 0.5))
+    # 未知环境不提供依赖情绪确认的龙头溢价，非环境项保持原规则。
+    env_gate = 0.0 if phase == "未知" else float((lp.get("env_gate") or {}).get(phase, 0.5))
     if blk.get("need_env"):
         g = env_gate
     else:
@@ -449,11 +455,9 @@ def build_ai_expectation(
 
     # —— 题材动量（来自 theme_roll）——
     theme_phase = "—"
-    theme_conf = 0.0
     if theme_ctx:
         tc = theme_ctx.get(theme) or {}
         theme_phase = tc.get("phase") or "—"
-        theme_conf = float(tc.get("confidence") or 0.0)
         if theme_phase in ("boom", "re-entry-candidate"):
             hi += 0.5  # 题材处于爆发/回流，竞价容错更高
 
@@ -560,7 +564,9 @@ def build_ai_expectation(
     # 由「龙头带领性 + 容量梯队 + 环境阶段」决定溢价强度档位：
     #   强 = 真龙头+容量核心+加速期(亢奋，满门控)；中上 = 真龙头+容量但非亢奋(门控打折)；
     #   弱 = 炸板/烂板/板块弱/退潮。
-    if is_dragon and is_cap and phase == "亢奋":
+    if phase == "未知":
+        gap_strength, gap_strength_hint = "unknown", "情绪待确认·仅保留个股形态参考"
+    elif is_dragon and is_cap and phase == "亢奋":
         gap_strength, gap_strength_hint = "strong", "🔺龙头+容量·加速溢价强"
     elif is_dragon and is_cap:
         gap_strength, gap_strength_hint = "mid", "⬆龙头+容量·高开预期中上"
@@ -572,7 +578,8 @@ def build_ai_expectation(
         gap_strength, gap_strength_hint = "mid", "⬆正常高开预期"
 
     # —— 置信度（0~1）：情绪(0.3) + 龙头(0.3) + 形态(0.2) + 板块(0.2) ——
-    phase_score = {"亢奋": 0.9, "修复": 0.7, "分歧": 0.45, "冰点": 0.2}.get(phase, 0.5)
+    # 未知项不给置信贡献，也不重分配其权重；0 贡献不代表观测为冰点。
+    phase_score = {"亢奋": 0.9, "修复": 0.7, "分歧": 0.45, "冰点": 0.2}.get(phase, 0.0)
     dragon_score = dragon["composite"] / 5.0
     form_conf = {"一字板": 0.9, "缩量板": 0.8, "快速板": 0.7, "温和放量": 0.6, "放量板": 0.5,
                  "炸板回封": 0.45, "放量烂板": 0.35}.get(form_info.get("form"), 0.5)
@@ -591,8 +598,10 @@ def build_ai_expectation(
         phase_hint = "情绪分歧：高位淘汰加剧，竞价弱于预期直接放弃"
     elif phase == "亢奋":
         phase_hint = "情绪亢奋：龙头加速，竞价高开即强，可放宽超预期"
-    else:
+    elif phase == "修复":
         phase_hint = "情绪修复：试错为主，按预期区间执行"
+    else:
+        phase_hint = "情绪待确认：区间仅为个股形态参考，不视作环境放行"
 
     cm = "⚠️20cm波动大·紧止损" if is_20cm else ""
     amt_lo_pct = round(ratio_lo_adj * 100.0, 0)
@@ -622,6 +631,8 @@ def build_ai_expectation(
         f"竞价涨幅≥{super_gap_min:.0f}% 且量能≥{amount_super:.2f}亿(昨量{amt_hi_pct:.0f}%+)，超预期直接买"
         + (f"；{cm}" if cm else "")
     )
+    if phase == "未知":
+        super_text = f"情绪待确认：涨幅≥{super_gap_min:.0f}%且量能≥{amount_super:.2f}亿仅作量价参考，不构成环境放行"
     low_text = f"竞价未达 {lo}% 或量能<{amount_min:.2f}亿，{phase_hint}，不买入"
 
     ai_note = (
@@ -660,6 +671,10 @@ def build_ai_expectation(
         # —— AI 诊断字段 ——
         "phase": phase,
         "phase_note": phase_note,
+        "sentiment_available": phase != "未知",
+        "sentiment_model": env.get("sentiment_model"),
+        "sentiment_quality": env.get("sentiment_quality", "unavailable"),
+        "sentiment_inputs_missing": env.get("sentiment_inputs_missing", []),
         "dragon_diagnosis": dragon,
         "theme_phase": theme_phase,
         "confidence": confidence,

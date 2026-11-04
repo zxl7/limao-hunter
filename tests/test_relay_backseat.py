@@ -31,6 +31,16 @@ spec.loader.exec_module(ss)
 
 # ── 造数据 ────────────────────────────────────────────────
 
+@pytest.fixture(autouse=True)
+def _clear_board_cache(monkeypatch):
+    """每个用例从空缓存开始。
+
+    2026-11-03：`_board_snapshot` 加了 TTL 缓存（东财按时刻限频，密集重试会被封）。
+    缓存是**模块级全局**，会让「上一个用例抓到了」污染「下一个用例模拟抓失败」。
+    """
+    monkeypatch.setattr(ss, "_BOARD_SNAP_CACHE", {})
+
+
 def _row(code, name, pct, vr=5.0, amt=3.0, turn=1.0):
     return {"f12": code, "f14": name, "f3": pct, "f10": vr, "f6": amt * 1e8, "f8": turn}
 
@@ -54,7 +64,7 @@ def fake_board(monkeypatch):
         _row("002146", "荣盛发展", 8.80, 12.0, 1.00, 3.0),    # 昨板今断 → 剔除
     ]
     monkeypatch.setattr(ss, "ENABLE_SPIRIT_RELAY_BACKSEAT", True)
-    monkeypatch.setattr(ss, "http_get", lambda url, t=8: _resp(rows))
+    monkeypatch.setattr(ss, "http_get", lambda url, t=8, headers=None: _resp(rows))
     monkeypatch.setattr(ss, "_yzt_codes", lambda date_str="": {"002146"})
     return rows
 
@@ -93,7 +103,7 @@ def test_burst_volume_excluded(fake_board):
 
 def test_missing_vol_ratio_passes(monkeypatch):
     monkeypatch.setattr(ss, "ENABLE_SPIRIT_RELAY_BACKSEAT", True)
-    monkeypatch.setattr(ss, "http_get", lambda url, t=8: _resp([
+    monkeypatch.setattr(ss, "http_get", lambda url, t=8, headers=None: _resp([
         {"f12": "000559", "f14": "万向钱潮", "f3": 3.4, "f6": 1e8},
     ]))
     monkeypatch.setattr(ss, "_yzt_codes", lambda date_str="": set())
@@ -115,7 +125,7 @@ def test_network_failure_returns_empty(monkeypatch):
 def test_switch_off_never_calls_network(monkeypatch):
     monkeypatch.setattr(ss, "ENABLE_SPIRIT_RELAY_BACKSEAT", False)
     called = []
-    monkeypatch.setattr(ss, "http_get", lambda url, t=8: called.append(url) or _resp([]))
+    monkeypatch.setattr(ss, "http_get", lambda url, t=8, headers=None: called.append(url) or _resp([]))
     assert ss._board_backseat("BK1166", set(), set(), 2) == []
     assert called == []
 
@@ -157,7 +167,7 @@ def test_relay_hint_uses_board_backseat(monkeypatch, fake_board):
 def test_relay_hint_falls_back_to_leaders(monkeypatch):
     """板块 BK 取不到 → 退回旧 leaders 路径（行为与改动前一致）。"""
     monkeypatch.setattr(ss, "ENABLE_SPIRIT_RELAY_BACKSEAT", True)
-    monkeypatch.setattr(ss, "http_get", lambda url, t=8: (_ for _ in ()).throw(RuntimeError("x")))
+    monkeypatch.setattr(ss, "http_get", lambda url, t=8, headers=None: (_ for _ in ()).throw(RuntimeError("x")))
     monkeypatch.setattr(ss, "_official_tag", lambda sec: "(BK1166)")
     monkeypatch.setattr(ss, "_relay_sector_of", lambda sigs, d: "低空经济")
     d = _d()

@@ -155,6 +155,19 @@ def _load_registry_xuangubao(raw: dict[str, Any], cache_dir: Path) -> dict[str, 
             "zsz": float(old.get("zsz_yi") or old.get("zsz") or 0.0) or None,
             "cje": float(old.get("cje_yi") or old.get("cje") or 0.0) or None,
         }
+        # 封单与流通市值必须来自同一份快照，不能将底库旧封单拼接到新分母。
+        # 底库仍作为身份/逐日事实主读；此开关仅控制动态封单对的读取。
+        if os.getenv("ENABLE_COHERENT_SEAL_PAIR", "1") != "0":
+            row["zj"] = (float(old["seal"]) if old.get("seal") is not None else None)
+            row["seal_fact"] = {
+                "source": "yesterday_zt", "date": date10,
+                "ingested_at": raw.get("generated_ts"),
+                "seal_yi": row["zj"], "lt_yi": row["lt"],
+                "registry_seal_yi": item.get("seal_yi"),
+                "different_from_registry": (
+                    item.get("seal_yi") is not None and row["zj"] is not None
+                    and float(item["seal_yi"]) != row["zj"]),
+            }
         row["is_st"] = _is_st(row["mc"], code)
         ztgc.append(row)
         code2themes[code] = themes
@@ -264,14 +277,19 @@ def load_environment(cache_dir: Path | None = None) -> dict[str, Any]:
     """
     cache_dir = cache_dir or DEFAULT_CACHE_DIR
     fb = _load_json(cache_dir / "feedback_matrix.json")
-    if not fb:
+    if not fb or fb.get("error"):
         return {
-            "sentiment_score": 5.0, "sentiment_label": "未知",
+            "sentiment_score": None, "sentiment_label": "未知",
+            "sentiment_quality": "unavailable",
             "promote_rate": 0.0, "nuke_count": 0, "broken_rate": 0.0,
             "up_rate": 0.0, "avg_pct": 0.0, "now_zt_count": 0, "regime": "neutral",
         }
 
-    sentiment_score = float(fb.get("sentiment_score") or 5.0)
+    import math
+    raw_score = fb.get("sentiment_score")
+    sentiment_score = (float(raw_score) if isinstance(raw_score, (int, float))
+                       and not isinstance(raw_score, bool) and math.isfinite(raw_score)
+                       and 1 <= raw_score <= 10 else None)
     nuke_count = int(fb.get("nuke_count") or 0)
     broken_rate = float(fb.get("broken_rate") or 0.0)
     promote_rate = float(fb.get("promote_rate") or 0.0)
@@ -284,9 +302,13 @@ def load_environment(cache_dir: Path | None = None) -> dict[str, Any]:
     # 仅当真破位出现（break_count>=1）才升级为 risk_off（高位破位杀跌，回避高位接力）。
     # P1-6 冰点档（2026-08-17 用户定）：情绪分≤2.0 判 ice（冰点）——8/14 情绪 1/10 冰点
     # 仍判 neutral 导致 relay 照推的防守漏洞；冰点档触发 buy 硬开关（signal_eval 侧）。
-    if sentiment_score <= 2.0:
+    if sentiment_score is None:
+        regime = "risk_off" if break_count >= 1 else "neutral"
+    elif sentiment_score <= 2.0:
         regime = "ice"
-    elif sentiment_score >= 6.5 and nuke_count <= 2 and broken_rate < 30:
+    elif (sentiment_score >= 6.5 and nuke_count <= 2 and broken_rate < 30
+          and fb.get("nuke_count") is not None and fb.get("broken_rate") is not None
+          and not {"nuke", "broken_rate"}.intersection(fb.get("sentiment_inputs_missing") or [])):
         regime = "risk_on"
     elif break_count >= 1:
         regime = "risk_off"
@@ -299,6 +321,10 @@ def load_environment(cache_dir: Path | None = None) -> dict[str, Any]:
     return {
         "sentiment_score": sentiment_score,
         "sentiment_label": str(fb.get("sentiment_label") or ""),
+        "sentiment_model": fb.get("sentiment_model") or "legacy_v2",
+        "sentiment_quality": (fb.get("sentiment_quality") or "unspecified") if sentiment_score is not None else "unavailable",
+        "sentiment_inputs_missing": fb.get("sentiment_inputs_missing") or [],
+        "sentiment_source_at": fb.get("source_snapshot_ts"),
         "promote_rate": promote_rate,
         "nuke_count": nuke_count,
         "broken_rate": broken_rate,

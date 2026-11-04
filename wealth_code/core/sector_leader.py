@@ -67,6 +67,12 @@ _THEME_EMPTY = {"", "—", "-", "其他", "无", "未知", "none", "null", "未�
 LEADER_BLOCK_ONE_WORD = "one_word"
 LEADER_BLOCK_ST = "st"
 
+# ⛔ 同层内是否用综合分决定先后（2026-11-04 用户「按照打分来排序」）。
+#    0 = 回到旧序（同层按股票代码兜底），用于回滚。
+_SCORE_TIEBREAK = (os.environ.get("SECTOR_LEADER_SCORE_TIEBREAK") or "1").strip().lower() not in {
+    "0", "false", "off", "no", ""
+}
+
 
 def _num(v: Any, default: float = 0.0) -> float:
     try:
@@ -213,17 +219,31 @@ def leader_key(row: Mapping[str, Any], *, band: int = 0) -> tuple:
 
     ⛔ 分层比较，不做加权求和 —— 加权会让「成交额大」之类的单维优势抵消板数劣势，
       正是旧实现把 8.1 亿成交额的多伦顶到龙一的原因。
+
+    ## 2026-11-04 用户「按照打分来排序」
+    原第 7 序是 `code_of(row)` —— 同板数/同时段/同封单/同带动/同封板时刻的票
+    **按股票代码排**，综合分完全不参与（只在 `select_relay_watch` 里当最后的 tiebreak）。
+    实测 11-03：排序第 1 的圣阳股份 raw 63.7（全池最低），raw 最高的东方海洋 79.0 排第 7。
+    → 在「更早封板」之后插入**综合分**（分高者优先），代码降为第 8 序纯兜底。
+    ⛔ 主序（板数 → 时段档 → 封单 → 带动 → 封板时刻）一个字没动 ——
+      「推的票必须是板块龙一」是铁律，打分只在**同层内**决定先后。
+    ⛔ 缺分数用中性 0（不罚），保证涨停池等无分场景与旧行为完全一致。
+    `SECTOR_LEADER_SCORE_TIEBREAK=0` 回退旧序（代码兜底）。
     """
     ratio = seal_ratio_of(row)
-    return (
+    order: list[Any] = [
         -boards_of(row),                                  # 1. 板数高
         band,                                             # 2. 封板时段档（早者优先）
         0 if ratio is not None else 1,                    # 3. 有封单数据者优先（缺 ≠ 不利，但不给优势）
         -(ratio if ratio is not None else 0.0),           # 4. 封单/流通厚者优先
         -carry_of(row),                                   # 5. 带动家数多者优先
         fbt_min(row) if fbt_min(row) is not None else 1e9,  # 6. 更早封板
-        code_of(row),                                     # 7. 稳定兜底（可复现）
-    )
+    ]
+    if _SCORE_TIEBREAK:
+        # 7. 同层内综合分高者优先（缺分 → 0 中性，不影响主序与旧行为）
+        order.append(-(_opt_num(row.get("score")) or 0.0))
+    order.append(code_of(row))                            # 8. 稳定兜底（可复现）
+    return tuple(order)
 
 
 def leader_block_reason(row: Mapping[str, Any]) -> str:

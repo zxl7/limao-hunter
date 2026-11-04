@@ -1531,25 +1531,14 @@ def build_insight_block(sectors, plates, diagnoses, total_zt):
 # ── Summary JSON for AI ───────────────────────────────
 
 def compute_sentiment(zt_count, broken, ld_count, index):
-    """多因子情绪判定：涨停数+封板率+跌停数+大盘方向"""
-    seal_rate = zt_count / max(1, zt_count + broken["count"])  # 封板率
-    score = 0
-    # 涨停广度
-    score += 3 if zt_count >= 50 else 2 if zt_count >= 30 else 1 if zt_count >= 15 else 0
-    # 封板率（资金承接力）
-    score += 2 if seal_rate >= 0.85 else 1 if seal_rate >= 0.7 else -1 if seal_rate < 0.55 else 0
-    # 亏钱效应
-    score -= 2 if ld_count >= 10 else 1 if ld_count >= 5 else 0
-    # 大盘方向（三大指数均值）
-    if index:
-        avg = sum(i["pct"] for i in index) / len(index)
-        score += 1 if avg > 0.5 else -1 if avg < -0.5 else 0
-    if score >= 5: label = "亢奋"
-    elif score >= 3: label = "偏强"
-    elif score >= 1: label = "修复"
-    elif score >= -1: label = "分歧"
-    else: label = "退潮"
-    return {"label": label, "score": score, "seal_rate": round(seal_rate * 100, 1)}
+    """采集阶段只产封板率；本轮 feedback 完成后回填唯一情绪分。
+
+    不读取上一轮反馈冒充本轮，也不再用四因子另造有符号分。
+    ld_count/index 保留调用兼容；不是评分输入。
+    """
+    seal_rate = zt_count / max(1, zt_count + broken["count"])
+    return {"label": "未知", "score": None, "seal_rate": round(seal_rate * 100, 1),
+            "source": "feedback_matrix", "status": "pending_feedback"}
 
 def _sector_status(name, cur_zt, prev_map):
     """板块增量状态：new(新)/surging(强度跃升)/ongoing(持续平稳)"""
@@ -1664,9 +1653,14 @@ def build_summary_json(sectors, plates, diagnoses, total_zt, zt_count, risks, po
             # 2026-09-03 新增：题材内全部涨停成分落盘（曾只存 leader+followers 共 4 只代表，
             # 其余涨停票丢失 → 机构卡/复盘卡只能报「机器人 7 家涨停」却点不出 7 只是谁。
             # 此字段=该题材当前全部涨停股，供卡片「盘面对照」逐只点名）。
+            # ⛔ 2026-11-04 修「主线题材显示不全」：上限原为 20，而 `zt_count` 是**真实涨停家数**
+            #    —— 实证 11-04 国产芯片 zt_count=23 但只落 20 只，再被前端剔掉 10 只科创板后
+            #    只剩 10 只可看，用户看到的是「23 家涨停却只列出 10 个」。
+            #    提到 60：实测 top5 里仅 1 个题材触及上限、多存 3 只 ≈0.2KB，
+            #    而不截断的收益是「标题数字与列表能对上」。
             "zt_stocks": [{"name": s["name"], "code": s["code"], "pct": s["pct"]}
                           for s in sorted(all_s, key=lambda s: (s["up"], s.get("hot", False), s["pct"]), reverse=True)
-                          if s.get("up")][:20],
+                          if s.get("up")][:60],
             "diffusion": "共振" if len(up_s)>=3 else ("扩散" if len(up_s)>=2 else "单点"),
             "risks": [f"{r['stock']}({r['risk']})" for r in sector_risks[:3]],
             "positives": sector_pos[:3],
@@ -1870,8 +1864,8 @@ def detect_ebb(sectors, stocks, total_zt) -> Optional[Dict]:
     fb_sentiment = None
     try:
         fm = json.loads((CACHE_DIR.parent / "feedback_matrix.json").read_text(encoding="utf-8"))
-        if fm.get("error"):
-            raise ValueError("feedback 缺失")
+        if fm.get("error") or fm.get("date") != now().strftime("%Y-%m-%d"):
+            raise ValueError("feedback 缺失或非当日")
         nuke = int(fm.get("nuke_count") or 0)
         prom = fm.get("promote_rate")
         brk = fm.get("broken_rate")

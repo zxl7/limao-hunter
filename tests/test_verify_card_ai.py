@@ -304,8 +304,9 @@ def test_eod_decision_block_no_jargon(monkeypatch):
                    "regime=", "verdict=", "basis"]
     hit = [b for b in field_leaks if b in blob]
     assert hit == [], f"决策段残留内部字段名 {hit}"
-    assert "做多气氛8.0/10" in blob and "晋级率27.5%" in blob and "核按钮3只" in blob
-    assert "仓位：≤30% 单票" in blob and "止损：跌 3% 或跌破当天均价就走" in blob
+    assert "明日执行判定" not in blob
+    assert "仓位：≤30% 单票" not in blob
+    assert "大盘环境" not in blob and "行情位置" not in blob
 
 
 def test_gate_block_no_jargon():

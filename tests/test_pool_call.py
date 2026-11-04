@@ -263,11 +263,16 @@ def _seed_zt(root: Path, day: str, rows: list[dict]) -> None:
 
 
 def test_load_line_cores_broken_uses_core_own_last_day(tmp_path):
-    """⛔ 09-21 实测 bug 回归：核心（闽东电力 6 板）09-17 断板，⛔ 不得因同线跟风票
-    09-18 仍在板而把线族的 last_date 刷成 09-18 → `broken` 误判 False。
+    """⛔ 09-21 实测 bug 回归：核心（闽东电力 6 板）09-17 断板，⛔ 不得因同线票
+    09-18 仍在板而把 `broken` 误判 False。
 
     真实场景：闽东电力 000993 09-16 六连板 → 09-17 断板 → 不在 09-18 候选池；
-    池内只剩 09-15 才首板的跟风票锡华科技 603248(4板)。
+    池内只剩 09-15 才首板的锡华科技 603248(4板)。
+
+    ⚠️ 2026-11-04 语义明确（用户「基于风向标做联动」）：
+      · `code`/`boards` = **今日仍在板的最强票**（= 风向标，联动对象）
+      · `broken`       = **上一波更高的核心已断**（高度降级风险，⛔ 不得被在板票刷掉）
+    两者是不同事实，09-21 真正要锁的是**后者**（broken 必须为 True）。
     """
     _seed_zt(tmp_path, "2026-09-15", [_core("000993", "闽东电力", 4),
                                       _core("603248", "锡华科技", 2, "风电设备")])
@@ -277,8 +282,11 @@ def test_load_line_cores_broken_uses_core_own_last_day(tmp_path):
     _seed_zt(tmp_path, "2026-09-18", [_core("603248", "锡华科技", 4, "风电设备")])
     cores = pool_call.load_line_cores("2026-09-18", root=tmp_path)
     lc = cores["绿电"]
-    assert lc["code"] == "000993" and lc["boards"] == 6, lc
-    assert lc["broken"] is True, f"核心 000993 最后涨停 09-16 ≠ 窗口最新 09-18 → 必须 broken ({lc})"
+    # 风向标 = 今日在板最强（锡华 4 板），上波核心闽东 6 板已断
+    assert lc["code"] == "603248" and lc["boards"] == 4, lc
+    assert lc["broken"] is True, f"核心 000993 已断（6板 > 在板最高 4板）→ 必须 broken ({lc})"
+    assert lc["in_pool"] is True
+    assert (lc.get("beacon") or {}).get("code") == "603248"
 
 
 def test_load_line_cores_core_still_in_board_not_broken(tmp_path):

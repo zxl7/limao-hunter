@@ -24,6 +24,7 @@ import json
 import os
 import subprocess
 import sys
+from copy import deepcopy
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
@@ -274,6 +275,53 @@ def _finalize_prev_batch(closing: bool = False) -> dict | None:
     return pipeline_verify.run_verify(candidates=cand, quotes=quotes, next_close_map=closes)
 
 
+def _load_card_verdict(date10: str):
+    from core import snapshot
+
+    payload, source = snapshot.read_with_fallback(date10, "verdict")
+    meta = snapshot.read_meta(date10, "verdict") if source == "snapshot" else None
+    meta = meta or {}
+    source_date = meta.get("source_date")
+    if source_date is None:
+        source_date = str(meta.get("as_of") or "")[:10]
+    return payload, source, source_date
+
+
+def adapt_verify_card_snapshot(res: dict, verdict_loader=None, *, enabled=None):
+    """只适配展示副本；loader(date) 返回 (verdict, source, source_date)。"""
+    card_res = deepcopy(res)
+    diag = {"source": "injected", "reason": "disabled"}
+    if enabled is None:
+        enabled = os.environ.get("ENABLE_CARD_SNAPSHOT_READ", "1") != "0"
+    if not enabled:
+        return card_res, diag
+    summary = card_res.get("summary") or {}
+    pool = summary.get("pool_call") or {}
+    defense = pool.get("defense") or {}
+    anchor = defense.get("anchor") or {}
+    lines = anchor.get("lines")
+    # 缺失及显式空均保留，绝不从旧快照补位。
+    if not isinstance(lines, dict) or not lines:
+        return card_res, {**diag, "reason": "empty_injection"}
+    date10 = summary.get("trade_date10")
+    if not date10:
+        return card_res, {**diag, "reason": "missing_date"}
+    try:
+        verdict, source, source_date = (verdict_loader or _load_card_verdict)(date10)
+    except Exception:
+        return card_res, {**diag, "reason": "load_error"}
+    if source != "snapshot" or not isinstance(verdict, dict):
+        return card_res, {**diag, "reason": "missing_snapshot"}
+    if source_date != date10:
+        return card_res, {**diag, "reason": "date_mismatch"}
+    snapshot_lines = verdict.get("anchor_lines")
+    if not isinstance(snapshot_lines, dict) or snapshot_lines != lines:
+        return card_res, {**diag, "reason": "lines_mismatch"}
+    # 字典相等不保证插入顺序一致；保留原顺序，避免同高度风向标换位。
+    anchor["lines"] = {key: deepcopy(snapshot_lines[key]) for key in lines}
+    return card_res, {"source": "snapshot", "reason": "equal", "date": date10}
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     candidates_path = None
     if args.candidates:
@@ -377,7 +425,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if no_quote:
             print(f"[VERIFY] ⛔ 竞价守卫：竞价报价 0 只（{now_bj.strftime('%H:%M:%S')}），数据未落地，跳过推送")
             return 0
-        ok, out = build_cards.push_card_file(build_cards.build_verify_card(res))
+        card_res = res
+        if not args.synthesize:
+            card_res, snapshot_diag = adapt_verify_card_snapshot(res)
+            print(f"[VERIFY] 卡片快照来源: {json.dumps(snapshot_diag, ensure_ascii=False)}")
+        ok, out = build_cards.push_card_file(build_cards.build_verify_card(card_res))
         print(f"[VERIFY] 推送竞价验证卡: {'✓' if ok else '✗'} {out}")
     return 0
 

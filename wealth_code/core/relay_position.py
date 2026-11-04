@@ -24,6 +24,11 @@
   中（0.45≤S<0.75）：名额 2 / 单票≤40% / 总仓≤60%
   弱（S<0.45）  ：名额 1 / 单票≤30% / 总仓≤30%
 
+单票场景（2026-11-04 用户「只能推一只票 仓位控死在50%」）
+  当日**实际只买 1 只**时，单票上限 = MAX_POSITION_PER_STOCK × 回撤乘数
+  （不再被弱档 30%/中档 40% 压低；`RELAY_SINGLE_PICK_CAP=0` 回退）。
+  ⛔ 两票及以上完全沿用档位 per_pick_cap / total_cap，不放大总仓。
+
 回撤控制（衡量＝账户净值账本峰值→当前 · 2026-10-13 用户口径 B「改为动态仓位控制」）
   ⛔ **不禁买**：回撤只压仓位、不清零（乘数恒 >0 ⇒ can_buy 恒 True），风险靠仓位大小控制。
   曲线（连续分段线性·乘数同乘「名额 / 单票 / 总仓」）：
@@ -41,6 +46,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -96,6 +102,17 @@ except ImportError:  # pragma: no cover - 取决于调用方 sys.path
 QUOTA_STRONG, PER_PICK_STRONG, TOTAL_STRONG = 3, _HARD_PER_STOCK, 1.00
 QUOTA_NEUTRAL, PER_PICK_NEUTRAL, TOTAL_NEUTRAL = 2, 0.40, 0.60
 QUOTA_WEAK, PER_PICK_WEAK, TOTAL_WEAK = 1, 0.30, 0.30
+
+# ── 🎯 单票场景仓位上限（2026-11-04 用户「只能推一只票 仓位一定要控死在50%」）──────
+# 触发条件＝**当日实际只有 1 只参与**（由 09:25 冻结的 pool_call 结果判定，
+#   ⛔ 不按计划名额猜：计划 2 只、实际只合格 1 只，也算单票场景）。
+# 此时单票上限不再被弱档 30% / 中档 40% 压低，一律取
+#   `MAX_POSITION_PER_STOCK × 回撤乘数`（回撤大时照样收紧——动态降档不豁免）。
+# ⛔ 不是「强制打满 50%」：AI 给多少仍按 AI 的数额裁，本函数只给**上限**。
+# ⛔ 两票及以上完全沿用 per_pick_cap / total_cap / apply_total_cap，不放大总仓。
+# 回退：`RELAY_SINGLE_PICK_CAP=0`（环境变量优先）或本常量改 False
+#   → 逐字回到「单票也按当前档位 30%/40%/50% 裁」的旧行为。
+RELAY_SINGLE_PICK_CAP = True
 
 # ── 回撤 → 仓位（2026-10-13 用户口径 B「改为动态仓位控制」）──────────────────
 # ⛔ 不再有「禁买档」：回撤再深也只把仓位压小、不清零（can_buy 恒 True）。
@@ -539,6 +556,41 @@ def build_plan_from_files(root: Path | None = None, *,
 
 
 # ── 给 pool_call 用的便捷取数（不重复合成，直接拿方案）─────────────────────────
+def single_pick_cap_enabled() -> bool:
+    """单票场景 50% 上限是否生效。
+
+    开关可逆（与 `POOL_CALL_*` 同构）：环境变量 `RELAY_SINGLE_PICK_CAP` 优先于模块常量，
+    便于**不改代码**回退（`=0/false/no/off` → 回退旧档位裁剪）。
+    """
+    raw = str(os.environ.get("RELAY_SINGLE_PICK_CAP") or "").strip().lower()
+    if not raw:
+        return bool(RELAY_SINGLE_PICK_CAP)
+    return raw not in ("0", "false", "no", "off")
+
+
+def single_pick_cap(plan: dict[str, Any] | None) -> float | None:
+    """当日**只有一只票参与**时的单票上限（占账户比例，0.5 = 50%）。
+
+    = `MAX_POSITION_PER_STOCK × 回撤乘数`（单一源，⛔ 这里不写任何字面量 0.5）。
+    回撤乘数缺失 → 按 1.0（诚实降级：不知道回撤就不额外压，绝不编造回撤）。
+
+    返回
+      · None = 不适用（无方案 / 方案未启用 / 开关关闭）→ 调用方沿用档位 `per_pick_cap`
+      · 0.0  = 方案禁买（can_buy=False）
+      · >0   = 本次单票可用上限
+    """
+    if not isinstance(plan, dict) or not plan.get("enabled", True):
+        return None
+    if not single_pick_cap_enabled():
+        return None
+    if not plan.get("can_buy", True):
+        return 0.0
+    mult = _num(plan.get("drawdown_mult"))
+    if mult is None or mult <= 0:
+        mult = 1.0
+    return round(min(_HARD_PER_STOCK, _HARD_PER_STOCK * clamp01(mult)), 4)
+
+
 def refine_effective_quota(effective_quota: int, plan: dict[str, Any] | None) -> int:
     """pool_call 在算完防守闸后，用动态仓位方案对名额做**最终向下裁断**。
 

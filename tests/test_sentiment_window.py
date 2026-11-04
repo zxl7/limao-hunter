@@ -53,3 +53,11 @@ def test_turn_flat_and_insufficient():
     assert t["dir"] == "flat"
     t2 = gs.turn_signal([3.0, 4.0])
     assert t2["dir"] == "unknown"
+
+
+def test_model_change_is_not_a_market_turn():
+    days = [{"sentiment_score": 1}, {"sentiment_score": 10},
+            {"sentiment_score": 6, "sentiment_model": "continuous_v3"}]
+    assert gs.comparable_sentiment(days) == [None, None, 6]
+    assert gs._cycle_why(days, [], None) is None
+    assert gs.turn_signal([6])["dir"] == "unknown"

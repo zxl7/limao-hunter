@@ -163,7 +163,10 @@ def test_low_fail_and_mojito():
     })
     r = ep.build(fb, _latest())
     assert _path_of(r, "崩了甲") == "low_fail"
-    assert _path_of(r, "阴跌甲") == "mojito"
+    assert _path_of(r, "阴跌甲") == "neutral", "家数未知不能断言无人跟随"
+    yzt = {"zt_list": [{"code": "600002", "sector": "老题材"}]}
+    known = ep.build(fb, _latest(top5=[_theme("老题材", 0, 5)]), yzt)
+    assert _path_of(known, "阴跌甲") == "mojito"
 
 
 def test_strong_unsealed_is_profit_weak_not_profit():
@@ -238,6 +241,28 @@ def test_empty_input_no_crash():
 def test_switch_off_returns_zero(monkeypatch):
     monkeypatch.setattr(ep, "ENABLE_EFFECT_PATHS", False)
     assert ep.main() == 0
+
+
+@pytest.mark.parametrize("bad", [None, True, -1, 1.5, "nan", "inf"])
+def test_unknown_count_never_solo_or_mojito(bad):
+    fb = _fb({"600001": _q("封住甲", 10, 1, True),
+              "600002": _q("阴跌甲", -1, 1)})
+    lt = _latest(zt=[{"code": "600001", "sector": "老题材"}],
+                 top5=[_theme("老题材", bad, 5)])
+    yzt = {"zt_list": [{"code": "600002", "sector": "老题材"}]}
+    result = ep.build(fb, lt, yzt)
+    assert _path_of(result, "封住甲") == "neutral"
+    assert _path_of(result, "阴跌甲") == "neutral"
+    assert any("家数未取到" in g for g in result["data_gaps"])
+    for bucket in result["buckets"]:
+        for stock in bucket["stocks"]:
+            assert stock["theme_count_evidence"]["zt_count"] is None
+
+
+def test_unknown_count_does_not_erase_independent_high_board_fact():
+    result = ep.build(_fb({"600001": _q("高位甲", 10, 4, True)}),
+                      _latest(top5=[_theme("老题材", None, 5)]))
+    assert _path_of(result, "高位甲") == "front_leader"
 
 
 # ── 4. 纯函数工具 ─────────────────────────────────────────────────────────

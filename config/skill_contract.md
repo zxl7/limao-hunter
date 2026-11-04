@@ -26,6 +26,14 @@
 
 技能目录名不总等于调用名：`a-stock-realtime` 的 name 是 `zxl-stock-realtime`；`ticai-lieshou` 的 name 是 `stock-catalyst-hunter`；`hithink-finance__skillhub` 的 name 是 `hithink-finance`。先按当前可用清单核实依赖，缺失时报告并使用已有合法能力，不能假装调用。第三方数据技能的工具说明不自动改变项目生产数据源。
 
+## 2026-11-03 展示更新（覆盖旧盘后独立预案要求）
+
+盘后只渲染天梯、原两池逐票数据/风险/简评、可选题材方向点评；重点仅显式bias=focus，观察重点不可买，池外旧计划不泄漏。普通direction不代表低位；现无明确低位题材事实源则整段省略，不猜字段、不产第三池。观察全池仅作板块参照，observe_only或一字观察不显示无效交易预期/零额/可信度，显式focus仍逐票区分。移除独立预案/在册/战绩/历史基因与机制冗余展示，但后台登记和竞价不变。render不改输入、不补算、不调用metrics和周期持久化。细节唯一源见shared_rules同日最新展示约定；验收只写/tmp、pytest8隔离、card_lint不skip，不推群。
+
+## 2026-11-03 两池更新
+
+真实分池新授权优先于旧观察收容、低位/新方向第三池和预测三档行动约定，业务唯一源为 shared_rules 同日「真实两池契约」。观察显式资格 `participation_eligibility=observe_only` 不授予交易权，09:25回暖不可解冻观察锚；既有5%、量能、个股及情绪风控保持。旧缺字段候选兼容原链，不改历史冻结或账本。条件晋级统计与股性历史分开，不自造概率/门槛。回归非盈利验证。
+
 ## 数据与时序契约
 
 1. 每次明确：业务交易日、采集时刻、市场/代码、数据源、单位、复权、缺失与过期状态。文件 mtime 不能替代内容日期；缺失不填零，不用旧快照冒充实时。
@@ -53,6 +61,37 @@
 - EOD 在最终候选补强之后追加 `rsi_evidence`，`ENABLE_RSI_EVIDENCE=0` 可关闭。只追加研究字段，不改变排序、池子、仓位、共振状态或竞价终态，不补写旧候选。
 - 操盘手只读入口：`wealth_code/scripts/ai_ledger.py research-input --decision-date YYYY-MM-DD`，读取已落盘候选，校验RSI代码与asof，输出 `operator_research_input_v1`。这不代表定时Agent已调用；缺字段须标未接通，不自动补算或record/settle。
 - 数据底座单票接口返回相同RSI契约；终端优先使用后端正序序列，旧接口回退明确标本地预览。日K `status/recent_bars` 使用严格只读连接，缺库不创建，研究查询支持asof。
+
+### ABC 题材家数同源契约（2026-11-04）
+
+- 公共实现为 `common/theme_base.py`：`live_theme_counts/parse_zt_count` 供盘中峰值 B 与路径归因 C 共用；`snapshot_theme_members/count_member_limitups` 供历史相位 A 使用。非法/缺失家数保留 None，显式 0 才是零家；不做族归并。
+- 实时 Top5 报告数、逐日 plates 归属与池交集、sector 分组估算分别留来源与 basis，不证明数值完全等价，不将峰值补进相位。上游未给 `zt_count_src` 标 unspecified，不能凭模块名称追认官方来源；日频未保留源时刻则为空。
+- B 退榜记录保留最后观察时刻并标 `in_current_top5=False`，不冒充当前值；C 家数未知不判独走/无人跟随，独立板数/价格事实仍按原优先级归因。`today_codes` 仍用于 A 当日未归档目标日补点，不是死参数。
+- 只改未来正常产出；不重写旧缓存、相位、账本、冻结裁决，不改评分、仓位、调度或推送。
+
+### 情绪同源契约（2026-11-04）
+
+- 评分唯一源 `feedback_matrix.sentiment_score`，`continuous_v3`连续因子/软收敛，回退开关 `ENABLE_SMOOTH_SENTIMENT=0`。原风险事实与执行纪律保留，不将平滑误解为解除防守。
+- pulse采集阶段的score为None；feedback完成后仅对同日同一 `source_snapshot_ts/latest.ts` 回填，携带model/source_at/status。外层环境适配与题材序列不把旧有符号分当10分制。短暂pending是未知，不补0或上一轮值。
+- 新日频归档保留模型、质量、缺失清单和评分因子；旧历史不改。摘要跨模型不做变化归因或连续拐点。完整历史因子缺失不能宣称已经做过全历史新旧重算。
+- 环境输入缺评分保持None，不补中性5；缺核按钮/炸板输入不能因默认0判risk_on。前端反馈解析保留模型/质量/来源时刻，partial提示为部分评分；空分潮位待确认，不按JavaScript空值比较判冰点。此项不是全系统默认值迁移完成的声明。
+- 深层消费：relay_score 缺失/非法情绪不补5、不当0扣罚，独立regime乘数保留，并输出情绪调制可用性与质量。expectation_ai 缺分为未知，不授予依赖情绪的溢价、不贡献情绪置信权重，卡面标情绪待确认；量价区间仅作形态参考，不宣称环境放行。有效评分的既有四阶段映射暂留，偏强/退潮标签映射尚待统一。
+- 评分结构（2026-11-04 细化）：`FACTOR_REGISTRY` 是因子单一数据源（12 因子：输入/维度/点表/方向/来源只声明一次），`sentiment_score` 与 `sentiment_breakdown` 共用同一装配入口 `_factor_values`，`factor_set()` 按模型返回因子集（legacy_v2 返回空，`decomposable=false`，不伪造等价注册表）。⛔ 调因子或改点表只改注册表，且元组顺序=浮点累加顺序，改动须重跑等值回归。
+- 分维度诊断 `sentiment_breakdown` 只解释「分被谁撑起、被谁拖住」，⛔ 不参与排序、名额、买卖裁决；落 `feedback_matrix.sentiment_breakdown`，与主分必须同值，不一致则整段落空而非落矛盾数据（`ENABLE_SENTIMENT_BREAKDOWN=0` 可关）。
+- 覆盖率 `coverage/coverage_grade`（high≥0.85 / medium≥0.6 / low / none）只描述「有多少观测支撑」，⛔ 不设停发阈值——覆盖不足是否停发需自然样本校准，未校准前不得把缺几个因子判成行情不可知。
+- 可选参数默认 `None` = 未提供观测，⛔ 不写 `0`：写 0 会让诊断把「没取到」渲染成「已确认无风险」。两者对强度贡献同为 0，但 `observed` 标记与缺失清单必须能区分。
+- 新公式随守护自然产出；禁止为验证主动抓行情、补跑、推卡或改冻结账本。代码/测试/自然产出验收分别报告。
+
+### 单票事实画像契约（2026-11-04）
+
+- 唯一读入口 `common/stock_profile.py`：`build_profile(code)` / `build_profiles(codes)`（`ENABLE_STOCK_PROFILE=0` 关闭）。8 维声明式注册表 `DIMS` + 工厂 `dims()`，单个与批量共用同一份声明，⛔ 禁「单个一套、批量另一套」。
+- 只读：registry 以 `mode=ro` 打开（不建表、不抢写锁），board_track 索引进程内按 mtime 失效；⛔ 不写任何文件、不参与候选/排序/名额/裁决/推送/调度。
+- 每维独立 `status` = `ok / stale / missing / error`，并带 `asof` 与来源。三种「没有」必须分清：`missing`＝未观测；`stale`＝台账落后于最新交易日；`is_current=False`＝该票不在最新台账（断板/降首板，是状态不是数据坏）。⛔ 后两者混报会反过来污染判断。
+- ⛔ 缺股性档案 = 不知道，不得渲染成「难连板」；不在连板台账（boards<2 不入册）= 未进入跟踪，不得渲染成「今天没涨停」；数值缺失返回 `None` 而非 0。
+- 时间性：连板台账由盘后生成（实测 15:37），此前 board 维恒为 `stale`，这是正确状态而非故障。
+- ⛔ 与 `core/snapshot.stock_view(date, code)` 不是一回事：后者答「今天决策链各环节怎么说」（单日 section），本模块答「这票是什么、走到哪了」（跨日事实）。不再新增第三套同名能力。
+- 查询边界：`common/data_gateway.stock_profile` → `GET /api/data/stock-profile?code=` → `scripts/data_gateway.py stock-profile --code X`；仅接受 6 位代码，不返回数据库路径或 SQL。
+- 消费方迁移（snapshot.stock_view / board_track.lifecycle / daily_screen / 卡面）尚未进行，属待拍板事项，本契约不构成「已接入决策链」的声明。
 
 ## 副作用边界
 

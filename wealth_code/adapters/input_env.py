@@ -54,7 +54,7 @@ def load_pulse(cache_dir: Path | None = None) -> dict[str, Any]:
     if not d:
         return {
             "ts": "", "indices": [], "avg_index_pct": 0.0, "sentiment": "未知",
-            "sentiment_score": 0.0, "total_zt": 0, "limit_down": {"count": 0, "names": []},
+            "sentiment_score": None, "total_zt": 0, "limit_down": {"count": 0, "names": []},
             "broken": {"count": 0, "names": []}, "sector_risk": {}, "weak_sectors": {},
             "hot_spots": [], "em_expect": [], "feedback": {},
             "early": [],
@@ -63,13 +63,20 @@ def load_pulse(cache_dir: Path | None = None) -> dict[str, Any]:
     idxs = d.get("index") or []
     avg_idx = (sum(float(i.get("pct", 0.0)) for i in idxs) / len(idxs)) if idxs else 0.0
     sd = d.get("sentiment_detail") or {}
-    sentiment = str(d.get("sentiment") or sd.get("label") or "未知")
-    sent_score = _to_float(sd.get("score")) if sd.get("score") is not None else 0.0
+    # 新快照仅接受 feedback 回填；旧有符号分不冒充10分制。
+    ready = sd.get("source") == "feedback_matrix" and sd.get("status") == "ready"
+    sentiment = str(sd.get("label") or "未知") if ready else "未知"
+    sent_score = sd.get("score") if ready else None
 
     # 透传 feedback_matrix 关键情绪字段（核按钮/破位/晋级率）——与 pulse 并列真实源
     fb = _load_json(cache_dir / "feedback_matrix.json")
     feedback = {
-        "sentiment_score": _to_float(fb.get("sentiment_score")),
+        "sentiment_score": (fb.get("sentiment_score") if not fb.get("error")
+                            and fb.get("date") == str(d.get("ts") or "")[:10] else None),
+        "sentiment_model": fb.get("sentiment_model"),
+        "sentiment_source_at": fb.get("source_snapshot_ts"),
+        "same_round": bool(fb.get("source_snapshot_ts")
+                           and fb.get("source_snapshot_ts") == d.get("ts")),
         "nuke_count": int(fb.get("nuke_count") or 0),
         "break_count": int(fb.get("break_count") or 0),
         "broken_rate": _to_float(fb.get("broken_rate")),
@@ -84,6 +91,8 @@ def load_pulse(cache_dir: Path | None = None) -> dict[str, Any]:
         "avg_index_pct": round(avg_idx, 3),
         "sentiment": sentiment,
         "sentiment_score": sent_score,
+        "sentiment_model": sd.get("model") if ready else None,
+        "sentiment_source_at": sd.get("source_at") if ready else None,
         "total_zt": int(d.get("total_zt") or 0),
         "limit_down": {"count": int((d.get("limit_down") or {}).get("count", 0)),
                        "names": (d.get("limit_down") or {}).get("names") or []},

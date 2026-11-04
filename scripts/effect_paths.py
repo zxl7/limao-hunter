@@ -53,6 +53,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.json_io import load_json, save_json  # noqa: E402
+from common.theme_base import live_theme_counts, parse_zt_count  # noqa: E402
 
 CACHE = ROOT / "cache"
 
@@ -80,7 +81,7 @@ def _prev_trade_date(d: str) -> str:
         # trading-day-fallback: 仅日历不可用时兜底
         from datetime import date as _d, timedelta as _td
         x = _d.fromisoformat(d) - _td(days=1)
-        while x.weekday() >= 5:
+        while x.weekday() >= 5:  # trading-day-fallback: 仅日历不可用时兜底
             x -= _td(days=1)
         return x.isoformat()
 
@@ -184,16 +185,17 @@ def parse_boards(v: Any) -> int | None:
 def _theme_index(latest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """题材名 → {zt_count, zt_prev, leader, is_new}。来源 latest.top5（选股宝题材口径）。"""
     idx: dict[str, dict[str, Any]] = {}
+    facts = live_theme_counts(latest)
     for t in latest.get("top5") or []:
         if not isinstance(t, dict):
             continue
         name = str(t.get("name") or "").strip()
-        if not name:
+        if name not in facts:
             continue
-        zt_prev = to_num(t.get("zt_prev"))
+        zt_prev = parse_zt_count(t.get("zt_prev"))
         leader = t.get("leader") if isinstance(t.get("leader"), dict) else {}
         idx[name] = {
-            "zt_count": int(to_num(t.get("zt_count"), 0) or 0),
+            **facts[name],
             "zt_prev": int(zt_prev) if zt_prev is not None else None,
             "leader_name": str(leader.get("name") or "").strip(),
             "is_new": (zt_prev is not None and zt_prev <= NEW_THEME_PREV_ZT),
@@ -236,11 +238,11 @@ def _classify_one(
     theme = str(row.get("theme") or "")
     tinfo = themes.get(theme) or {}
     if tinfo:
-        theme_zt_today = int(tinfo.get("zt_count") or 0)
+        theme_zt_today = parse_zt_count(tinfo.get("zt_count"))
         # 新题材只认 top5 明确的 zt_prev（⛔ 不跨「行业/题材」两套口径推算）
         is_new_theme = tinfo.get("is_new") is True
     else:
-        theme_zt_today = int(theme_today_cnt.get(theme, 0)) if theme else 0
+        theme_zt_today = parse_zt_count(theme_today_cnt.get(theme)) if theme else None
         is_new_theme = False
 
     # ── 赚钱侧：当前封住 ──
@@ -256,7 +258,9 @@ def _classify_one(
             if not leader_name or row.get("name") == leader_name:
                 return "new_theme_dragon"       # 题材昨日≤1家 → 从无到有且它是龙一
             return "non_core_relay"             # 同题材但不是龙一 → 跟风
-        if theme not in GENERIC_THEMES and theme_zt_today <= 1:
+        if theme_zt_today is None and theme not in GENERIC_THEMES:
+            return "neutral"                    # 家数未知，不猜独走或多股接力
+        if theme not in GENERIC_THEMES and theme_zt_today is not None and theme_zt_today <= 1:
             return "solo"                       # 老题材里只剩它封住（泛词不判）
         return "non_core_relay"                 # 题材热、多只封板
 
@@ -272,7 +276,8 @@ def _classify_one(
         return "strong_unsealed"                # 涨了但没锁
     if boards is not None and boards <= 2 and pct <= NUKE_PCT:
         return "low_fail"                       # 低位直接崩
-    if boards is not None and boards <= 2 and pct < 0 and theme_zt_today <= 1:
+    if (boards is not None and boards <= 2 and pct < 0
+            and theme_zt_today is not None and theme_zt_today <= 1):
         return "mojito"                         # 没人跟、阴跌
     return "neutral"
 
@@ -385,6 +390,19 @@ def build(
     # ④ 分类 + 聚合
     buckets: dict[str, dict[str, Any]] = {}
     for r in rows:
+        theme = r["theme"]
+        if theme in themes:
+            evidence = {k: themes[theme].get(k) for k in
+                        ("zt_count", "zt_count_src", "date", "source_at", "scope", "basis")}
+        else:
+            evidence = {"zt_count": theme_today_cnt.get(theme),
+                        "zt_count_src": "limit_up_stocks_sector",
+                        "date": str(lt.get("ts") or "")[:10] or None,
+                        "source_at": lt.get("ts"), "scope": "latest.limit_up_stocks",
+                        "basis": "sector_group_estimate"}
+        r["theme_count_evidence"] = evidence
+        if evidence["zt_count"] is None:
+            gaps.append(f"{r['name'] or r['code']} 题材家数未取到")
         kind = _classify_one(r, themes, theme_today_cnt)
         r["path"] = kind
         b = buckets.setdefault(kind, {
@@ -403,6 +421,7 @@ def build(
             "pct": r["pct"],
             "prev_boards": r["prev_boards"],
             "theme": r["theme"],
+            "theme_count_evidence": r["theme_count_evidence"],
         })
 
     for b in buckets.values():

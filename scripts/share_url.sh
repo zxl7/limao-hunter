@@ -10,7 +10,7 @@ SERVE_LOG="/Users/zxl/WorkBuddy/狸猫猎手/cache/logs/terminal-serve.log"
 
 url="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | tail -1)"
 
-echo "对外地址: ${url:-（未取到，看 $TUNNEL_LOG）}"
+echo "对外地址: ${url:-（未取到，看 ${TUNNEL_LOG}）}"
 
 for label in com.limao.terminal-serve com.limao.terminal-tunnel com.limao.terminal-awake; do
   if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
@@ -25,7 +25,7 @@ done
 if curl -sf --max-time 8 http://127.0.0.1:8000/api/health >/dev/null; then
   echo "  本机 :8000 ✓"
 else
-  echo "  本机 :8000 ✗  （看 $SERVE_LOG）"
+  echo "  本机 :8000 ✗  （看 ${SERVE_LOG}）"
 fi
 if [ -n "$url" ] && curl -sf --max-time 12 "$url/api/health" >/dev/null; then
   echo "  公网 /api/health ✓"

@@ -24,12 +24,14 @@ spec.loader.exec_module(ss)
 NOW = ss.datetime(2026, 10, 14, 10, 0)
 CFG = {"amount_morning_yi": 5, "amount_afternoon_yi": 10, "min_market_cap_yi": 100}
 
-# top5 两个题材：传媒（联动板块·已有涨停票）/ 影视（另一条线 → 只进「可能涨停」段）
+# top5 两个题材：传媒（联动板块·已有涨停票）/ 医药（另一条线 → 只进「可能涨停」段）
+# ⚠️ 2026-11-03：第二个题材原为「影视」——族归并后 影视 与 传媒 同属传媒族，
+#    会被当成本板块跟风吃掉。改用「医药」保持「另一条线的后排」这个测试意图。
 D = {
     "top5": [
         {"name": "传媒", "leader": {"code": "601811"}, "followers": [{"code": "600088"}],
          "zt_stocks": [{"code": "601811.SS"}]},
-        {"name": "影视", "leader": {"code": "002343"}, "followers": [], "zt_stocks": []},
+        {"name": "医药", "leader": {"code": "002343"}, "followers": [], "zt_stocks": []},
     ],
     "leaders": [{"code": "601811", "name": "新华文轩", "sector": "传媒", "pct": 9.98}],
     "limit_up_stocks": [{"code": "601811.SS", "name": "新华文轩", "sector": "传媒",
@@ -55,9 +57,13 @@ def _pool(name, code, pct, vol_ratio, industry, amount=8.0, cap=80.0,
 SIGS = [_sig("新华文轩", "601811", "传媒", 9.98, "涨停", 0.9, theme="传媒"),
         _sig("时代出版", "600551", "传媒", 6.0, "快速拉升", 0.5, theme="传媒")]
 
-# 歌华有线（传媒·跟风候选）｜慈文传媒（影视·「可能涨停」候选）
+# 歌华有线（传媒·跟风候选）｜慈文传媒（**医药**·「可能涨停」候选·另一条线）
+# ⚠️ 2026-11-03：慈文传媒原标「影视院线」——族归并后 影视院线 与 传媒 同属传媒族，
+#    会被当成本板块跟风吃掉，导致「📈 今日可能涨停」段空、本用例失去意义。
+#    改用非传媒族行业，保持「另一条线的后排」这个测试意图；族归并本身见
+#    test_family_merge_rolls_media_industries_together / test_card_follower_matches_by_family。
 POOL = [_pool("歌华有线", "600088", 5.2, 1.6, "传媒"),
-        _pool("慈文传媒", "002343", 6.5, 2.2, "影视院线")]
+        _pool("慈文传媒", "002343", 6.5, 2.2, "化学制药")]
 
 
 def _codes(items):
@@ -79,7 +85,7 @@ def test_pick_sector_from_theme_map():
     """sector 口径 = 题材名优先（top5 成分反查），非 top5 票落东财行业。"""
     out = ss.backseat_pick(POOL, SIGS, D, "morning", CFG)
     m = {c["code"]: c["sector"] for c in out["candidates"]}
-    assert m["002343"] == "影视"        # top5 leader → 题材名
+    assert m["002343"] == "医药"        # top5 leader → 题材名
     assert m["600088"] == "传媒"        # top5 followers → 题材名
 
 

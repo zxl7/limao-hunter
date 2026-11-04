@@ -23,6 +23,9 @@ def _isolate(monkeypatch, tmp_path):
     # ⛔ 2026-09-11：ai_view 落盘目录独立于 CACHE（狸猫猎手/cache），必须一并隔离，
     #    否则单测会写进真实 cache 污染生产（并掩盖路径接缝）。
     monkeypatch.setattr(al, "AI_VIEW_DIR", tmp_path)
+    # ⛔ 2026-11-03：结算新增「报价 vs 当日开盘价」交叉校验，会读日K缓存。
+    #    不隔离就会拿真实K线覆盖测试桩里的假价格（5 条 settle 用例实测因此变红）。
+    monkeypatch.setattr(al, "KLINE_DIR", tmp_path / "kline_qfq")
 
 
 def test_ai_view_dir_seam(monkeypatch, tmp_path):
@@ -434,3 +437,94 @@ def test_settle_post_pool_call_plan_needs_frozen_verdict(monkeypatch, tmp_path, 
     row = al._read_jsonl(al.DECISIONS)[0]
     assert row["settled"] is True and "冻结件缺失" in row["settlement_note"]
     assert "冻结件缺失" in capsys.readouterr().out
+
+
+def _write_pool_call(tmp_path, trade_date, code, view="participate"):
+    """9:25 冻结件：2026-09-21 起结算必须有它，否则不记成交（见 _requires_pool_call）。"""
+    (tmp_path / f"pool_call-{trade_date}.json").write_text(
+        json.dumps({"views": {code: {"view": view, "reason": "测试桩"}}}, ensure_ascii=False),
+        encoding="utf-8")
+
+
+def _write_kline(tmp_path, code, bars):
+    """造一份 `cache/kline_qfq/<code>.json`（与真实结构同形：{schema,code,bars:[{date,open,close}]}）"""
+    d = tmp_path / "kline_qfq"
+    d.mkdir(exist_ok=True)
+    (d / f"{code}.json").write_text(json.dumps({"schema": "kline_qfq_v1", "code": code, "bars": bars},
+                                               ensure_ascii=False), encoding="utf-8")
+
+
+def test_settle_stale_quote_uses_kline_open(monkeypatch, tmp_path, capsys):
+    """⛔ 2026-11-03 事故回归：跨日竞价报价必须换掉，否则一天虚增 9.8pp。
+
+    真实案例（2026-09-30 · 掌阅科技 603533）：
+      auction_quotes-2026-09-30.json = {prev_close: 21.5, auction_price: 21.76, time: "2026-09-29 15:00:01"}
+      ← prev_close 是 09-28 收盘、21.76 是 09-29 开盘，整条是 **09-29 的竞价**被落进了 09-30 的文件。
+      旧算法：(23.88 − 21.76)/21.76 = **+9.74%**（假）
+      真口径：(23.88 − 23.90)/23.90 = **−0.08%**
+    """
+    _isolate(monkeypatch, tmp_path)
+    f = tmp_path / "picks.json"
+    f.write_text(json.dumps([{"code": "603533", "name": "掌阅科技", "reason": "AI应用首板",
+                              "entry_max_gap": 5.0}]), encoding="utf-8")
+    al.cmd_record(A(decision_date="2026-09-29", file=str(f)))
+
+    _write_kline(tmp_path, "603533", [
+        {"date": "2026-09-28", "open": 22.16, "close": 21.50},
+        {"date": "2026-09-29", "open": 21.76, "close": 23.65},
+        {"date": "2026-09-30", "open": 23.90, "close": 23.88},
+    ])
+    # 跨日报价：time 指向 09-29，价格也是 09-29 的竞价
+    _write_quotes(tmp_path, "2026-09-30", {"603533": {
+        "prev_close": 21.5, "auction_price": 21.76, "time": "2026-09-29 15:00:01"}})
+    _write_pool_call(tmp_path, "2026-09-30", "603533")
+    monkeypatch.setattr(al, "_close_of", lambda code, d: 23.88)
+
+    al.cmd_settle(A(trade_date="2026-09-30"))
+    rows = al._read_jsonl(al.AI_LEDGER)
+    assert len(rows) == 1, "换价后仍应记为已成交（交易确实发生过）"
+    s = rows[0]["stocks"][0]
+    assert s["auction_price"] == 23.90, "必须用当日开盘价，而不是 09-29 的 21.76"
+    assert s["return_pct"] == -0.08, "真实收益是 −0.08%，不是 +9.74%"
+    assert s["price_src"] == "kline_open" and s["quote_time"] == "2026-09-29 15:00:01"
+    assert abs(rows[0]["nav"] - 0.9992) < 1e-4
+    assert "竞价报价跨日" in capsys.readouterr().err
+
+
+def test_settle_stale_quote_fixes_prev_close_for_gap(monkeypatch, tmp_path):
+    """换价必须**连带换前收**：否则 (23.90 − 21.5)/21.5 = +11.2% 会被 5% 硬线误判为「高开不追」。
+
+    正确前收是 09-29 收盘 23.65 → gap +1.06% → 该买。
+    """
+    _isolate(monkeypatch, tmp_path)
+    f = tmp_path / "picks.json"
+    f.write_text(json.dumps([{"code": "603533", "name": "掌阅科技", "reason": "AI应用首板",
+                              "entry_max_gap": 5.0}]), encoding="utf-8")
+    al.cmd_record(A(decision_date="2026-09-29", file=str(f)))
+    _write_kline(tmp_path, "603533", [
+        {"date": "2026-09-29", "open": 21.76, "close": 23.65},
+        {"date": "2026-09-30", "open": 23.90, "close": 23.88},
+    ])
+    _write_quotes(tmp_path, "2026-09-30", {"603533": {
+        "prev_close": 21.5, "auction_price": 21.76, "time": "2026-09-29 15:00:01"}})
+    _write_pool_call(tmp_path, "2026-09-30", "603533")
+    monkeypatch.setattr(al, "_close_of", lambda code, d: 23.88)
+    al.cmd_settle(A(trade_date="2026-09-30"))
+    assert len(al._read_jsonl(al.AI_LEDGER)) == 1, "前收被换成 09-29 收盘后 gap 只有 +1.06%，不该跳过"
+
+
+def test_resolve_auction_keeps_clean_quote(monkeypatch, tmp_path):
+    """当日报价且与开盘价一致 → 原样保留，不写 price_src（⛔ 不无谓加字段）。"""
+    _isolate(monkeypatch, tmp_path)
+    _write_kline(tmp_path, "600000", [{"date": "2026-09-30", "open": 10.0, "close": 10.5}])
+    res = al._resolve_auction("600000", "2026-09-30",
+                              {"prev_close": 9.9, "auction_price": 10.0, "time": "2026-09-30 09:25:00"})
+    assert res["ap"] == 10.0 and res["src"] == "auction_quote" and res["note"] is None
+
+
+def test_resolve_auction_flags_big_deviation_without_time(monkeypatch, tmp_path):
+    """没有 time 的老报价：靠「与开盘价偏差 > 5%」兜底（异常幅度远超除权可解释范围）。"""
+    _isolate(monkeypatch, tmp_path)
+    _write_kline(tmp_path, "600000", [{"date": "2026-09-30", "open": 10.0, "close": 10.1}])
+    res = al._resolve_auction("600000", "2026-09-30", {"prev_close": 9.9, "auction_price": 8.5})
+    assert res["src"] == "kline_open" and res["ap"] == 10.0

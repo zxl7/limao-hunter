@@ -168,35 +168,60 @@ def read_route(data_root, defn):
 # ────────────────────────────────────────────────────────────────
 # 数据基座增强（工件 C）：投影契约 + 新鲜度标注
 # ────────────────────────────────────────────────────────────────
+def route_files(data_root, defn):
+    """按 read_route 的排序、模式和 limit 选择实际产物，不以目录代替文件。"""
+    if defn.get("dir") and defn.get("dirPattern") and defn.get("file"):
+        base = os.path.join(data_root, defn["dir"])
+        rx = re.compile(defn["dirPattern"])
+        names = sorted(n for n in (safe_listdir(base) or [])
+                       if rx.match(n) and os.path.isdir(os.path.join(base, n)))
+        paths = [os.path.join(base, n, defn["file"]) for n in names]
+    elif defn.get("file"):
+        return [os.path.join(data_root, defn["file"])]
+    elif defn.get("dir") and defn.get("pattern"):
+        base = os.path.join(data_root, defn["dir"])
+        rx = re.compile(defn["pattern"])
+        paths = [os.path.join(base, n) for n in sorted(safe_listdir(base) or [])
+                 if rx.match(n)]
+    else:
+        return []
+    if defn.get("mode") == "all":
+        return paths[-defn["limit"]:] if defn.get("limit") else paths
+    return paths[-1:]
+
+
 def route_freshness(route, defn):
-    """该路由产物的新鲜度（基于 data_catalog 治理元数据 + 实际文件 mtime）。
-    返回 dict：exists / mtime / age_sec / stale(bool|None) / retired / producer / stale_sec。
-    stale=None 表示不检查（retired / manual / on-demand）。"""
+    """最新一期返回产物的新鲜度（all 模式按文件名排序的最后一期）。
+    缺失时 mtime/age/stale 均为 None；不回退到旧文件或目录 mtime。
+    """
     meta = data_catalog.meta_for(route) or {}
-    target = defn.get("file") or defn.get("dir")
-    if not target:
-        return {"exists": False, "stale": None, "retired": bool(meta.get("retired")),
-                "producer": meta.get("producer"), "stale_sec": meta.get("stale_sec")}
-    abs_p = os.path.join(DATA_ROOT, target)
-    probe = abs_p
-    if not defn.get("file") and defn.get("dir"):
-        names = safe_listdir(abs_p) or []
-        if names:
-            probe = os.path.join(abs_p, sorted(names)[-1])
-        else:
-            return {"exists": False, "stale": None, "retired": bool(meta.get("retired")),
-                    "producer": meta.get("producer"), "stale_sec": meta.get("stale_sec")}
+    fresh = {"exists": False, "mtime": None, "age_sec": None, "stale": None,
+             "retired": bool(meta.get("retired")), "producer": meta.get("producer"),
+             "stale_sec": meta.get("stale_sec")}
+    paths = route_files(DATA_ROOT, defn)
+    if not paths or not os.path.isfile(paths[-1]):
+        return fresh
     try:
-        st = os.stat(probe)
+        st = os.stat(paths[-1])
     except OSError:
-        return {"exists": False, "stale": None, "retired": bool(meta.get("retired")),
-                "producer": meta.get("producer"), "stale_sec": meta.get("stale_sec")}
+        return fresh
     age = int(time.time() - st.st_mtime)
-    stale_sec = meta.get("stale_sec")
-    is_stale = None if stale_sec is None else (age > stale_sec)
-    return {"exists": True, "mtime": st.st_mtime, "age_sec": age,
-            "stale": is_stale, "retired": bool(meta.get("retired")),
-            "producer": meta.get("producer"), "stale_sec": stale_sec}
+    fresh.update(exists=True, mtime=st.st_mtime, age_sec=age,
+                 stale=None if fresh["stale_sec"] is None else age > fresh["stale_sec"])
+    return fresh
+
+
+def freshness_headers(fresh):
+    """未知不伪装为新鲜；元数据只走响应头，不改业务数据形态。"""
+    return {
+        "X-Data-Age": str(fresh["age_sec"]) if fresh["age_sec"] is not None else "unknown",
+        "X-Data-Stale": "unknown" if fresh["stale"] is None else str(int(fresh["stale"])),
+        "X-Data-Exists": str(int(fresh["exists"])),
+        "X-Data-Mtime": str(fresh["mtime"]) if fresh["mtime"] is not None else "unknown",
+        "X-Data-Stale-Sec": str(fresh["stale_sec"]) if fresh["stale_sec"] is not None else "unknown",
+        "X-Data-Retired": str(int(fresh["retired"])),
+        "X-Data-Producer": str(fresh["producer"] or ""),
+    }
 
 
 def project_fields(payload, fields):
@@ -248,7 +273,11 @@ def read_data_query(path, query):
         if set(query) != {"code"}:
             return 400, {"error": "invalid_request", "route": path, "message": "stock-profile 仅接受 code 参数"}
         from common import data_gateway
-        return 200, data_gateway.stock_profile(raw_code)
+        stock_profile = getattr(data_gateway, "stock_profile", None)
+        if not callable(stock_profile):
+            return 503, {"error": "data_unavailable", "route": path,
+                         "message": "stock-profile 查询能力暂不可用"}
+        return 200, stock_profile(raw_code)
 
     if not set(query).issubset({"code", "limit"}):
         return 400, {"error": "invalid_request", "route": path, "message": "market-daily 仅接受 code 与 limit 参数"}
@@ -760,11 +789,24 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 write_access(ts, ip, path, 404, False, token_present)
                 return
+            fresh = route_freshness(path, defn)
+            extra = freshness_headers(fresh)
+            # 必须先检查严格过期，条件请求不能绕过当前治理状态。
+            if _STRICT_STALE and fresh.get("stale") is True:
+                self._send_json(404, {
+                    "error": "data_stale", "route": path,
+                    "age_sec": fresh.get("age_sec"), "stale_sec": fresh.get("stale_sec"),
+                    "message": "数据已超过过期阈值，严格模式下拒绝返回陈旧内容",
+                }, extra_headers=extra)
+                write_access(ts, ip, path, 404, False, token_present)
+                return
             etag = self._route_etag(defn)
             if etag and self.headers.get("If-None-Match") == etag:
                 self.send_response(304)
                 self.send_header("ETag", etag)
                 self.send_header("Cache-Control", "no-cache")
+                for key, value in extra.items():
+                    self.send_header(key, value.encode("utf-8").decode("latin-1"))
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 write_access(ts, ip, path, 304, True, token_present)
@@ -805,29 +847,6 @@ class Handler(BaseHTTPRequestHandler):
             fields = query.get("fields")
             payload = project_fields(payload, fields[0].split(",") if fields else None)
 
-            fresh = route_freshness(path, defn)
-            extra = {
-                "X-Data-Age": str(fresh.get("age_sec") or 0),
-                "X-Data-Stale": "1" if fresh.get("stale") else "0",
-                "X-Data-Retired": "1" if fresh.get("retired") else "0",
-                "X-Data-Producer": str(fresh.get("producer") or ""),
-            }
-            # 单文件 dict 顺带内嵌 _meta，前端免解析响应头
-            if isinstance(payload, dict):
-                payload = {**payload, "_meta": {
-                    "stale": fresh.get("stale"), "age_sec": fresh.get("age_sec"),
-                    "retired": fresh.get("retired"), "producer": fresh.get("producer"),
-                    "stale_sec": fresh.get("stale_sec"),
-                }}
-            # 严格过期模式（SERVE_STRICT_STALE=1）：超阈值直接 404，拒绝返回陈旧内容
-            if _STRICT_STALE and fresh.get("stale") is True:
-                self._send_json(404, {
-                    "error": "data_stale", "route": path,
-                    "age_sec": fresh.get("age_sec"), "stale_sec": fresh.get("stale_sec"),
-                    "message": "数据已超过过期阈值，严格模式下拒绝返回陈旧内容",
-                })
-                write_access(ts, ip, path, 404, False, token_present)
-                return
             self._send_json(200, payload, etag=etag, extra_headers=extra)
             write_access(ts, ip, path, 200, True, token_present)
             return

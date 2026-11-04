@@ -47,7 +47,7 @@ def _prev_trading_day(d: str) -> str:
         # trading-day-fallback: 仅日历不可用时兜底
         from datetime import date as _d, timedelta as _td
         x = _d.fromisoformat(d) - _td(days=1)
-        while x.weekday() >= 5:
+        while x.weekday() >= 5:  # trading-day-fallback: 仅日历不可用时兜底
             x -= _td(days=1)
         return x.isoformat()
 

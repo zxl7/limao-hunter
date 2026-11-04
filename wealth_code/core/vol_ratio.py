@@ -134,4 +134,109 @@ def reset_cache() -> None:
     """测试用：清空进程内缓存与注入源。"""
     global _BARS_HOOK
     _CACHE.clear()
+    _MA5_CACHE.clear()
     _BARS_HOOK = None
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 📊 5 日均量比（2026-11-04 用户定）
+# ══════════════════════════════════════════════════════════════════════════
+# 用户原话：「量能判断要基于 5 日平均判断。首板你可以缩量，但是二板要稍微放一点量，
+#   除非你是 1 字，对吧？」
+#
+# ## 为什么要它
+#
+# `vol_ratio` 只看「今日 ÷ 昨日」，一根异常日 K 就能把结论带偏（昨日缩量一半 →
+# 今天看着像爆量）。**5 日均量是更稳的基准**：同样「放量 1.15 倍」，
+# 相对 5 日平台比相对单日更有说服力。
+#
+# ## 实测结论（33 归档日·1773 个可算样本·源 `cache/zt_history` × `cache/kline_qfq`）
+#
+# ⚠️ **本函数只做诊断，不参与任何硬门槛** —— 数据不支持把它当闸：
+#   二板换手板·可成交口径（n=51）三种方案对比：
+#   ┌──────────────────────┬──────┬────────┬──────────┐
+#   │ 方案                  │ n    │ 次日开收 │ 胜率     │
+#   ├──────────────────────┼──────┼────────┼──────────┤
+#   │ 全放行（现状）         │ 51   │ −1.51% │ 37.3%    │
+#   │ 仅绝对额 ≥5 亿         │ 35   │ −0.35% │ **45.7%**│
+#   │ 仅量比 ≥1.0x          │ 45   │ −1.27% │ 37.8%    │
+#   │ ≥5 亿 AND ≥1.0x      │ 31   │ −0.10% │ 45.2%    │
+#   └──────────────────────┴──────┴────────┴──────────┘
+#   ⇒ **量比几乎不提升（37.3%→37.8%），绝对额才是主判据**。
+#      量比叠加到绝对额上反而略降（45.7%→45.2%）。
+#
+#   但用户的直觉在**两处是对的**：
+#   ① **首板可以缩量**：首板换手板可成交口径 n=580，缩量<1.0x 胜率 40.2%
+#      vs 放量≥1.0x 41.8% —— 无实质差别，缩量不是首板的硬伤。
+#   ② **二板缩量确实最差**：全样本二板换手板缩量<0.8x（n=14）胜率 **21.4%**、
+#      开收 **−3.16%**；缩量<1.0x（n=19）胜率 26.3%，均低于放量组 36.7%。
+#   ⇒ 结论：**缩量对二板是风险信号，但「不缩量」本身不足以构成买入理由**。
+#      用于解释与复盘（为什么这只二板不能接），不用于独立否决。
+#
+# ## 口径
+# `ratio = 当日成交量 ÷ 前 N 日（不含当日）均量`
+# ⛔ 用**成交量（股数）**不用成交额：涨停日价格高，成交额天然虚高。
+# ⛔ 前 N 日不足 N 根 / 当日非正 / 日期对不上 → 返回 None（缺数据不猜）。
+
+MA5_DAYS = 5
+_MA5_CACHE: dict[tuple[str, str, int], dict[str, Any] | None] = {}
+
+
+def _local_bars(code: str) -> dict[str, dict[str, Any]]:
+    """读本地前复权日 K（`cache/kline_qfq/`）。⛔ 缺失返回空 dict，不建目录不联网。"""
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[2] / "cache" / "kline_qfq" / f"{code}.json"
+    try:
+        import json
+        if not p.exists():
+            return {}
+        data = json.loads(p.read_text(encoding="utf-8"))
+        out: dict[str, dict[str, Any]] = {}
+        for b in data.get("bars") or []:
+            d = str(b.get("date") or "")[:10]
+            v = b.get("vol", b.get("volume"))
+            if d and isinstance(v, (int, float)) and float(v) > 0:
+                out[d] = {"vol": float(v)}
+        return out
+    except Exception:
+        return {}
+
+
+def vol_ma5(code: str, asof: str, *, days: int = MA5_DAYS) -> dict[str, Any] | None:
+    """当日量 ÷ 前 `days` 日均量。返回 `{"ratio", "today", "ma5", "today_date", "window"}`。
+
+    `asof` = 涨停当日（YYYY-MM-DD），必须是本地 K 线里存在的那一根；
+    ⛔ 对不上就返回 None —— 宁可没有这一项，也不拿邻近日期冒充。
+    """
+    c, a = str(code or "").strip(), str(asof or "").strip()[:10]
+    if not c or len(a) != 10:
+        return None
+    hit = (c, a, days)
+    if hit in _MA5_CACHE:
+        return _MA5_CACHE[hit]
+    out: dict[str, Any] | None = None
+    bars = _local_bars(c)
+    if bars and a in bars:
+        ds = sorted(bars)
+        i = ds.index(a)
+        prev = [bars[d]["vol"] for d in ds[max(0, i - days):i]]
+        if len(prev) == days:                       # ⛔ 不足 N 根不算（不拿 2 天当 5 天）
+            ma = sum(prev) / days
+            cur = bars[a]["vol"]
+            if ma > 0 and cur > 0:
+                out = {"ratio": round(cur / ma, 3), "today": cur, "ma5": round(ma, 1),
+                       "today_date": a, "window": days}
+    _MA5_CACHE[hit] = out
+    return out
+
+
+def vol_ma5_text(code: str, asof: str, *, days: int = MA5_DAYS) -> str:
+    """诊断一句话：`较5日均量放量 1.15 倍` / `…缩量 0.72 倍` / `""`（缺数据）。"""
+    r = vol_ma5(code, asof, days=days)
+    if not r:
+        return ""
+    ratio = float(r.get("ratio") or 0)
+    if ratio <= 0:
+        return ""
+    verb = "放量" if ratio >= 1 else "缩量"
+    return f"较{days}日均量{verb} {ratio:.2f} 倍"

@@ -29,6 +29,12 @@ import pytest
 import core.pool_admit as pa
 
 
+@pytest.fixture(autouse=True)
+def legacy_pool_contract(monkeypatch):
+    # 历史分桶回退锁；新观察禁反提由 test_two_pool_contract 覆盖。
+    monkeypatch.setenv("ENABLE_TWO_POOL_CONTRACT", "0")
+
+
 def _row(code, name, boards, carry, fbt="093000", theme="机器人", mates=10,
          score=60.0, theme_em=None, **kw):
     r = {"code": code, "name": name, "boards": boards, "carry_cnt": carry,
@@ -40,40 +46,78 @@ def _row(code, name, boards, carry, fbt="093000", theme="机器人", mates=10,
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    for k in (pa.ENABLED_ENV, pa.PER_LINE_ENV, pa.MIN_MATES_ENV):
+    for k in (pa.ENABLED_ENV, pa.PER_LINE_ENV, pa.MIN_MATES_ENV,
+              pa.FIRST_BOARD_MIN_CARRY_ENV):
         monkeypatch.delenv(k, raising=False)
 
 
 # ── ① 默认值 ───────────────────────────────────────────────────────────
-def test_default_per_line_is_two():
-    """「每个板块尽量留两只活口」→ 默认 2（2026-10-21 17:25 用户补充）。"""
-    assert pa.DEFAULT_PER_LINE == 2
-    assert pa.per_line() == 2
+def test_default_per_line_is_unlimited():
+    """2026-11-04 用户「解除每一个题材保留两只的限制」→ 默认 0 = 不限。
 
-
-def test_per_line_floor_is_one():
-    """⛔ 允许 1，但不允许 0（把整条线砍光不是「收口」，是「断线」）。"""
+    回退口径：`POOL_ADMIT_PER_LINE=2` 回到「每线龙头+次排两只」。
+    """
+    assert pa.DEFAULT_PER_LINE == 0
+    assert pa.per_line() == 0
     import os
-    for v in ("0", "-3"):
-        os.environ[pa.PER_LINE_ENV] = v
-        try:
-            assert pa.per_line() == 1
-        finally:
-            os.environ.pop(pa.PER_LINE_ENV, None)
+    os.environ[pa.PER_LINE_ENV] = "2"
+    try:
+        assert pa.per_line() == 2
+    finally:
+        os.environ.pop(pa.PER_LINE_ENV, None)
 
 
-# ── ② 核心：同线只留最强 N 只 ───────────────────────────────────────────
+def test_per_line_zero_means_unlimited_not_empty():
+    """⛔ 0 是「不限」，不是「一只都不留」——整条线全留，不砍光。"""
+    import os
+    os.environ[pa.PER_LINE_ENV] = "0"
+    try:
+        assert pa.per_line() == 0
+    finally:
+        os.environ.pop(pa.PER_LINE_ENV, None)
+    relay = [_row("600001", "机器人龙", 3, 5, "093000"),
+             _row("600002", "机器人二", 2, 7, "093445"),
+             _row("600003", "机器人三", 2, 6, "094409")]
+    r, w, diag = pa.admit(relay, [])
+    assert {x["name"] for x in r + w} == {"机器人龙", "机器人二", "机器人三"}
+    assert diag["dropped"] == 0
+    assert any(g.get("note") == "per_line_unlimited" for g in diag["groups"])
+
+
+def test_per_line_negative_falls_back_to_unlimited():
+    """负数同样按「不限」处理（不是砍光，也不是退回 1）。"""
+    import os
+    os.environ[pa.PER_LINE_ENV] = "-3"
+    try:
+        assert pa.per_line() == 0
+    finally:
+        os.environ.pop(pa.PER_LINE_ENV, None)
+
+
+# ── ② 核心：同线只留最强 N 只（默认已解除；此处显式指定 2 验证旧口径可回退）──
 def test_same_line_keeps_top_two_only():
     relay = [_row("600001", "机器人龙", 3, 5, "093000"),
              _row("600002", "机器人二", 2, 7, "093445"),
              _row("600003", "机器人三", 2, 6, "094409"),
              _row("600004", "机器人四", 2, 7, "095109"),
              _row("600005", "机器人五", 2, 7, "100302")]
-    r, w, diag = pa.admit(relay, [])
+    r, w, diag = pa.admit(relay, [], per_line_cap=2)
     kept = {x["name"] for x in r + w}
     assert kept == {"机器人龙", "机器人二"}, kept
     assert diag["dropped"] == 3
     assert set(diag["dropped_names"]) == {"机器人三", "机器人四", "机器人五"}
+
+
+def test_same_line_keeps_all_when_unlimited():
+    """2026-11-04 默认解除：同线 5 只全部留池（买不买另由 09:25 各闸判）。"""
+    relay = [_row("600001", "机器人龙", 3, 5, "093000"),
+             _row("600002", "机器人二", 2, 7, "093445"),
+             _row("600003", "机器人三", 2, 6, "094409"),
+             _row("600004", "机器人四", 2, 7, "095109"),
+             _row("600005", "机器人五", 2, 7, "100302")]
+    r, w, diag = pa.admit(relay, [])
+    assert len({x["name"] for x in r + w}) == 5, [x["name"] for x in r + w]
+    assert diag["dropped"] == 0
 
 
 def test_strength_order_boards_first_then_carry():
@@ -112,13 +156,25 @@ def test_front_slot_kept_even_if_it_was_watch_before():
     assert [x["name"] for x in w] == ["原接力后排"]
 
 
-def test_first_board_without_carry_goes_watch():
-    """首板零带动 = 没被市场检验过 → 不进接力（`relay_worth` 判据）。"""
+def test_first_board_without_carry_dropped(monkeypatch):
+    """⛔ 2026-11-03 改口径（用户转述 NIKA「首板就不该进来」）：首板零带动**不进池**。
+
+    旧口径是「进观察池不占接力名额」。实测 11-03：竞价卡 11 只里 7 只是 1 板，
+    4 只跟风首板（国金证券带动1 / 统一股份2 / 华瓷股份0 / 三峡新材1）与唯一
+    6 板龙头并排显示，且按综合分排在龙头前面 → 卡面读起来像在推杂毛。
+    """
     relay = []
     watch = [_row("600001", "首板独走", 1, 0, theme="杂线", mates=5)]
-    r, w, _ = pa.admit(relay, watch)
-    assert not r
-    assert [x["name"] for x in w] == ["首板独走"]
+    r, w, diag = pa.admit(relay, watch)
+    assert not r and not w, "首板零带动连观察池都不该进"
+    assert diag["first_board_dropped"] == ["首板独走"]
+
+
+def test_first_board_gate_rollback(monkeypatch):
+    """`POOL_ADMIT_FIRST_BOARD_MIN_CARRY=0` → 逐字节回到旧口径（首板进观察池）。"""
+    monkeypatch.setenv(pa.FIRST_BOARD_MIN_CARRY_ENV, "0")
+    r, w, _ = pa.admit([], [_row("600001", "首板独走", 1, 0, theme="杂线", mates=5)])
+    assert not r and [x["name"] for x in w] == ["首板独走"]
 
 
 def test_first_board_with_carry_still_goes_watch():
@@ -202,9 +258,21 @@ def test_theme_grouping_uses_em_name_not_industry():
         _row("600002", "机器人跟风", 2, 7, industry_sector="通用设备"),
         _row("600003", "机器人跟风2", 2, 6, industry_sector="消费电子"),
     ]
-    r, w, diag = pa.admit(relay, [])
+    r, w, diag = pa.admit(relay, [], per_line_cap=2)
     assert len(r) + len(w) == 2, "同题材跨行业必须只留 2 只"
     assert diag["groups"][0]["theme"] == "机器人"
+
+
+def test_theme_grouping_still_one_group_when_unlimited():
+    """解除只数限制后，跨行业同题材仍归**同一组**（分组口径没被放宽）。"""
+    relay = [
+        _row("600001", "机器人龙头", 3, 5, industry_sector="照明设备"),
+        _row("600002", "机器人跟风", 2, 7, industry_sector="通用设备"),
+        _row("600003", "机器人跟风2", 2, 6, industry_sector="消费电子"),
+    ]
+    r, w, diag = pa.admit(relay, [])
+    assert len(r) + len(w) == 3, "不限只数 → 三只全留"
+    assert len(diag["groups"]) == 1 and diag["groups"][0]["theme"] == "机器人"
 
 
 # ── ⑥ 回归锚：真实数据形状 ─────────────────────────────────────────────
@@ -224,8 +292,13 @@ def test_real_shape_2026_10_20():
         _row("002929", "润建股份", 2, 0, "142000", "AI算力", 4, 37.09),
     ]
     relay, watch = rows[:3], rows[3:]
-    r, w, diag = pa.admit(relay, watch)
-    assert len(r) + len(w) == 8, f"应为 8 只，实际 {len(r) + len(w)}"
+    r, w, diag = pa.admit(relay, watch, per_line_cap=2)
+    # ⚠️ 2026-11-03：首板闸上线后 8 → 6。博通集成/南威软件都是 1 板且带动仅 2 家，
+    #    按「首板要有带动才算 1进2 候选」被剔；要回到 8 只请设
+    #    POOL_ADMIT_FIRST_BOARD_MIN_CARRY=0。
+    # ⚠️ 2026-11-04：默认已解除每线两只 → 本用例显式传 per_line_cap=2 保留旧口径回归。
+    assert len(r) + len(w) == 6, f"应为 6 只，实际 {len(r) + len(w)}"
+    assert set(diag["first_board_dropped"]) == {"博通集成", "南威软件"}
     kept = {x["name"] for x in r + w}
     # 机器人线：3 板海洋王 + 2 板带动最多且最早封的宁波东力
     assert "海洋王" in kept and "宁波东力" in kept

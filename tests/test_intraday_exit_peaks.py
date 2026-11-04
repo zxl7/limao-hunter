@@ -75,6 +75,32 @@ def test_bad_feedback_or_cross_day_input_does_not_change_state():
     assert mod.update_peaks(latest=_latest(), feedback=cross_day, old=old) == old
 
 
+def test_unknown_current_keeps_peak_and_top5_exit_keeps_last_time():
+    old = mod.update_peaks(latest=_latest(pcb=5), feedback=_feedback())
+    lt = _latest(pcb=None)
+    lt["ts"] = "2026-10-21T10:10:00+08:00"
+    state = mod.update_peaks(latest=lt, feedback=_feedback(), old=old)
+    assert state["sectors"]["PCB"]["current_zt_count"] is None
+    assert state["sectors"]["PCB"]["zt_count_peak"] == 5
+    lt["top5"] = []
+    lt["ts"] = "2026-10-21T10:20:00+08:00"
+    next_state = mod.update_peaks(latest=lt, feedback=_feedback(), old=state)
+    rec = next_state["sectors"]["PCB"]
+    assert rec["in_current_top5"] is False
+    assert rec["current_observed_at"] == "2026-10-21T10:10:00+08:00"
+    assert rec["zt_count_peak_at"] == NOW
+
+
+def test_bc_use_identical_count_evidence():
+    from scripts.effect_paths import _theme_index
+    lt = _latest(pcb="3")
+    lt["top5"][0]["zt_count_src"] = "xgb"
+    state = mod.update_peaks(latest=lt, feedback=_feedback())
+    c = _theme_index(lt)["PCB"]
+    b = state["sectors"]["PCB"]["count_evidence"]
+    assert all(c[k] == v for k, v in b.items())
+
+
 def test_collect_writes_only_to_injected_cache(tmp_path):
     cache = tmp_path / "cache"
     pulse = cache / "pulse_snapshots"

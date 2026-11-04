@@ -42,11 +42,18 @@ from adapters.input_zt import load_environment, load_zt_pool
 from adapters.input_env import load_pulse
 from adapters.daily_verdict import digest_daily_verdict, match_candidate
 from core.expectation_ai import build_ai_expectation
-from core.dimension_score import build_dimension_panel
+from core.dimension_score import build_dimension_panel, relay_selection_mode_for
 from core.quant_score import select_relay_watch
 from core import pool_admit                     # 源头准入闸（2026-10-21 用户「后排的票不要推到这里面来」）
 from core import zt_gene as _zt_gene            # 股性判据单一真源（2026-10-22 与卡面共用）
 from core import defense_gate as _defense_gate  # 位置判据（雷达与 09:25 防守闸同一套口径）
+# 封板强度闸（2026-11-03 用户「重新定量」）：成交额从硬门槛降级为四因素之一。
+# 强封（一字/竞价封+厚封单）与极热题材（同题材≥8家）可在低成交额下放行。
+# ⛔ 只决定候选准入，不改评分/排序/名额/仓位；`ENABLE_SEAL_GATE=0` 一键回旧行为。
+from core import seal_gate as _seal_gate
+# 全量过筛（2026-11-04 用户「每天把涨停股全部过一遍」）：逐票 pass/watch_only/reject，
+# 本闸只做减法。`ENABLE_DAILY_SCREEN=0` 一键回旧链路。
+from core import daily_screen as _daily_screen
 from core.historical_relay import annotate_historical_relay
 
 # ⛔ `common/` 在**项目根**、不在 wealth_code/ 下；以脚本/CLI 方式运行时 cwd 不入 sys.path，
@@ -109,12 +116,22 @@ MIN_TURNOVER_YI = 5.0
 #   1.01/0.74 亿仍封住＝筹码锁死；而同为缩量的大业能连 5 板。反之高位巨量不缩
 #   （冰山冷热 20 亿/日）才是倒货。故：**低位缩量封板＝筹码锁定（放行），高位缩量＝真硬伤**。
 # ⛔ 只放宽「进场门槛」，不动「池外高辨识度名单」的只展示不买入铁律。
-MIN_TURNOVER_YI_LOW_BOARD = 3.0   # 低位（1~2 板）放行线·亿（2026-10-22 用户拍板 1.0 → 3.0）
+MIN_TURNOVER_YI_LOW_BOARD = 1.5   # 低位（1~2 板）放行线·亿
+# 📌 2026-11-03 用户「重新定量」：3.0 → 1.5。
+#   依据（33 个交易日 ≈3000 个首板样本回测·次日晋级率）：
+#     ≤1.5亿 27.5% ｜ 1.5-3亿 16.0% ｜ 3-5亿 13.1% ｜ 5-10亿 13.9% ｜ ≥10亿 8.1%
+#   → 成交额与晋级率**单调负相关**，原来的 3 亿/5 亿门槛方向是反的。
+#   触发事件（11-03 传媒）：昨日短剧 9 只首板，5 只成交额 1.5~2.8 亿被 3 亿门槛全剔，
+#   今日 5/5 全封（4 只 9:25 竞价一字）；唯一进池的文投控股（8.74 亿）反而没封。
+#   ⛔ 不能直接取消门槛：降到 1.5 亿放回 21 只（可控），取消则昨日放回 59 只（占涨停 47%，池子会被淹）。
+#   📌 2026-11-03 用户「A 拆掉下限」：seal_gate 的 0.5 亿绝对下限已拆，
+#      改由「封单/流通 ≥5%」承接（薄封单+弱形态仍拦）。此处 1.5 亿是**常规门槛**，
+#      低于它仍可走 强封/厚封单/热题材/高度层 四条豁免进池。
 LOW_BOARD_CEIL = 2                # 「低位」上界（含）＝首板 / 2 板
-ENABLE_TURNOVER_BY_STAGE = "1"    # 2026-10-22 用户拍板开启（低位 3 亿 / 高位 5 亿）。
+ENABLE_TURNOVER_BY_STAGE = "1"    # 2026-10-22 用户拍板开启（低位 1.5 亿 / 高位 5 亿）。
                                   # 📌 历史：1.0 亿时实测池子 8→5（低成交额票涌入→题材分组重排→
-                                  #    哈空调/出版传媒/海量数据被挤出），故先回 3 亿观察；
-                                  #    真正的「低位低成交额」票由下面的 gene_radar 只展示不占名额兜住。
+                                  #    哈空调/出版传媒/海量数据被挤出）；3.0 亿则误杀缩量强封；
+                                  #    1.5 亿 + seal_gate 双豁免 = 两头兼顾。
 
 
 def turnover_floor(boards: Any) -> float:
@@ -217,6 +234,14 @@ def _clamp(v: float, lo: float = 0.0, hi: float = 100.0) -> float:
     return max(lo, min(hi, v))
 
 
+# 📌 缩量封板补偿（2026-11-03 用户「重新定量」）
+#   容量公式对 cje≤10 亿线性给分，缩量一字票（如 2.44 亿）只拿 8.8/36，
+#   再叠 liquidity_band 48 分 → 最强形态被判最差。回测结论相反，
+#   故对「一字/缩量封板」给保底（不给超额，防小票反超真容量核心）。
+SHRINK_SEAL_CIE_FLOOR = 30.0     # 成交额维保底分（满分 36）
+SHRINK_SEAL_LIQ_FLOOR = 66.0     # 流动性档保底分（对齐 40-90 亿档的 66）
+
+
 def _capacity_score(cje_yi: float, zsz_yi: float, hs_pct: float, zbc: int, fbt: str | None) -> dict[str, Any]:
     """
     容量因子（忠实在 quant-review/daily_review/metrics/zt_analysis.py 的 capacity_score 公式）。
@@ -242,12 +267,23 @@ def _capacity_score(cje_yi: float, zsz_yi: float, hs_pct: float, zbc: int, fbt: 
         66.0 if 40.0 < cje_yi <= 90.0 else
         48.0 if cje_yi > 0 else 34.0
     )
+    fbt = str(fbt or "")
+    # 一字：竞价封 + 极低换手 + 炸板 0（原判据不动）
+    is_yizi = bool(hs_pct > 0 and hs_pct < 2 and cje_yi < 3 and zbc == 0 and fbt.startswith("0925"))
+    is_shrink = bool(hs_pct > 0 and hs_pct < 3 and cje_yi < 5 and zbc == 0)
+    # 📌 2026-11-03 用户「重新定量」——缩量封板补偿。
+    #   原式在 cje≤10 时线性给分（2.44 亿 → 8.8/36），再叠 liquidity_band 48 分，
+    #   等于把「一字封死·没换手」这种最强形态按「流动性缺陷」双重扣分。
+    #   回测（33 日/约 3000 首板样本）结论相反：≤1.5 亿次日晋级 27.5% > ≥3 亿 13.1%。
+    #   ⛔ 只给**保底**、不给超额：30/36 ≈ 8.3 亿票的水平，防小票反超真容量核心。
+    #   开关 ENABLE_SHRINK_SEAL_CAPACITY=0 回旧算法。
+    if (os.environ.get("ENABLE_SHRINK_SEAL_CAPACITY", "1").lower() not in {"0", "false", "off"}) \
+            and (is_yizi or is_shrink):
+        cje_target_score = max(cje_target_score, SHRINK_SEAL_CIE_FLOOR)
+        liquidity_band_score = max(liquidity_band_score, SHRINK_SEAL_LIQ_FLOOR)
     cap_total = _clamp(
         cje_target_score * 0.44 + vol_tier_score * 0.24 + cap_score * 0.17 + liquidity_band_score * 0.15
     )
-    fbt = str(fbt or "")
-    is_yizi = bool(hs_pct > 0 and hs_pct < 2 and cje_yi < 3 and zbc == 0 and fbt.startswith("0925"))
-    is_shrink = bool(hs_pct > 0 and hs_pct < 3 and cje_yi < 5 and zbc == 0)
     is_capacity_core = (
         cje_yi >= 10.0 and zsz_yi >= 50.0 and hs_pct <= 15.0 and not is_yizi and not is_shrink
     )
@@ -327,6 +363,47 @@ def low_pool_enabled() -> bool:
 THIN_SEAL_TOP_RATIO_MAX = 2.0
 THIN_SEAL_TOP_MIN_BOARDS = 3          # 最高板不到 3 板 → 谈「高度」无意义，不启用
 THIN_SEAL_TOP_ENABLED_ENV = "ENABLE_THIN_SEAL_TOP_WATCH"
+
+
+def _load_prev_pool_boards(today: str, cache_dir: Path | None = None) -> dict[str, int]:
+    """读**上一交易日**候选文件的 relay+watch → `{code: 当日板数}`。
+
+    用途：观察池「昨日在池 ∧ 今日晋级 → 优先占位」（2026-11-04 用户「b 占位」）。
+
+    ⛔ 上一交易日必须走 `common.trading_calendar.prev_a_share_trading_day`，
+      **不得用 `today - 1 天`** —— 跨周末/长假会去读一个根本不存在的文件，
+      占位功能静默失效（且看起来像「昨天没票」，是最难查的一类静默错误）。
+    ⛔ 文件缺失/损坏一律返回空 dict（调用方据此退回旧行为），⛔ 不猜、不编造板数。
+    """
+    from common.trading_calendar import prev_a_share_trading_day
+    from common.json_io import load_json
+
+    try:
+        prev_day = prev_a_share_trading_day(today)
+    except Exception:  # noqa: BLE001
+        return {}
+    if not prev_day or prev_day == today:
+        return {}
+    # ⛔ `ROOT` 在本模块**已经指向 wealth_code/**（不是项目根）——
+    #    写成 `ROOT/"wealth_code"/"cache"` 会拼出 `wealth_code/wealth_code/cache`
+    #    这种不存在路径，函数静默返回空 dict（实证踩过：占位功能完全不生效）。
+    base = Path(cache_dir) if cache_dir else (ROOT / "cache")
+    data = load_json(base / f"candidates-{prev_day}.json")
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, int] = {}
+    for bucket in ("relay", "watch"):
+        for row in data.get(bucket) or []:
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("code") or "")
+            if not code:
+                continue
+            try:
+                out[code] = max(out.get(code, 0), int(row.get("boards") or 0))
+            except (TypeError, ValueError):
+                continue
+    return out
 
 
 def thin_seal_top_enabled() -> bool:
@@ -678,7 +755,9 @@ def _score_all(ztgc: list[dict[str, Any]], code2themes: dict[str, list[str]], ho
             # price 缺失时置 None（不得用涨幅顶替，数据即事实）
             "price": _to_float(s.get("price")) or None,
             "pct": zf, "boards": lbc, "hs": hs, "zbc": zbc, "fbt": fbt,
-            "seal_amt": seal_amt, "lt_mktcap": lt_mktcap,  # 透传封单金额(亿)/流通市值(亿)
+            "seal_amt": (seal_amt if s.get("zj") is not None else None),
+            "lt_mktcap": (lt_mktcap if s.get("lt") is not None else None),
+            "seal_fact": s.get("seal_fact"),  # 同批封单事实与读取来源（金额单位亿）
             "sector": str(s.get("hy") or ""),
             # 炒作题材透传（2026-08-25 三修·用户「以题材的涨停为准」）：ztgc 已在
             # annotate_lone 前回填 core_theme（题材接口），候选行继承——annotate_lone 的
@@ -811,6 +890,22 @@ def _attach_sector_ladder(scored: list[dict[str, Any]], *,
 # 🐉 板块龙一准入闸（2026-10-27 用户「推的票必须是板块龙一」）
 # ══════════════════════════════════════════════════════════════════════════
 DRAGON_GATE_ENV = "ENABLE_SECTOR_DRAGON_ONLY"
+# 🚪 隔壁通道（2026-11-04 用户 BBB「今天龙一买不到，必须考虑龙二能不能买」）
+# 只在「龙一自己买不进（一字/ST）」时，放**仅第 2 身位**进接力池，仓位减半、龙一开板即走。
+NEXT_TO_LEADER_ENV = "ENABLE_NEXT_TO_LEADER"
+
+
+def next_to_leader_enabled() -> bool:
+    return str(os.environ.get(NEXT_TO_LEADER_ENV, "1")).strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def _theme_key_of(r: dict[str, Any]) -> str:
+    """归并后的炒作题材键（与 `pool_admit` 分组同口径·单一源）。缺失 → ""。"""
+    try:
+        return str(pool_admit.theme_of(r) or "").strip()
+    except Exception:
+        return str(r.get("theme") or r.get("core_theme") or "").strip()
 
 
 def dragon_gate_enabled() -> bool:
@@ -823,6 +918,7 @@ def apply_dragon_gate(relay: list[dict[str, Any]],
                       *, enabled: bool | None = None
                       ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     """接力池只放**板块龙一**；龙二/跟风一律降观察（不可买）。
+    🚪 例外（2026-11-04 用户 BBB）：龙一**自己买不进**时，第 2 身位可顶上来。
 
     判据来源 = `core.sector_leader.compute` 回填的 `dragon_rank`（单一源），
     ⛔ 本函数不自己重算强弱，只按 `dragon_rank` 分桶。
@@ -847,23 +943,86 @@ def apply_dragon_gate(relay: list[dict[str, Any]],
 
     keep: list[dict[str, Any]] = []
     moved: list[dict[str, Any]] = []
+    proxies: list[dict[str, Any]] = []
+    _ntl = bool(next_to_leader_enabled()) and on
     for r in relay:
         # has_sector 缺省 True：只有明确标 False 才豁免（老候选文件无此字段时按有板块处理）
         if r.get("sector_has_mates") is False or _rank(r) == 0:
             keep.append(r)
             continue
+        # 龙一自己买不进（一字 / ST）→ 本线唯一入口是「隔壁」（2026-11-04 用户 BBB）
+        _lb = str(r.get("dragon_leader_block") or "")
         if _rank(r) != 1:
+            if _ntl and _rank(r) == 2 and _lb:
+                # ⛔ 只放第 2 身位，绝不放龙三及以后；仓位减半、龙一开板即走由 pool_call/卡面承接
+                r["dragon_gate"] = "next_to_leader"
+                r["next_to_leader"] = True
+                r["leader_block"] = _lb
+                r["dragon_note"] = (f"这条线龙一{r.get('dragon_leader_name') or '别人'}今天买不进"
+                                    f"（{_lb}）→ 它是唯一入口，半仓参与，龙一开板即走")
+                proxies.append(r)
+                keep.append(r)
+                continue
             r["dragon_gate"] = "deputy"
             r["dragon_note"] = (f"这条线龙一是 {r.get('dragon_leader_name') or '别人'}"
                                 f"（{r.get('dragon_leader_boards') or '?'} 板）")
             moved.append(r)
             continue
-        if str(r.get("dragon_leader_block") or ""):
+        if _lb:
             r["dragon_gate"] = "leader_unbuyable"
             r["dragon_note"] = "它自己是龙一，但今天买不进（一字/ST）"
             moved.append(r)
             continue
         keep.append(r)
+
+    # ── 🚪 隔壁补位（2026-11-04 用户 BBB）─────────────────────────────────
+    # 场景（11-04 传媒线实证）：龙一大晟文化一字封死 +9.98% → 它被移出接力池，
+    # 龙二龙版传媒（+4.06% 可成交、同题材 6 家涨停）原本只是「次排活口」待在观察池，
+    # 结果这条当日最强的线在接力池里彻底没有入口。
+    # 规则：**仅当**本线龙一确实买不进（`dragon_leader_block` 非空）时，
+    #       把该线第 2 身位从 watch 提回接力池；⛔ 绝不放第 3 名及以后。
+    # ⛔ 这是对「只降不升」的唯一例外，边界死守三条：
+    #    ① 只因「龙一自己买不进」触发，不因龙一被其它风控否决而触发；
+    #    ② 只提 rank==2；③ 仍需自己过 5%/量能/预期区间/身位/四条件/名额。
+    blocked_themes: dict[str, dict[str, Any]] = {}
+    if _ntl:
+        # ⛔ 必须扫**全池**（relay + watch 原始入参），不能只看 `moved`：
+        #    11-04 实证——大晟文化当天本来就在观察池（前序闸已降级），relay 是空的，
+        #    只看 moved 会让隔壁通道永远不触发。
+        for r in list(relay or []) + list(watch or []):
+            if _rank(r) != 1 or not str(r.get("dragon_leader_block") or ""):
+                continue
+            if r.get("sector_has_mates") is False:
+                continue
+            th = _theme_key_of(r)
+            if th:
+                blocked_themes[th] = r
+        # relay 里被判 leader_unbuyable 的也补进来（上面已覆盖，这里兜底其它路径打标）
+        for r in moved:
+            if str(r.get("dragon_gate") or "") != "leader_unbuyable":
+                continue
+            th = _theme_key_of(r)
+            if th:
+                blocked_themes.setdefault(th, r)
+    if blocked_themes:
+        stay_watch: list[dict[str, Any]] = []
+        for r in (watch or []):
+            th = _theme_key_of(r)
+            if (th in blocked_themes and _rank(r) == 2
+                    and str(r.get("dragon_leader_block") or "")
+                    and not r.get("watch_only") and not r.get("frozen")):
+                rr = dict(r)
+                rr["dragon_gate"] = "next_to_leader"
+                rr["next_to_leader"] = True
+                rr["leader_block"] = str(r.get("dragon_leader_block") or "")
+                rr["dragon_note"] = (
+                    f"这条线龙一{r.get('dragon_leader_name') or '别人'}今天买不进"
+                    f"（{rr['leader_block']}）→ 它是唯一入口，半仓参与，龙一开板即走")
+                keep.append(rr)
+                proxies.append(rr)
+                continue
+            stay_watch.append(r)
+        watch = stay_watch
 
     diag = {
         "enabled": True,
@@ -875,6 +1034,11 @@ def apply_dragon_gate(relay: list[dict[str, Any]],
                    "leader": str(r.get("dragon_leader_name") or ""),
                    "gate": r.get("dragon_gate")} for r in moved],
         "moved_names": [str(r.get("name") or "") for r in moved],
+        "next_to_leader": [{"code": str(r.get("code") or ""), "name": str(r.get("name") or ""),
+                            "theme": str(r.get("theme") or ""),
+                            "rank": _rank(r), "leader": str(r.get("dragon_leader_name") or ""),
+                            "leader_block": str(r.get("leader_block") or "")} for r in proxies],
+        "next_to_leader_enabled": _ntl,
     }
     if not moved:
         return keep, watch, diag
@@ -952,6 +1116,16 @@ HIGH_WIN_THEME_MATES_MIN = 2       # 题材内至少 2 家（独苗 = 没有题�
 HIGH_WIN_ALLOW_LONE_DRAGON_ENV = "HIGH_WIN_ALLOW_LONE_DRAGON"
 HIGH_WIN_CONDITIONS = ("题材龙", "情绪", "量能", "梯队")
 
+# ## 💧 量能判据按封板形态分档（2026-11-04 用户「必须补齐」）
+#   用户原话：「要考虑它是不是一字涨停。昨天龙版一字涨停，这个时候缩量是很正常的，
+#             除非你是换手，换手的话量能太低就肯定说不过去，比如说今天的紫竹。」
+#
+#   一字板封死 → 成交额天然小，是**结构必然**，不是量能缺陷；
+#   换手板成交额低 → 少数资金之间对倒，容易被做局 → 1~2 板也守 5 亿。
+#   与进场闸共用同一套形态判据（`seal_gate.board_style` / `style_floor`），
+#   ⛔ 但**不复用进场闸的豁免结论**（强封/厚封/热题材豁免的理由不是「成交额够」）。
+HIGH_WIN_VOLUME_BY_STYLE_ENV = "ENABLE_HIGH_WIN_VOLUME_BY_STYLE"
+
 # ## 🧊 冰点解冻（2026-10-28 用户「冰点日若开盘后情绪转好 可以出手」）
 #   冰点日被本闸移出接力池的票**不是判死刑，是冻结**：保留身份与解冻条件，
 #   等 09:25 竞价回暖（`core.market_open.build_market_open` 的 `ready`）再放行。
@@ -997,6 +1171,16 @@ def high_win_allow_lone_dragon() -> bool:
     return os.environ.get(HIGH_WIN_ALLOW_LONE_DRAGON_ENV, "0") not in ("0", "false", "False", "")
 
 
+def high_win_volume_by_style() -> bool:
+    """量能这条是否按封板形态分档（默认开，`ENABLE_HIGH_WIN_VOLUME_BY_STYLE=0` 回退纯数值）。
+
+    开：一字板只守数据防呆线 / 换手板 1~2 板守 5 亿 / 形态未知走原门槛。
+    关：逐字回到「`cje_yi < 档位门槛`」的旧口径（一字缩量会被判缺量能）。
+    """
+    return os.environ.get(HIGH_WIN_VOLUME_BY_STYLE_ENV, "1") not in (
+        "0", "false", "False", "")
+
+
 def high_win_ok_regimes() -> tuple[str, ...]:
     raw = os.environ.get("HIGH_WIN_OK_REGIMES", "")
     if not raw.strip():
@@ -1022,7 +1206,14 @@ def high_win_missing(c: dict[str, Any], env: dict[str, Any] | None,
     if _rank_raw is None and _has_sector is None:
         pass                                  # 完全无身位信息 → 不裁决（旧存档）
     elif _rank != 1:
-        miss.append("题材龙")                  # 有信息但不是龙一（含 rank=0「无板块」）
+        # 🚪 隔壁（2026-11-04 用户 BBB）：龙一自己买不进时，第 2 身位就是本线唯一入口，
+        #    「题材龙」这一条按「本线当前可参与的前排」认定，不再重复判它「不是龙一」。
+        #    ⛔ 只豁免这一条；情绪 / 量能 / 梯队三条照旧全判——个股级硬伤一条都不放。
+        _ntl_pass = bool(
+            os.environ.get("HIGH_WIN_NEXT_TO_LEADER_PASS", "1") not in ("0", "false", "False", "")
+            and c.get("next_to_leader") and _rank == 2)
+        if not _ntl_pass:
+            miss.append("题材龙")              # 有信息但不是龙一（含 rank=0「无板块」）
     elif _lone or (_mates and _mates < HIGH_WIN_THEME_MATES_MIN):
         if not high_win_allow_lone_dragon():
             miss.append("题材龙")              # 是龙一但孤军 → 没有题材梯队
@@ -1035,15 +1226,53 @@ def high_win_missing(c: dict[str, Any], env: dict[str, Any] | None,
         elif bool((e.get("relay_feedback") or {}).get("pressure")):
             miss.append("情绪")
 
-    # ③ 量能 --------------------------------------------------------------
-    _floor = _to_float(c.get("turnover_floor_used"), None)
-    if _floor is None:
-        _floor = leader_turnover_floor(c.get("boards"), market_max)
-        if _floor is None:
-            _floor = turnover_floor(c.get("boards"))
-    _cje = _to_float(c.get("cje_yi"), None)
-    if _cje is not None and _floor is not None and float(_cje) < float(_floor):
-        miss.append("量能")
+    # ③ 量能（2026-11-04 用户「必须补齐」·按封板形态分档）──────────────────
+    # 用户原话：「要考虑它是不是一字涨停。昨天龙版一字涨停，这个时候缩量是很正常的，
+    #          除非你是换手，换手的话量能太低就肯定说不过去，比如说今天的紫竹。」
+    #
+    # 病根：本闸原来只做 `cje < 1.5亿` 的裸数值比较，不看封板形态。结果：
+    #   一字板（封死→成交额天然小）被误判「量能不足」，与进场闸的「强封放行」自相矛盾。
+    #   11-04 实测：大晟文化(一字0.34亿)、龙版传媒(一字0.54亿) 都进不了接力池。
+    #
+    # 修法：**与进场闸共用同一套形态判据**（`seal_gate.board_style` / `style_floor`），
+    #   但⛔ 不复用进场闸的「豁免结论」——强封/厚封/热题材豁免的理由是封板质量与题材家数，
+    #   不是「成交额够」；拿它当量能达标，会让「换手板缩量」从后门溜进来。
+    #
+    # 分档：
+    #   · 一字板  → 成交额低是结构必然，**不构成量能缺陷**；只守数据防呆线
+    #   · 换手板  → 量能低 = 少数资金之间对倒（易被做局）→ 1~2 板也守 5 亿
+    #   · 形态未知 → 原门槛（⛔ 缺数据既不没收也不放宽）
+    _cje_v = _to_float(c.get("cje_yi"), None)
+    if high_win_volume_by_style():
+        _style_v = _seal_gate.board_style(c)
+        if _style_v == "yizi":
+            # ⛔ 不是「无门槛」：跌破防呆线仍要拦（挡 amount 字段异常，不是流动性判据）
+            if _cje_v is not None and float(_cje_v) < float(_seal_gate.DATA_SANITY_MIN_YI):
+                miss.append("量能")
+        elif _style_v == "turnover":
+            _floor_v = _seal_gate.style_floor(c, turnover_floor(c.get("boards")))
+            _lf_v = leader_turnover_floor(c.get("boards"), market_max)
+            if _lf_v is not None:
+                _floor_v = min(float(_floor_v), float(_lf_v))
+            if _cje_v is not None and float(_cje_v) < float(_floor_v):
+                miss.append("量能")
+        else:
+            _floor_v = _to_float(c.get("turnover_floor_used"), None)
+            if _floor_v is None:
+                _floor_v = leader_turnover_floor(c.get("boards"), market_max)
+                if _floor_v is None:
+                    _floor_v = turnover_floor(c.get("boards"))
+            if _cje_v is not None and _floor_v is not None and float(_cje_v) < float(_floor_v):
+                miss.append("量能")
+    else:
+        # 回退旧口径（`ENABLE_HIGH_WIN_VOLUME_BY_STYLE=0`）：纯数值，不看形态
+        _floor_v = _to_float(c.get("turnover_floor_used"), None)
+        if _floor_v is None:
+            _floor_v = leader_turnover_floor(c.get("boards"), market_max)
+            if _floor_v is None:
+                _floor_v = turnover_floor(c.get("boards"))
+        if _cje_v is not None and _floor_v is not None and float(_cje_v) < float(_floor_v):
+            miss.append("量能")
 
     # ④ 梯队 --------------------------------------------------------------
     _has_complete = c.get("ladder_has_complete")
@@ -1503,6 +1732,27 @@ def run_eod(
         _theme_meta = {"source": "error", "count": 0, "error": str(_e)}
         pass  # 题材接口失败 → pool 行无 core_theme，回退行业映射（不编造）
 
+    # 🛡️ 题材基座完整性守卫（2026-11-03 用户「以选股宝为基座」的前置条件）
+    #   ⛔ 为什么必须有：选股宝 `surge_stock` 接口**盘中活·盘后关**，当天没抓到就是
+    #   永久空洞、没有历史可回补。把分类基座压在这样一个源上，必须先能回答「今天抓全了吗」。
+    #   ⛔ 边界：**只判定 + 留痕，不改任何数据、不阻断主链**（拦截要等有明确证据再开）。
+    _theme_guard: dict[str, Any] = {}
+    if os.environ.get("ENABLE_THEME_GUARD", "1") != "0":
+        try:
+            from common.theme_base import guard_snapshot, guard_line
+            _zt_codes_for_guard = [
+                str(_z.get("dm") or _z.get("code") or "")[:6]
+                for _z in (zt.get("ztgc") or [])
+            ]
+            _theme_guard = guard_snapshot(
+                zt["date"], cache_dir=cache_dir,
+                zt_codes=[c for c in _zt_codes_for_guard if c],
+            )
+            _theme_guard["line"] = guard_line(_theme_guard)
+        except Exception as _e:  # noqa: BLE001
+            _theme_guard = {"schema": "theme_base_v1", "ok": False,
+                            "status": "error", "error": type(_e).__name__}
+
     scored = _score_all(zt["ztgc"], zt["code2themes"], zt["hot_sectors"])
 
     # P3（2026-10-18 用户「按顺序处理」·打通「复盘 → 选股」）：读**上一交易日**复盘推演，
@@ -1551,23 +1801,140 @@ def run_eod(
     if not _market_max_boards:                      # 涨停池缺板数字段 → 退回评分全量
         _market_max_boards = max((_to_int(_s.get("boards"), 0) for _s in scored), default=0)
     _leader_exempt_rows: list[dict[str, Any]] = []
+    _seal_exempt_rows: list[dict[str, Any]] = []
+    # 同题材涨停家数（**选股宝题材口径**·与 scored 的 `theme` 字段同源）。
+    # ⛔ 不许用 `sector`（东财行业）：传媒系被拆成 游戏Ⅱ/出版/广告营销/纺织制造/工程咨询
+    #    六个行业，按行业算永远凑不到 8 家 → 热题材豁免会变成一行死代码。
+    #    （2026-11-03 实证：短剧/互动影游 27 家同门，东财口径最大只到 5 家。）
+    _theme_mates_cnt: dict[str, int] = {}
+    if _seal_gate.enabled():
+        for _it in scored:
+            _t = str(_it.get("theme") or "").strip()
+            if _t and _t != "其他":
+                _theme_mates_cnt[_t] = _theme_mates_cnt.get(_t, 0) + 1
     for _it in scored:
-        _cj = _it.get("cje_yi") or 0.0
         _floor_normal = turnover_floor(_it.get("boards"))
         _floor_leader = leader_turnover_floor(_it.get("boards"), _market_max_boards)
-        if _cj >= _floor_normal:
+        _t = str(_it.get("theme") or "").strip()
+        _mates = _theme_mates_cnt.get(_t) if (_t and _t != "其他") else None
+        # 成交额准入 → core/seal_gate（2026-11-03）：成交额从「硬门槛」降级为四因素之一，
+        # 强封（一字/竞价封+厚封单）与极热题材（≥8 家）可低量放行。
+        # ⛔ 只决定「进不进候选池」，不改评分/排序/名额/仓位/09:25 裁决。
+        _verdict = _seal_gate.admit(_it, _floor_normal, _floor_leader, theme_mates=_mates)
+        _it["seal_gate"] = {
+            "schema": _seal_gate.SCHEMA, "grade": _verdict["grade"],
+            "score": _verdict["score"], "floor_used": _verdict["floor_used"],
+            "theme_mates": _mates, "source": _verdict["source"],
+            "reason": _verdict["reason"],
+            # 封板形态（2026-11-04）：一字/换手 → 换手板 1~2 板门槛提到 5 亿。
+            "style": _verdict.get("style"),
+        }
+        if _verdict["keep"]:
             _scored_kept.append(_it)
-        elif _floor_leader is not None and _cj >= _floor_leader:
-            # 高度层但成交额不足常规门槛 → 按龙头线放行，并留痕（卡面/诊断可复核）
-            _it["leader_turnover_exempt"] = True
-            _it["turnover_floor_used"] = _floor_leader
-            _it["turnover_floor_normal"] = _floor_normal
-            _scored_kept.append(_it)
-            _leader_exempt_rows.append(_it)
+            if _verdict["exempt"]:
+                _it["turnover_exempt"] = True
+                _it["turnover_exempt_kind"] = _verdict["source"]
+                _it["turnover_floor_used"] = _verdict["floor_used"]
+                _it["turnover_floor_normal"] = _floor_normal
+                # 按**来源标签**分流，⛔ 不再 reason text contains 猜类型
+                if _verdict["source"] == "leader":
+                    _it["leader_turnover_exempt"] = True
+                    _leader_exempt_rows.append(_it)
+                else:
+                    _seal_exempt_rows.append(_it)
         else:
             _excluded_turnover.append(_it)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # 🧭 全量过筛前置入口（2026-11-04 用户「可以处理前置入口！！这是我们优化的关键」）
+    # ══════════════════════════════════════════════════════════════════════
+    # 用户原话：「我们其实每天要把涨停的个股全部过一遍……基于你这个逻辑的话，
+    #   这个"紫竹"根本就不会进入我们系统的范围里面，直接就 pass 掉了。」
+    #   「今天哪怕它离开了，没有进入我们的池子，但是明天如果它还涨停了，
+    #     我们就会对它进行进一步的观察和判断，总会被我们发现的。」
+    #
+    # 与既有闸的关系：⛔ **本闸只做减法，不加分、不改排序、不放宽任何门槛**。
+    #   `seal_gate` 在上一步已按形态/封板强度决定过「成交额够不够」；本闸在此之上
+    #   再问一句「这只票逐维过筛的结论是什么」——被 reject 的移出池并逐个留痕。
+    #   ⛔ 之所以放在 `seal_gate` **之后**：这样能留下「seal_gate 放过了、过筛拦住了」
+    #      的双层痕迹，才看得出本闸的增量价值（否则混在一起无法归因）。
+    #
+    # ⛔ 过筛是**每天重跑**的，不是黑名单：被拒的票明天若再涨停，会重新算一遍结论。
+    #    连续观察由 `core.daily_screen` 的跨日追踪负责（见 `reject_followup`）。
+    _screen_info: dict[str, Any] = {"enabled": False}
+    if _daily_screen.enabled():
+        try:
+            _screen_res = _daily_screen.screen_pool(
+                zt.get("ztgc") or [], trade_date=str(zt.get("date") or "")[:10], root=ROOT.parent)
+            _by_code = {s["code"]: s for s in _screen_res.get("screened") or []}
+            _keep_after, _excluded_screen = [], []
+            for _it in _scored_kept:
+                _sc = _by_code.get(str(_it.get("code") or ""))
+                if _sc is None:
+                    # ⛔ 涨停池里没有这只票（候选来自其它上游）→ 不裁，标 unknown
+                    _it["daily_screen"] = {"verdict": "unknown", "rejects": [],
+                                           "unknown": ["不在当日涨停池，未过筛"]}
+                    _keep_after.append(_it)
+                elif _sc["verdict"] == "reject":
+                    _it["daily_screen"] = {
+                        "verdict": "reject", "rejects": list(_sc["rejects"]),
+                        "supports": list(_sc["supports"]), "unknown": list(_sc["unknown"]),
+                    }
+                    _it["screen_reject"] = list(_sc["rejects"])
+                    _excluded_screen.append(_it)
+                else:
+                    _it["daily_screen"] = {
+                        "verdict": _sc["verdict"], "rejects": [],
+                        "watch_reasons": list(_sc["watch_reasons"]),
+                        "supports": list(_sc["supports"]), "unknown": list(_sc["unknown"]),
+                    }
+                    # 🚫 2026-11-04：「只能看」≠「能买」。
+                    #    原实现把 watch_only 与 pass 一起放行，于是「一字封死买不到」
+                    #    「首板无带动」「独苗高位无板块支撑」这些票照样能进接力池占名额。
+                    #    映射到既有 `observe_only` 身份（`two_pool` 单一源）：
+                    #      · `pool_admit` 第 498 行 `not observation_only(r)` → 落观察池
+                    #      · ⛔ 不设这个字段，独苗 4 板（line_rank 0 + boards≥2）会直接进 relay
+                    #      · ⛔ 同时不伪造 `watch_reason`：原因已由 `watch_reasons` 保存
+                    if _sc["verdict"] == "watch_only":
+                        _it["participation_eligibility"] = "observe_only"
+                        _it["watch_only"] = True
+                        _it["buyable"] = False
+                        _it["daily_screen_watch_reasons"] = list(_sc["watch_reasons"])
+                    _keep_after.append(_it)
+            _scored_kept = _keep_after
+            _screen_info = {
+                "enabled": True,
+                "zt_count": _screen_res.get("zt_count"),
+                "counts": _screen_res.get("counts"),
+                "excluded": [{"code": _x.get("code"), "name": _x.get("name"),
+                              "rejects": _x.get("screen_reject")} for _x in _excluded_screen],
+            }
+            # 📝 落盘逐票结论（2026-11-04 补）：此前只算不存 → 前端「今日决策」的
+            #    漏斗永远读不到当日数据，只能显示手工产物。
+            #    ⛔ 写失败不得打断选股（与上面同一条降级原则）。
+            try:
+                _screen_info["path"] = str(_daily_screen.persist(ROOT.parent, _screen_res))
+            except Exception as _pe:
+                _screen_info["persist_error"] = str(_pe)
+        except Exception as _e:            # ⛔ 过筛失败不得打断选股（诚实降级）
+            _screen_info = {"enabled": True, "error": str(_e)}
+    # ⛔ 2026-11-04 修：`diagnostics` 到这里还没创建（它在下面 `select_relay_watch`
+    #    的返回值里才出现）→ 这里只能暂存，落 diagnostics 的动作挪到 2071 行之后。
+    #    原写法 `diagnostics["daily_screen"] = ...` 直接 UnboundLocalError，eod 整轮崩。
     scored = _scored_kept
     n_excluded_turnover = len(_excluded_turnover)
+    if _seal_exempt_rows:
+        _kind_lbl = {"strong": "强封", "thick_seal": "厚封单",
+                     "theme_hot": "热题材", "leader": "高度层"}
+        _kinds: dict[str, int] = {}
+        for _r in _seal_exempt_rows:
+            _k = str((_r.get("seal_gate") or {}).get("source") or "?")
+            _kinds[_k] = _kinds.get(_k, 0) + 1
+        _ktxt = "/".join(f"{_kind_lbl.get(k, k)}{v}只" for k, v in
+                         sorted(_kinds.items(), key=lambda x: -x[1]))
+        print(f"[EOD] ⚡ 封板强度放行：{len(_seal_exempt_rows)} 只低成交额票进池"
+              f"（{_ktxt}）"
+              f" → {'、'.join(str(_r.get('name') or '') for _r in _seal_exempt_rows[:8])}")
     if _leader_exempt_rows:
         print(f"[EOD] 👑 龙头门槛豁免：{len(_leader_exempt_rows)} 只高度层票按 "
               f"{MIN_TURNOVER_YI_LEADER:g} 亿放行（全市场最高 {_market_max_boards} 板）"
@@ -1725,10 +2092,52 @@ def run_eod(
         }
         print(f"[EOD] 指数风格层降级: {_e}")
 
-    # P2（2026-10-18）：新方向首板独立观察槽——用外部容器接收，⛔ 不占 relay/watch 名额。
+    from core import two_pool
+    if two_pool.enabled():
+        # 复用既有同梯次×封板条件接口；历史股性不冒充条件晋级预测。
+        from scripts import board_track
+        _events = board_track.build_events([d for d in board_track.trade_dates() if d <= zt["date"]])
+        for _r in scored:
+            _factor_row = {**_r, "seal": _r.get("seal_amt")}
+            if any(_factor_row.get(k) is None for k in ("fbt", "seal", "hs", "zbc")):
+                _r["conditional_promotion"] = {"quality": "missing", "rate": None,
+                                               "asof": zt["date"], "source": "scripts.board_track.cond_rate"}
+                continue
+            _r["conditional_promotion"] = {
+                **board_track.cond_rate(int(_r.get("boards") or 1),
+                                       board_track.factor_hits(_factor_row)["count"], zt["date"], _events),
+                "asof": zt["date"], "source": "scripts.board_track.cond_rate",
+                "window": "归档历史、事件完成日不晚于asof", "usage": "同地位排序证据，非个股保证概率",
+            }
+
+    # 🔁 昨日在池且今日晋级 → 观察池优先占位（2026-11-04 用户「b 占位」）：
+    #    读**上一交易日**候选（relay+watch）→ `{code: board}`。
+    #    ⛔ 读不到（首日/断档/文件损坏）就传空 dict，退回旧行为，不编造。
+    _prev_pool_boards: dict[str, int] = {}
+    try:
+        _prev_pool_boards = _load_prev_pool_boards(zt["date"], cache_dir)
+    except Exception as _e:  # noqa: BLE001
+        print(f"[EOD] 昨日池读取失败（占位功能跳过）: {_e}")
+
+    # 旧第三槽仅供回退模式。
     new_direction_first_board: list[dict[str, Any]] = []
-    relay, watch, diagnostics, sel_mode = select_relay_watch(scored, env, pulse, ai_env, comparison=comparison, first_board_out=new_direction_first_board)
+    relay, watch, diagnostics, sel_mode = select_relay_watch(
+        scored, env, pulse, ai_env, comparison=comparison,
+        first_board_out=new_direction_first_board,
+        prev_pool_boards=_prev_pool_boards)
+    if _prev_pool_boards:
+        _carry = [r for r in watch if r.get("carryover_promoted")]
+        diagnostics["watch_carryover"] = {
+            "prev_pool_size": len(_prev_pool_boards),
+            "promoted": [{"code": r.get("code"), "name": r.get("name"), "boards": r.get("boards")}
+                         for r in _carry],
+        }
+        if _carry:
+            print("[EOD] 🔁 昨日在池今日晋级·优先占位：" +
+                  "、".join(f"{r.get('name')}({r.get('boards')}板)" for r in _carry))
     diagnostics["historical_relay"] = history_diag
+    # 🧭 全量过筛留痕（2026-11-04）：`_screen_info` 在上游筛票时已算好，此处才拿到 diagnostics。
+    diagnostics["daily_screen"] = _screen_info
 
     # 🚪 源头准入闸（2026-10-21 用户「后排的票不要推到这里面来了」·`core/pool_admit`）：
     #    「我们接力的票必须是龙头票，龙头票才能做接力，趋势票做容量观察用，
@@ -1835,7 +2244,10 @@ def run_eod(
         for _m in (_hw_diag.get("moved") or []):
             print(f"[EOD]    ↓ {_m.get('name')}（缺少：{'/'.join(_m.get('missing') or [])}）")
         if not relay:
-            print("[EOD] 🈳 接力池为空 —— 四条件未同时成立，今日不推（用户纪律「没有就空」）")
+            if _relay_before_hw == 0:
+                print("[EOD] 接力池为空 —— 前置链路已无接力，本闸未移出候选")
+            elif _hw_diag.get("moved"):
+                print("[EOD] 接力池为空 —— 四条件未同时成立，今日不推（用户纪律「没有就空」）")
 
     # 🎯 低位连板龙雷达（2026-10-22 用户「需要做，雷达叠加观察的意思」）：
     #    「大业股份这种票，第一个板或第二个板就必须发现」。首板/2 板常只有 1~3 亿成交额，
@@ -1845,7 +2257,7 @@ def run_eod(
     #      又当成"没进池"重复列一遍（同一条线的后排已经在池外校验里说过一次了）。
     gene_radar: list[dict[str, Any]] = []
     low_pool: list[dict[str, Any]] = []
-    if gene_radar_enabled():
+    if gene_radar_enabled() and not two_pool.enabled():
         try:
             _rs, _rd = _defense_gate.load_zt_series(upto=str(zt.get("date") or ""))
         except Exception as _e:      # 数据缺料 → 位置判据降级为「不裁决」，不硬猜
@@ -1882,6 +2294,69 @@ def run_eod(
                   f"{'、'.join(str(x.get('name') or '') for x in _dirty)}")
         print(f"[EOD] 🐣 低位池（可买·与接力池共享名额）：{len(low_pool)} 只"
               f" → {'、'.join(x.get('name', '') for x in low_pool) or '无'}")
+
+    if two_pool.enabled():
+        # 后置风控只降不升；被拒绝者不得因身份重新进入接力。
+        relay, watch, _two_diag = two_pool.finalize(relay, watch, stage="post_risk")
+        # 一字核心从完整评分池补观察，复用同日完整池龙一判定；不绕入可交易池。
+        _anchors, _ = _attach_sector_ladder(
+            [dict(r) for r in _scored_all if r.get("is_one_word")],
+            zt_rows=zt.get("ztgc") or [], theme_map=_theme_map_all)
+        _used = {str(r.get("code")) for r in relay + watch}
+        _one_word_kinds = {"一字核心", "一字龙头"}
+        for _r in _anchors:
+            _kind = two_pool.watch_kind(_r)
+            # ⛔ 2026-11-04：原来只认 `一字核心`（厚封单）。一字板封单数据缺失时
+            #    `watch_kind` 返回「一字龙头」，这里不跟着收就会**依旧一个都进不来**。
+            if _kind in _one_word_kinds and str(_r.get("code")) not in _used:
+                watch.append(two_pool.mark_watch(_r, _kind))
+                _used.add(str(_r.get("code")))
+        # 🎯 2 板以上「过筛未过」的票补进观察池（2026-11-04 用户）。
+        #    ⛔ 只写 watch、`buyable=False`、分组「过筛未过·只观察」；
+        #      **绝不进 relay**（过筛 reject 已否认它的接力资格）。
+        #    ⛔ 已在池的不重复加（`_used` 去重）。
+        # ⛔ 判据用**全量 − 已进池**的差集，而不是只看过筛 reject：
+        #    2 板以上的票可能在更上游就被挡住（成交额门槛 `_excluded_turnover` 26 只、
+        #    过筛 reject、准入闸后排…）。只盯某一条路径会漏
+        #    （实证 11-04：鲁阳节能/宝明科技/永臻股份 3 只被成交额门槛挡在过筛之前）。
+        _kept_codes = {str(x.get("code") or "") for x in _scored_kept}
+        _mr_candidates = [
+            x for x in _scored_all
+            if str(x.get("code") or "") not in _kept_codes
+            and _to_int(x.get("boards") or x.get("lbc"), 0) >= 2
+            and not str(x.get("code") or "").startswith("688")
+            and "ST" not in str(x.get("name") or "").upper()
+        ]
+        _mr_added: list[str] = []
+        for _r in _mr_candidates:
+            _c = str(_r.get("code") or "")
+            if not _c or _c in _used:
+                continue
+            _row = dict(_r)
+            _row.update(
+                bucket="watch", bucket_label="观察池",
+                participation_eligibility="observe_only",
+                watch_only=True, buyable=False,
+                watch_group="过筛未过·只观察",
+                watch_reason=("没通过接力资格（" + "；".join(
+                    [str(x) for x in (_r.get("screen_reject") or [])]
+                    or ["成交额/题材门槛未过"]) + "）"
+                    "—— 但它已是 " + str(_to_int(_r.get("boards"), 1)) + " 板，位置要看，不参与"),
+            )
+            watch.append(_row)
+            _used.add(_c)
+            _mr_added.append(str(_r.get("name") or _c))
+        if _mr_added:
+            print(f"[EOD] 👀 未进接力但仍入观察（2板以上·只看不买）：{'、'.join(_mr_added)}")
+
+        for _i, _r in enumerate(watch, 1):
+            _r["watch_rank"] = _i
+        diagnostics["two_pool_final"] = _two_diag
+        diagnostics["screen_reject_multi_added"] = _mr_added
+        diagnostics.update(relay_count=len(relay), watch_count=len(watch))
+        offpool_high_ident = []
+        low_pool = []
+        new_direction_first_board = []
 
     # early 回标统计（diagnostics 来自 select_relay_watch 返回值，须在其后写入）
     diagnostics["early_buy_hits"] = early_hits
@@ -2006,6 +2481,25 @@ def run_eod(
             1 for it in relay + watch if it.get("daily_verdict")
         )
     diagnostics["excluded_low_turnover"] = n_excluded_turnover
+    # ⚡ 封板强度豁免留痕（2026-11-03「A 拆掉下限」）：低成交额票**凭哪一条**进池。
+    #    by_source 的键 = seal_gate.admit 的 source：
+    #      strong(强封)/thick_seal(封单/流通≥5%)/theme_hot(同题材≥8家)
+    #    ⛔ 只留痕，不参与任何裁决；缺失=0 表示今天没有低量票靠豁免进池。
+    _seal_kinds: dict[str, int] = {}
+    for _r in _seal_exempt_rows:
+        _sk = str((_r.get("seal_gate") or {}).get("source") or "?")
+        _seal_kinds[_sk] = _seal_kinds.get(_sk, 0) + 1
+    diagnostics["seal_gate_exempt"] = {
+        "enabled": _seal_gate.enabled(),
+        "data_sanity_floor_yi": _seal_gate.DATA_SANITY_MIN_YI,
+        "thick_seal_pct": _seal_gate.THICK_SEAL_EXEMPT_PCT,
+        "strong_floor_yi": _seal_gate.STRONG_FLOOR_YI,
+        "theme_hot_mates": _seal_gate.THEME_HOT_MATES,
+        "count": len(_seal_exempt_rows),
+        "by_source": _seal_kinds,
+        "names": [str(_r.get("name") or "") for _r in _seal_exempt_rows],
+        "codes": [str(_r.get("code") or "") for _r in _seal_exempt_rows],
+    }
     # 👑 高度层门槛豁免留痕（2026-10-27）：0 = 今天没有龙头被门槛挡住（不是出错）
     diagnostics["leader_turnover_exempt"] = {
         "enabled": leader_exempt_enabled(),
@@ -2043,6 +2537,10 @@ def run_eod(
     diagnostics["pulse_ts"] = pulse.get("ts")
     # P0（2026-10-18）：题材映射来源留痕——审计/重跑时可凭 fingerprint 确认用的是哪份映射。
     diagnostics["theme_snapshot"] = dict(_theme_meta)
+    # 🛡️ 2026-11-03：题材基座完整性（覆盖了多少涨停票 / 缺哪些 / 是否陈旧）。
+    #   `ok=False` 时 `line` 是给人看的告警句；⛔ 只留痕，不阻断本次 eod。
+    if _theme_guard:
+        diagnostics["theme_guard"] = dict(_theme_guard)
     # P3（2026-10-18）：复盘推演读取/命中情况（available=False = 昨日没写推演，不是出错）
     diagnostics["review_directions"] = {
         "review_date": review_date,
@@ -2104,11 +2602,23 @@ def run_eod(
         "market_style": market_style,
         "global_narrative": global_narrative,
     }
+    if two_pool.enabled():
+        for _key in ("offpool_high_ident", "gene_radar", "low_pool", "new_direction_first_board", "early_ambush"):
+            payload.pop(_key, None)
+        _final_codes = {str(r.get("code")) for r in relay + watch}
+        _selected_diag = {str(r.get("code")): r for r in diagnostics.get("two_pool_selection", {}).get("excluded", [])}
+        _post_diag = {str(r.get("code")): r for r in diagnostics["two_pool_final"]["excluded"]}
+        diagnostics["two_pool_final"]["all_excluded"] = [
+            {"code": r.get("code"), "name": r.get("name"),
+             "reason": (_post_diag.get(str(r.get("code"))) or _selected_diag.get(str(r.get("code"))) or
+                        {"reason": "既有准入/个股/情绪风控拒绝，且无两类观察资格"})["reason"],
+             "seal_gate": r.get("seal_gate")}
+            for r in _scored_all if str(r.get("code")) not in _final_codes]
     from core.leader_cycle import enrich_payload
     if comparison is None:
         enrich_payload(payload, ROOT.parent)
     else:
-        for rank, row in enumerate(sorted(relay + watch, key=lambda r: comparison["entries"][r["code"]]["key"], reverse=True), 1):
+        for rank, row in enumerate(sorted(relay + watch, key=lambda r: comparison["entries"].get(r["code"], {}).get("key", ()), reverse=True), 1):
             row["status_rank"] = rank
     # 必须在两条龙头证据分支及所有补强之后留痕，不假定板块资金/独立技术已接通。
     # 此层只标注最终池对象，不改变评分、顺序、名额或次日冻结裁决。
@@ -2184,6 +2694,27 @@ def run_eod(
     out_path = out_path or (CACHE_DIR / f"candidates-{zt['date'] or 'latest'}.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 数据源聚合：盘后候选与闸门写独立 eod 分区，不覆盖早盘竞价输入。
+    # eod_candidates/eod_gates 不属于八个业务维度的覆盖分母。
+    #    ⛔ 只搬运已算好的结论（119 字段压到 31），不重算、不改任何闸门判定；
+    #    ⛔ 写盘失败不影响盘后主链（聚合是增强，不是依赖）。
+    try:
+        from core import snapshot as _snap
+        _candidate_section = _snap.build_candidate_section(payload)
+        _candidate_section["candidate_date"] = payload.get("date")
+        _snap.put_section(str(zt["date"] or ""), "eod_candidates", _candidate_section)
+        _gates = {k: ({kk: v.get(kk) for kk in
+                       ("enabled", "before", "after", "dropped", "moved_names",
+                        "dropped_names", "count", "names", "regime") if kk in v}
+                      if isinstance(v, dict) else v)
+                  for k, v in (diagnostics or {}).items()
+                  if k in ("pool_admit", "outpool_check", "thin_seal_top", "dragon_gate",
+                           "high_win_gate", "seal_gate_exempt", "leader_turnover_exempt")}
+        if _gates:
+            _gates["candidate_date"] = payload.get("date")
+            _snap.put_section(str(zt["date"] or ""), "eod_gates", _gates)
+    except Exception as _se:                       # noqa: BLE001
+        print(f"[EOD] 快照聚合跳过：{_se}")
     return payload
 
 

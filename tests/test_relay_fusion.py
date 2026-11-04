@@ -235,3 +235,56 @@ def test_card_one_item_per_line(wired):
     seg = body.split("🎯 后排可参与")[1].split("🔒")[0]
     lines = [l for l in seg.split("\n") if "矩子科技" in l or "超声电子" in l]
     assert len(lines) == 2, "两只后排票应在两行"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 2026-11-03 传媒实证：选股宝题材名 → 东财 BK 的兜底 + 「没解析出板块」不许当「没有」
+#   病灶：`_official_tag('短剧/互动影游')` 返回空串（sector_official 无此映射），
+#   而 `backseat_unknown` 原来写成 `bool(_bk) and snap is None` → 无 bk 时为 False
+#   → 卡面渲染「该方向已无未封板票」。当天海看股份(301262) +15.28% 正在同一条线上。
+#   修：① 用 payload 自带 official.boards[0].bk 兜底（短剧 → 传媒 BK0486）
+#       ② backseat_unknown = snap is None（拿不到快照就算「不知道」）
+# ═══════════════════════════════════════════════════════════════════════════
+def _media_latest():
+    return {
+        "top5": [{
+            "name": "短剧/互动影游", "zt_count": 6,
+            "official": {"boards": [{"bk": "BK0486", "name": "传媒", "coverage": 0.8}]},
+            "zt_stocks": [
+                {"name": "浙文影业", "code": "601599.SS", "pct": 10.09},
+                {"name": "大晟文化", "code": "600892.SS", "pct": 10.07},
+            ],
+        }],
+        "limit_up_stocks": [],
+        "leaders": [],
+    }
+
+
+def test_theme_name_resolves_bk_via_official(monkeypatch):
+    """选股宝题材名没有 official_tag 时，用 payload 的 official.boards 兜底。"""
+    monkeypatch.setattr(ss, "_official_tag", lambda _n: "")
+    monkeypatch.setattr(ss, "_relay_sector_of", lambda _s, _d: "短剧/互动影游")
+    monkeypatch.setattr(ss, "_board_snapshot", lambda _bk: None)
+    r = ss._relay_hint([{"code": "601599", "name": "浙文影业", "pct": 10.09}], _media_latest())
+    assert r["backseat_bk"] == "BK0486"
+    assert r["backseat_bk_src"] == "theme_official"
+
+
+def test_no_bk_means_unknown_not_empty(monkeypatch):
+    """⛔ 板块码解析不出来 = 不知道，**不是**「没有未封板票」。"""
+    monkeypatch.setattr(ss, "_official_tag", lambda _n: "")
+    monkeypatch.setattr(ss, "_relay_sector_of", lambda _s, _d: "短剧/互动影游")
+    monkeypatch.setattr(ss, "_board_snapshot", lambda _bk: None)
+    d = _media_latest()
+    d["top5"][0].pop("official")          # 连兜底都没有
+    r = ss._relay_hint([{"code": "601599", "name": "浙文影业", "pct": 10.09}], d)
+    assert r["backseat_bk"] == ""
+    assert r["backseat_unknown"] is True
+
+
+def test_snapshot_fail_is_unknown(monkeypatch):
+    monkeypatch.setattr(ss, "_official_tag", lambda _n: "")
+    monkeypatch.setattr(ss, "_relay_sector_of", lambda _s, _d: "短剧/互动影游")
+    monkeypatch.setattr(ss, "_board_snapshot", lambda _bk: None)
+    r = ss._relay_hint([{"code": "601599", "name": "浙文影业", "pct": 10.09}], _media_latest())
+    assert r["backseat_unknown"] is True

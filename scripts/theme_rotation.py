@@ -20,7 +20,7 @@ import os
 import sys
 import urllib.request
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
 CACHE = ROOT / "cache"
@@ -54,6 +54,26 @@ except ImportError:  # pragma: no cover - 极端环境兜底（脚本从任意 c
         def iso_bj(_dt=None) -> str:  # type: ignore[misc]
             return (_dt or datetime.now()).astimezone().isoformat(timespec="seconds")
 
+# 题材周期相位判定器（2026-11-03）。防御性导入：模块缺失 → phase_v2 恒 None，
+# ⛔ 绝不因相位模块不可用而中断轮动主链。
+try:
+    from core import theme_phase as _tp
+except ImportError:
+    sys.path.insert(0, str(ROOT / "wealth_code"))
+    try:
+        from core import theme_phase as _tp
+    except Exception:  # pragma: no cover
+        _tp = None
+
+# 题材基座（选股宝 plates 原值）。2026-11-03 用户拍板「先按选股宝走」：
+# 家数 = **当日归属到该题材的票 ∩ 当日涨停池**，⛔ 不是「该题材的历史成员今天有几只涨停」。
+# 分类与交集算法只从公共基座导入，不在消费方复制兜底算法。
+from common.theme_base import (
+    is_attr_plate as _is_attr_plate,
+    snapshot_theme_members,
+    count_member_limitups,
+)
+
 TRADING_LOOKBACK = 5     # 5 日窗口：最近 5 个**交易日**文件（2026-08-16 由日历日回看 6 天改交易日计数）
 BOOM_ZT = 3                # 爆发阈值：题材当日涨停数 >= 3 视为 boom
 REENTRY_GAP_MIN_DAYS = 2   # 回流确认：两次爆发间隔≥2个冷却交易日（间隔≥3交易日）才认回流，过滤电风扇
@@ -63,6 +83,15 @@ COOL_DAYS_FOR_REENTRY = 2  # 退潮满 2 天后列为回流候选
 COOL_STALE_DAYS = 4         # 2026-08-27 B档：re-entry 悬挂超时——冷却满4天且资金未现回流 → 移出回流候选
 SURFACE_CONFIDENCE = 0.25   # 置信度阈值（2026-08-18 放宽 0.4→0.25 以沉淀更多概念；re-entry-candidate 不受此限）
 MAX_CANDIDATES = 12         # 候选沉淀上限（2026-09-07 用户「板块数量放大至少10个」→ 原8改12，保底≥10有冗余）
+
+# ── 题材周期相位（2026-11-03 落地·用户在调研后拍板「和题材回流一起做」）──
+# 病根：本文件的 `phase` 只有一个值 re-entry-candidate，回答的是**跨周期回流**
+# （旧题材冷却后复活）；它回答不了「**这波主线走到第几天了**」。
+# 实证：传媒 11-02 是 27 家、11-03 是 9 家，而 BOOM_ZT=3 让两天都是 boom
+# → 高潮与首日启动在旧口径里长得一模一样，但操作完全相反。
+# 故加算 `phase_v2`（独立字段，⛔ 不覆盖旧 phase，避免打断既有消费方与测试）。
+PHASE_LOOKBACK = 10         # 家数序列窗口（交易日）。旧 zt_series 只有 5 天 → 算不出「第几天」
+ENABLE_THEME_PHASE = os.environ.get("ENABLE_THEME_PHASE", "1") != "0"
 
 # —— 主板倾斜铁律（对齐 shared_rules：科创板688无权限不推 / 北交所8·4·920不推 / 主板优先）——
 EXCLUDE_PREFIX = ("688", "8", "4", "920")  # 直接剔除：科创板 + 北交所
@@ -91,10 +120,10 @@ def _load(path):
 
 # 资金流向榜噪声过滤词表统一从 scripts/flow_noise.py 引入（单一权威来源，禁止在此维护副本）
 try:
-    from flow_noise import SECTOR_FLOW_NOISE, is_flow_noise
+    from flow_noise import is_flow_noise
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from flow_noise import SECTOR_FLOW_NOISE, is_flow_noise
+    from flow_noise import is_flow_noise
 
 
 def _is_flow_noise(nm):
@@ -216,6 +245,301 @@ def _zt_delta(zt_series):
     if len(vals) < 2:
         return 0
     return vals[-1] - vals[-2]
+
+
+_SNAP_CACHE: dict = {"sig": None, "res": None}
+SNAPSHOT_DIR = CACHE / "theme_snapshot"
+SNAPSHOT_MAX_DAYS = 20       # 往回调多少个题材冻结快照（现存 12 天，20 有冗余）
+PHASE_MIN_THEME_CODES = 5    # 该题材在快照里少于这个票数 → 家数会被低估，不判相位
+
+_TOP5_CODES_CACHE: dict = {"sig": None, "res": None}
+TOP5_DIR = CACHE / "top5_history"
+TOP5_CODE_DAYS = 30          # 往回调多少个 top5 快照来聚合成份股
+PHASE_MIN_CODES = 5          # 成分股少于这个数 → 家数会系统性低估，不判相位
+
+
+def _snapshot_plates_by_date():
+    """扫描 `cache/theme_snapshot/`，返回 `{date: {选股宝基座名: set(code)}}`。
+
+    这是**相位家数的唯一主口径**（2026-11-03 用户拍板「先按选股宝走」）。
+
+    为什么不用 `top5_history` 的跨日并集（上一版做法）：
+      · 它会把「历史上某天挂过这个题材名」的票算成「今天在炒这条线」——
+        11-02「大消费 19 家」的名单里有阳光照明（照明）、松炀资源（造纸）、
+        大千生态（园林），凭空造出 4 家。
+      · 「人形机器人」在 11-02 快照里根本没有这个 key（只有「机器人」），
+        子串匹配硬把它并过去，算出一条**当天不存在的线**。
+    而快照 `mapping` 覆盖 125/125 涨停，实测 8/9 个题材与选股宝官方 `zt_count`
+    完全一致（仅短剧 29 vs 27），绝对误差合计 2。
+
+    归属规则 = `theme_of_plates(plates)`（第一个**非属性标签**项）：
+      · 属性标签（业绩增长/ST股/重组…）不是题材，⛔ 不进聚合；
+      · 全部是属性标签 → 该票不算任何题材（⛔ 不编「其他」）。
+    """
+    if not SNAPSHOT_DIR.exists():
+        return {}
+    import os
+    files = sorted(SNAPSHOT_DIR.glob("theme_*.json"))[-SNAPSHOT_MAX_DAYS:]
+    try:
+        sig = tuple(os.path.getmtime(f) for f in files)
+    except OSError:
+        sig = None
+    if _SNAP_CACHE["sig"] == sig and _SNAP_CACHE["res"] is not None:
+        return _SNAP_CACHE["res"]
+    out: dict = {}
+    for f in files:
+        d = _load(f) or {}
+        date = d.get("date") or f.stem.replace("theme_", "")
+        mp = d.get("mapping") or {}
+        if not isinstance(date, str) or not mp:
+            continue
+        out[date] = snapshot_theme_members(mp)
+    _SNAP_CACHE["sig"] = sig
+    _SNAP_CACHE["res"] = out
+    return out
+
+
+def _plates_match(nm, plate_names):
+    """eruption 题材名 → 快照里匹配的选股宝板块名集合。
+
+    规则与 `_match_top5_codes` 同一条：exact 命中**也要继续并子串**
+    （快照里可能同时有「机器人」和「人形机器人」，只取 exact 会漏掉当天真有
+    13 家涨停的那条），短名必须是长名的真子串且 ≥2 字（挡「电子⊂消费电子」）。
+    """
+    out = set()
+    if not nm:
+        return out
+    for k in (plate_names or ()):
+        if not k:
+            continue
+        if k == nm:
+            out.add(k)
+        elif (len(nm) >= 2 and nm in k) or (len(k) >= 2 and k in nm):
+            out.add(k)
+    return out
+
+
+def _top5_codes_by_theme():
+    """扫描 `cache/top5_history/`，聚合 {题材名: set(成分股code)}。
+
+    为什么必须合并这一份：eruption 记录只带**热门爆发题材的少量成分股**（实测
+    「人形机器人」只有 6 只），用它 ∩ 涨停池算家数会系统性低估——11-02 机器人
+    真实涨停 13 家，按 eruption 名单只算出 0 家，相位被误判成「退潮」。
+    选股宝 top5 快照里 `codes`/`stocks` 是**当日该题材全部涨停票**，跨日并集后
+    才够覆盖。
+
+    返回 {题材名: set(codes)}；目录不存在返回 {}。
+    """
+    if not TOP5_DIR.exists():
+        return {}
+    import os
+    files = sorted(TOP5_DIR.glob("top5_*.json"))[-TOP5_CODE_DAYS:]
+    try:
+        sig = tuple(os.path.getmtime(f) for f in files)
+    except OSError:
+        sig = None
+    if _TOP5_CODES_CACHE["sig"] == sig and _TOP5_CODES_CACHE["res"] is not None:
+        return _TOP5_CODES_CACHE["res"]
+    out: dict = {}
+    for f in files:
+        d = _load(f) or {}
+        for t in d.get("themes") or []:
+            if not isinstance(t, dict):
+                continue
+            nm = t.get("name")
+            if not isinstance(nm, str) or not nm:
+                continue
+            codes = set()
+            for c in (t.get("codes") or []):
+                codes.add(str(c).split(".")[0])
+            for s in (t.get("stocks") or []):
+                c = str((s or {}).get("code") or "").split(".")[0]
+                if c:
+                    codes.add(c)
+            if codes:
+                out.setdefault(nm, set()).update(codes)
+    _TOP5_CODES_CACHE["sig"] = sig
+    _TOP5_CODES_CACHE["res"] = out
+    return out
+
+
+def _match_top5_codes(nm, top5_codes):
+    """把 eruption 题材名对到 top5 题材名，取并集成分股。
+
+    ⚠️ **exact 命中也要继续并**（2026-11-03 踩到的坑）：top5 里可能同时存在
+    「人形机器人」和「机器人」两个名字，若 exact 命中就 return，会只拿到前者那几只，
+    而后者才是当天真有 13 家涨停的那条线 —— 实测机器人峰值家数因此从 16 掉到 7、
+    今日家数掉到 1，相位被误判成「退潮」。
+
+    匹配规则：短名必须是长名的真子串且 ≥2 字（挡「电子⊂消费电子」这类泛词靠长度闸）。
+    """
+    if not top5_codes:
+        return set()
+    out = set(top5_codes.get(nm) or ())
+    for k, v in top5_codes.items():
+        if not k or k == nm:
+            continue
+        if (len(nm) >= 2 and nm in k) or (len(k) >= 2 and k in nm):
+            out |= v
+    return out
+
+
+def _plates_seq(nm, series_date, *, today_codes=None, ndays: int = PHASE_LOOKBACK):
+    """**主口径**：选股宝基座逐日归属 ∩ 当日涨停池 → 家数序列。
+
+    返回 dict（含 `seq`/`hits`）或 None（判不出）。
+
+    ⛔ 三条硬约束：
+      ① 某天快照缺失 → 那天写 `None`（不知道），**绝不当 0**
+         （当 0 会把「没记账」判成「线没了」，正是我们要避开的假退潮）；
+      ② 历史与今日必须同一口径（都用 snapshot_plates），不混代码并集；
+      ③ 序列只到 `series_date`，⛔ 不吃未来数据。
+    """
+    snaps = _snapshot_plates_by_date()
+    if not snaps:
+        return None
+    all_names = set()
+    for b in snaps.values():
+        all_names |= set(b.keys())
+    hits = _plates_match(nm, all_names)
+    if not hits:
+        return None
+    universe = set()
+    for b in snaps.values():
+        for h in hits:
+            universe |= (b.get(h) or set())
+    if len(universe) < PHASE_MIN_THEME_CODES:
+        return None
+    try:
+        days, by_date = _load_zt_pool_series(ndays)
+    except Exception:                       # pragma: no cover - 防御
+        return None
+    if not days:
+        return None
+
+    def _codes_on(date):
+        b = snaps.get(date)
+        if b is None:
+            return None
+        cs = set()
+        for h in hits:
+            cs |= (b.get(h) or set())
+        return cs
+
+    seq = []
+    for d in days:
+        if d > series_date:
+            break
+        pool = by_date.get(d) or {}
+        cs = _codes_on(d)
+        if not pool or cs is None:
+            seq.append(None)
+        else:
+            seq.append(count_member_limitups(cs, pool.keys()))
+    # 主序列末日：优先涨停池已归档；否则用当日快照 + 当日实时涨停池补一天
+    if series_date not in by_date:
+        cs = _codes_on(series_date)
+        if cs is not None and today_codes and series_date == datetime.now().strftime("%Y-%m-%d"):
+            seq.append(count_member_limitups(cs, today_codes))
+        else:
+            return None
+    return {"seq": seq, "hits": sorted(hits), "universe": len(universe)}
+
+
+def _codes_seq(nm, theme_codes, series_date, *, today_codes=None, ndays: int = PHASE_LOOKBACK):
+    """**兜底口径**：题材历史成员代码并集 ∩ 当日涨停池。
+
+    仅当选股宝快照判不出时使用（快照缺失 / 题材名对不上）。会系统性高估
+    （历史成员今天因别的原因涨停也算进来），故标记 `src=pool_codes` 以示区别。
+    """
+    codes = set(theme_codes or ())
+    codes |= _match_top5_codes(nm, _top5_codes_by_theme())
+    if len(codes) < PHASE_MIN_CODES:
+        return None
+    try:
+        days, by_date = _load_zt_pool_series(ndays)
+    except Exception:                       # pragma: no cover - 防御
+        return None
+    if not days:
+        return None
+    seq = []
+    for d in days:
+        if d > series_date:                 # ⛔ 不许吃未来数据：序列只到主序列末日
+            break
+        pool = by_date.get(d) or {}
+        seq.append(len(codes & set(pool.keys())) if pool else None)
+    if series_date not in by_date:
+        # 该日涨停池尚未归档：仅在「有当日实时涨停池」时补一天，否则不判
+        if today_codes and series_date == datetime.now().strftime("%Y-%m-%d"):
+            seq.append(len(codes & set(today_codes)))
+        else:
+            return None
+    return {"seq": seq, "hits": [], "universe": len(codes)}
+
+
+def _phase_of(nm, theme_codes, series_date, *, today_codes=None, ndays: int = PHASE_LOOKBACK):
+    """算出该题材的周期相位（theme_phase_v1）。
+
+    **口径（2026-11-03 用户拍板「先按选股宝走」）**：
+      家数 = 当日归属到该题材的票 ∩ 当日涨停池，
+      归属取 `theme_snapshot` 里选股宝 `plates` 的**第一个非属性标签项**。
+      ⛔ 不是「该题材的历史成员今天有几只涨停」——那会凭空造线（实证见
+      `_snapshot_plates_by_date` 的 docstring）。
+
+    兜底顺序：snapshot_plates（主）→ pool_codes（兜底，落 `src` 可区分）。
+    两者不混进同一条序列：任一口径判不出就整体降级，⛔ 不按天切换。
+    ⚠️ **例外**：快照机制在工作、但 `series_date` 那天没落盘 → 直接返回 None，**不降级**
+    （否则末端那天的「今日家数」来自另一套源，序列会跳变；相位本就是盘后指标）。
+
+    `series_date` = 主序列（eruption）的末日：
+      · 涨停池已含该日 → 直接判（盘后跑的常态）
+      · 涨停池不含（今日 zt_list 未落盘）→ 用 `today_codes`（盘中实时涨停池）补一天；
+        没有实时池就返回 None，⛔ 不拿昨天冒充今天
+
+    ⚠️ 题材在快照里票数 < `PHASE_MIN_THEME_CODES` → 返回 None：
+       家数会被系统性低估，宁可空着也不给一个「假退潮」。
+    ⚠️ 属性标签（业绩增长/ST股/重组…）不是线，直接返回 None。
+    """
+    if _tp is None or not series_date:
+        return None
+    if _is_attr_plate(nm):
+        return None
+    # ⛔ 快照机制在工作、但**这一天**没落盘 → 今天家数就是「不知道」，不许拿兜底冒充。
+    #   为什么这条必须硬拦（2026-11-03 实跑踩到）：兜底的「今日家数」= 历史成员今天
+    #   有几只涨停，而历史各天是「当日归属」——同一序列两种源，末端必然跳变。
+    #   实测 11-03 无快照时降级，锂电池算出 7 家（主口径下只有 3 家），
+    #   等 eod 落盘后又变回 3 家，相位从「启动」跳成别的，用户会以为线变了。
+    #   代价是盘中看不到相位（相位本就是盘后指标），换来的是**数字可信**。
+    snaps_now = _snapshot_plates_by_date()
+    if snaps_now and series_date not in snaps_now:
+        return None
+    src = "snapshot_plates"
+    got = _plates_seq(nm, series_date, today_codes=today_codes, ndays=ndays)
+    if not got:
+        src = "pool_codes"
+        got = _codes_seq(nm, theme_codes, series_date, today_codes=today_codes, ndays=ndays)
+    if not got:
+        return None
+    seq = got["seq"]
+    try:
+        out = _tp.judge(seq)
+    except Exception:                       # pragma: no cover - 防御
+        return None
+    if isinstance(out, dict):
+        # 可追溯：把判定依据的家数序列一起落盘。⛔ 只读展示，不参与排序/评分。
+        # 2026-11-03 补：此前只存 peak/cur/prev，看不出「凭什么说第 8 天」，
+        # 也无法和 zt_series（选股宝口径）对照 —— 两套家数打架时无从查起。
+        out["series"] = list(seq)
+        out["src"] = src
+        out["count_evidence"] = {
+            "date": series_date,
+            "source_at": None,  # 日频重建未保留逐点源时刻，不以运行时刻冒充
+            "basis": "daily_plates_intersection" if src == "snapshot_plates" else "historical_members_estimate",
+            "scope": "theme_snapshot.mapping ∩ zt_pool" if src == "snapshot_plates" else "historical_codes ∩ zt_pool",
+        }
+        if got.get("hits"):
+            out["plates"] = got["hits"]      # 匹配到的选股宝板块名，便于人工复核
+    return out
 
 
 def _code_board(code):
@@ -1038,6 +1362,10 @@ def build(*, live_day=None, live_themes=None, live_codes=None):
                 "zt_dir": zt_dir,
                 "zt_filled": zt_filled,   # 题材量补全日映射（eruption缺席·zt池成分股补）
                 "zt_valid_days": zt_valid,  # 补全后有效天数（数据质量可追溯）
+                # 🆕 周期相位（2026-11-03）：无 boom 的沉淀类也要有「第几天」，
+                #    否则前端只能显示「观察」两个字的空壳。None = 数据不足。
+                "phase_v2": (_phase_of(nm, theme_codes, today_date, today_codes=today_zt_codes)
+                             if ENABLE_THEME_PHASE else None),
             })
             continue
         t_boom = per_day[boom_idx]
@@ -1181,6 +1509,11 @@ def build(*, live_day=None, live_themes=None, live_codes=None):
             # 🆕 回流确认标记（2026-09-30）：is_reentry 由引擎判定，供 live_signal 实时弹回流确认卡
             "is_reentry": is_reentry,
             "reentry_gap_days": reentry_gap_days,
+            # 🆕 周期相位（2026-11-03·theme_phase_v1）：回答「这波线走到第几天了」，
+            #    与上面 `phase`（跨周期回流候选）是**两个不同问题**，不互相覆盖。
+            #    None = 数据不足，⛔ 前端不得把 None 渲染成任一相位。
+            "phase_v2": (_phase_of(nm, theme_codes, today_date, today_codes=today_zt_codes)
+                         if ENABLE_THEME_PHASE else None),
         })
 
     # 候选排序：re-entry-candidate 优先，其次置信度；总量封顶（沉淀密度 7 个左右）

@@ -61,6 +61,33 @@ def _payload(**over):
     return p
 
 
+def test_eod_merge_preserves_qualification_and_input():
+    import copy
+    payload = _payload(low_pool=[{"code": "601606", "name": "长城军工", "boards": 1,
+                                  "buyable": True, "gene": {}, "dragon_note": "原风险说明"}])
+    before = copy.deepcopy(payload)
+    txt = "\n".join(_texts(bc._post_pool_blocks(payload, eod=True)))
+    assert txt.count("长城军工") == 1
+    assert "原低位池资格·与接力池共用名额·待竞价裁决" in txt
+    assert "只看不买·不占接力名额" in txt
+    assert "原风险说明" in txt and "不可买" in txt
+    assert "今天对上了没" not in txt
+    assert payload == before
+
+
+def test_eod_tags_keep_promotion_and_risk():
+    it = {"boards": 4, "is_sector_dragon": True, "hs": 20,
+          "dim_panel": {"风险": {"label": "高"}}, "trig_gap_pct": 20,
+          "zbc": 3, "cje_yi": 8, "lt_mktcap": 10, "seal_amt": 1}
+    tags = bc._eod_candidate_tags(it)
+    texts = [t for t, _ in tags]
+    assert "4进5" in texts and "断板风险高" in texts
+    assert "开板3次" in texts and "换手20.0%·换手大" in texts
+    assert any("触线" in t for t in texts)
+    assert not any(t.startswith(("成交", "流通", "封单")) for t in texts)
+    assert ("成交8.0亿", "neutral") in bc._candidate_tags(it)
+
+
 def test_empty_payload_renders_nothing():
     """⛔ 数据缺失 → 整块不渲染（不写占位）。"""
     assert bc._post_pool_blocks({}) == []

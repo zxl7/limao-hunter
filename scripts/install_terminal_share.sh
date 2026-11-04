@@ -20,7 +20,7 @@ if [ "${1:-}" = "--uninstall" ]; then
   for l in "${LABELS[@]}"; do
     launchctl bootout "gui/$UID_NUM/$l" 2>/dev/null && echo "已停止 $l"
   done
-  echo "（plist 保留在 $AGENTS_DIR，想彻底删除可自行 rm）"
+  echo "（plist 保留在 ${AGENTS_DIR}，想彻底删除可自行 rm）"
   exit 0
 fi
 
@@ -45,7 +45,7 @@ for l in "${LABELS[@]}"; do
   if launchctl bootstrap "gui/$UID_NUM/$l" 2>/dev/null || launchctl bootstrap "gui/$UID_NUM" "$AGENTS_DIR/$l.plist" 2>/dev/null; then
     echo "✓ 已注册 $l"
   else
-    echo "✗ 注册失败 $l（看上方报错）"
+    echo "✗ 注册失败 ${l}（看上方报错）"
   fi
 done
 
@@ -75,7 +75,7 @@ fi
 
 echo "────────────────────────────────────────────────"
 if [ "$ok_local" = 1 ]; then echo "本机服务 :8000   ✓"; else echo "本机服务 :8000   ✗  见 $SERVE_LOG"; fi
-echo "对外地址        ${url:-（未取到，见 $TUNNEL_LOG）}"
+echo "对外地址        ${url:-（未取到，见 ${TUNNEL_LOG}）}"
 if [ "$ok_pub" = 1 ]; then echo "公网连通        ✓"; else echo "公网连通        ✗  稍等 10s 再跑 scripts/share_url.sh 复查"; fi
 echo "────────────────────────────────────────────────"
 for l in "${LABELS[@]}"; do

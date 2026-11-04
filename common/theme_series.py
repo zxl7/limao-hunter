@@ -191,7 +191,9 @@ def load_today_intraday():
         "max_boards": mb,
         "total": d.get("total_zt"),
         "ts": (d.get("ts") or "").replace("T", " ").replace("+08:00", "")[:16],
-        "sentiment": (d.get("sentiment_detail") or {}).get("score"),
+        "sentiment": ((d.get("sentiment_detail") or {}).get("score")
+                      if (d.get("sentiment_detail") or {}).get("source") == "feedback_matrix" else None),
+        "sentiment_model": (d.get("sentiment_detail") or {}).get("model"),
         "seal_rate": (d.get("sentiment_detail") or {}).get("seal_rate"),
         "broken_count": (d.get("broken") or {}).get("count"),
         # 盘中主题龙头（来自 leaders 数组）

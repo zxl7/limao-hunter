@@ -110,3 +110,33 @@ def test_read_mode_legacy_does_not_query_registry(monkeypatch):
     monkeypatch.setenv("STOCK_REGISTRY_READ_MODE", "legacy")
     assert reader.get_stock("000001") is None
     assert reader.load_zt_series_from_registry(days=20) == ({}, [])
+
+
+@pytest.mark.parametrize("snapshot_seal", [1.86, 0.0, None])
+def test_registry_seal_never_spliced_into_snapshot_cap(monkeypatch, tmp_path, snapshot_seal):
+    monkeypatch.setenv("ENABLE_COHERENT_SEAL_PAIR", "1")
+    monkeypatch.setattr(input_zt, "_registry_read_enabled", lambda _: True)
+    monkeypatch.setattr(reader, "get_daily_facts", lambda *a, **k: [
+        {"code": "601599", "name": "测试", "seal_yi": 0.07}])
+    monkeypatch.setattr(reader, "get_stock", lambda *a, **k: {})
+    raw = {"date": "2026-11-04", "generated_ts": "2026-11-04T17:18:49+08:00",
+           "zt_list": [{"code": "601599", "seal": snapshot_seal, "lt_yi": 48.74}]}
+    row = input_zt._load_registry_xuangubao(raw, tmp_path)["ztgc"][0]
+    assert row["zj"] == snapshot_seal
+    assert row["lt"] == 48.74
+    assert row["seal_fact"]["registry_seal_yi"] == 0.07
+    assert row["seal_fact"]["ingested_at"] == raw["generated_ts"]
+    assert raw["zt_list"][0]["seal"] == snapshot_seal
+
+
+def test_coherent_seal_pair_can_roll_back(monkeypatch, tmp_path):
+    monkeypatch.setenv("ENABLE_COHERENT_SEAL_PAIR", "0")
+    monkeypatch.setattr(input_zt, "_registry_read_enabled", lambda _: True)
+    monkeypatch.setattr(reader, "get_daily_facts", lambda *a, **k: [
+        {"code": "601599", "name": "测试", "seal_yi": 0.07}])
+    monkeypatch.setattr(reader, "get_stock", lambda *a, **k: {})
+    raw = {"date": "2026-11-04", "zt_list": [
+        {"code": "601599", "seal": 1.86, "lt_yi": 48.74}]}
+    row = input_zt._load_registry_xuangubao(raw, tmp_path)["ztgc"][0]
+    assert row["zj"] == 0.07
+    assert "seal_fact" not in row

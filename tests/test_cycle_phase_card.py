@@ -15,6 +15,12 @@ from core import cycle_phase as cp
 from pipelines import build_cards as bc
 
 
+@pytest.fixture(autouse=True)
+def isolated_cycle_state(monkeypatch, tmp_path):
+    """周期块旧测试仍会持久化，只允许写独立临时目录。"""
+    monkeypatch.setattr(cp, "_state_path", lambda root=None: tmp_path / "cycle_phase_state.json")
+
+
 def _text(blocks):
     return "\n".join(b["text"]["content"] for b in blocks if isinstance(b.get("text"), dict))
 
@@ -102,5 +108,5 @@ def test_eod_card_contains_cycle_block(monkeypatch, fb_bottom):
                               "relay": [], "watch": [], "diagnostics": {},
                               "ai_plan": {}, "environment": {"regime": "neutral"}})
     txt = _text(card["elements"])
-    assert "🌊 **行情位置**" in txt
-    assert txt.index("📡") < txt.index("🌊")      # 先「几度」后「走到哪了」
+    assert "行情位置" not in txt
+    assert "大盘环境" not in txt

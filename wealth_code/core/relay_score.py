@@ -54,7 +54,11 @@ def _load_daily_metrics(cache_dir: Path | str | None = None) -> dict[str, Any]:
     # 补充 load_environment 未返回但对接方案需要的字段（只读，不重算口径）
     return {
         "regime": env.get("regime") or "neutral",
-        "sentiment_score": _f(env.get("sentiment_score"), 5.0),
+        "sentiment_score": _sentiment_value(env.get("sentiment_score")),
+        "sentiment_model": env.get("sentiment_model"),
+        "sentiment_quality": env.get("sentiment_quality", "unavailable"),
+        "sentiment_inputs_missing": env.get("sentiment_inputs_missing", []),
+        "sentiment_source_at": env.get("sentiment_source_at"),
         "sentiment_label": str(env.get("sentiment_label") or ""),
         "promote_rate": _f(env.get("promote_rate")),
         "lb_promote_rate": _f(fb.get("lb_promote_rate")),
@@ -267,12 +271,21 @@ def _score_capital_flow(cand: dict[str, Any], cfg: dict[str, Any]) -> float:
     return _clamp(sc)
 
 
-def _env_multiplier(env: dict[str, Any], cfg: dict[str, Any]) -> float:
-    """环境调制：regime 乘数 + 情绪分加罚。"""
+def _sentiment_value(value: Any) -> float | None:
+    """评分仅接受真实的 1~10 有限数；缺失不构造中性或冰点观测。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) and 1 <= value <= 10 else None
+
+
+def _env_multiplier(env: dict[str, Any], cfg: dict[str, Any]) -> tuple[float, float]:
+    """环境调制：保留独立 regime；未知情绪不参与加罚。"""
     m = float(cfg["env_multiplier"].get(env.get("regime") or "neutral", 1.0))
     adj = 0.0
     ea = cfg.get("env_adjust", {})
-    senti = _f(env.get("sentiment_score"))
+    senti = _sentiment_value(env.get("sentiment_score"))
+    if senti is None:
+        return m, adj
     if senti >= _f(ea.get("sentiment_high_min"), 8.0):
         adj += _f(ea.get("sentiment_high_bonus"), 5.0)
     elif senti <= _f(ea.get("sentiment_low_max"), 3.0):
@@ -328,6 +341,10 @@ def score_relay_candidate(
         "band": band,
         "env_mult": round(m, 2),
         "env_adj": round(adj, 2),
+        "sentiment_adjustment_available": _sentiment_value(env.get("sentiment_score")) is not None,
+        "sentiment_model": env.get("sentiment_model"),
+        "sentiment_quality": env.get("sentiment_quality", "unavailable"),
+        "sentiment_inputs_missing": env.get("sentiment_inputs_missing", []),
         "parts": {
             "leadership": round(s_lead, 1),
             "capacity": round(s_cap, 1),
@@ -450,7 +467,7 @@ def rank_relay_candidates(
     # 不改评分权重——遵守「纯标记不塞池」铁律）。
     ma5_map: dict[str, dict[str, Any]] = {}
     try:
-        _ma5 = _load_json(ROOT / "cache" / "ma5_status.json")
+        _ma5 = json.loads((ROOT / "cache" / "ma5_status.json").read_text(encoding="utf-8"))
         for _it in (_ma5 or {}).get("items") or []:
             _c = str(_it.get("code") or "")
             if _c:

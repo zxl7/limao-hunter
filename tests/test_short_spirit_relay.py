@@ -98,7 +98,11 @@ def test_sector_match_exact_and_containment():
 def test_relay_hint_returns_ladder_and_tradable():
     r = ss._relay_hint([_sig()], LATEST)
     assert r is not None and r["sector"] == "锂电池"
-    assert r["zt_count"] == 5, "锂电池今日 5 家封板（简版快照）"
+    # 2026-11-03 口径变更：`zt_count` = 选股宝权威家数（8），不再等于「本卡列出几只」（5）。
+    #   两者分开存：zt_count（题材今日涨停家数）/ ladder_count（本卡列出只数）。
+    assert r["zt_count"] == 8, "选股宝口径：锂电池今日 8 家涨停"
+    assert r["ladder_count"] == 5, "本卡能列出 5 只（简版快照只给了 5 条 limit_up_stocks）"
+    assert r["zt_count_src"] == "xgb"
     # 前排 = 已封板里板数最高（身位最高），不是本轮捕捉的那只首板
     assert r["front"]["name"] == "时代万恒" and r["front"]["boards"] == "4天4板"
     assert r["front_in_signal"] is False, "本轮捕捉 领湃科技(首板) 不是前排；前排是时代万恒(4板)"
@@ -122,11 +126,16 @@ def test_relay_front_in_signal_when_captured_is_front():
 
 
 def test_relay_front_falls_back_to_signal_when_no_sealed(monkeypatch):
-    """板块在 top5 但涨停清单里无同板块记录（ladder 空）→ front 退回本轮信号，zt_count=0。"""
+    """板块在 top5 但涨停清单里无同板块记录（ladder 空）→ front 退回本轮信号。
+
+    2026-11-03：`zt_count` 改用选股宝权威家数（8），`ladder_count` 才是本卡能列的只数（0）。
+    ⛔ 原来两者混用成一个 `len(ladder)` → 数据不全时卡面少报家数（11-03 传媒 8 家报成 4 家）。
+    """
     d = {k: v for k, v in LATEST.items()}
     d["limit_up_stocks"] = [x for x in LATEST["limit_up_stocks"] if x["sector"] != "锂电池"]
     r = ss._relay_hint([_sig()], d)
-    assert r is not None and r["zt_count"] == 0
+    assert r is not None and r["zt_count"] == 8, "家数以选股宝为准，不因我们没收全而缩水"
+    assert r["ladder_count"] == 0, "涨停清单里确实没有同板块记录"
     assert r["front"]["code"] == "300530" and r["front_in_signal"] is True
     card = ss.build_card([_sig()], "afternoon", NOW, relay=r)
     body = _body(card)
@@ -208,7 +217,9 @@ def test_build_card_renders_relay_block():
     r = ss._relay_hint([_sig()], LATEST)
     card = ss.build_card([_sig()], "afternoon", NOW, relay=r)
     body = _body(card)
-    assert "🎯 接力方向｜锂电池" in body and "今日 5 家涨停" in body
+    assert "🎯 接力方向｜锂电池" in body and "今日 8 家涨停" in body
+    # 家数与本卡列出的只数不一致时，须写明「本卡列 N 只」，⛔ 否则数不到 8 只会被读成漏报
+    assert "本卡列 5 只" in body
     # ① 前排 = 谁领涨（带板数与涨幅）；本轮捕捉的是后排 → 明确标出，逻辑无歧义
     assert "👑 前排：时代万恒(600241) 4天4板" in body
     assert "（本轮这只属后排）" in body, "本轮捕捉的领湃非前排 → 卡面须点明"
@@ -241,14 +252,43 @@ def test_build_card_without_relay_has_no_block():
     assert "接力方向" not in body
 
 
-def test_build_card_all_sealed_hint():
-    """全封板 → 输出「等明日竞价看前排溢价」提示，不得空白。"""
+def test_build_card_all_sealed_hint(monkeypatch):
+    """全封板 → 输出「等明日竞价看前排溢价」提示，不得空白。
+
+    ⚠️ 2026-11-03：原来没 mock `_board_snapshot`，这条测试**依赖真实网络**——
+    网络通 → 拿到快照全封 → 「已无」；网络限频/断 → None → 「未取到」→ 随机红。
+    现在显式给一份「成分全封」快照，锁定「已知全封 → 已无」这一分支。
+    """
+    monkeypatch.setattr(ss, "_board_snapshot", lambda _bk: {
+        "300530": {"name": "领湃科技", "pct": 19.98, "vol_ratio": 1.5,
+                   "turnover": 3.0, "amount_yi": 5.0, "float_cap_yi": 30.0},
+    })
+    # 显式锁定板块码解析（测试环境里 sector_official 可能导不进来 → `_official_tag` 为空）
+    monkeypatch.setattr(ss, "_official_tag", lambda _n: "(BK1303)")
     d = {k: v for k, v in LATEST.items()}
     d["leaders"] = [l for l in LATEST["leaders"] if l["code"] == "300530"]
     r = ss._relay_hint([_sig()], d)
+    assert r["backseat_unknown"] is False, "有快照 → 这是「已知」状态，不能标未取到"
     card = ss.build_card([_sig()], "afternoon", NOW, relay=r)
     body = _body(card)
     assert "等明日竞价看前排溢价" in body
+
+
+def test_build_card_snapshot_none_says_unknown_not_empty(monkeypatch):
+    """⛔ 抓不到快照、且 leaders 兜底也没票 → 必须写「未取到」，
+    **不得**写「已无未封板票」（2026-11-03 传媒教训：没看 ≠ 没有）。"""
+    monkeypatch.setattr(ss, "_board_snapshot", lambda _bk: None)
+    monkeypatch.setattr(ss, "_official_tag", lambda _n: "(BK1303)")
+    d = {k: v for k, v in LATEST.items()}
+    d["leaders"] = []                     # 兜底也没票，才能落到「不知道」分支
+    # ⚠️ 必须深一层拷贝 top5：LATEST 是模块级共享 fixture，就地 pop 会污染其他用例
+    d["top5"] = [{kk: vv for kk, vv in t5.items() if kk != "official"}
+                 for t5 in (LATEST.get("top5") or [])]
+    r = ss._relay_hint([_sig()], d)
+    assert r["backseat_unknown"] is True
+    body = _body(ss.build_card([_sig()], "afternoon", NOW, relay=r))
+    assert "未取到" in body
+    assert "已无未封板票" not in body
 
 
 # ── ⑥ 触发口径：只认「强势股涨停」，快速拉升不给方向 ─────────────
@@ -403,3 +443,170 @@ def test_card_omits_code_when_mapper_missing():
     body = _card_body(ss.build_card([_sig()], "afternoon", NOW, relay=r))
     assert "🎯 接力方向｜锂电池**" in body
     assert "BK" not in body, "映射层不可用时不得出现任何 BK 码"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 2026-11-03 传媒实证：题材成分以**选股宝 code** 为准，不靠东财行业名匹配
+#   病灶：limit_up_stocks[].sector 是东财行业名（广告营销/游戏Ⅱ/出版/纺织制造…），
+#        与 top5 的「短剧/互动影游」永远匹配不上 → ladder 只收到 4 只
+#        → 卡面写「今日 4 家涨停」，而选股宝 zt_count=8、用户看到 8 家全一字。
+# ═══════════════════════════════════════════════════════════════════════════
+MEDIA_LATEST = {
+    "top5": [{
+        "name": "短剧/互动影游", "zt_count": 8, "total_stocks": 60,
+        "zt_stocks": [
+            {"name": "华智数媒", "code": "300426.SZ", "pct": 20.03},
+            {"name": "浙文影业", "code": "601599.SS", "pct": 10.09},
+            {"name": "大晟文化", "code": "600892.SS", "pct": 10.07},
+            {"name": "龙版传媒", "code": "605577.SS", "pct": 10.02},
+            {"name": "电魂网络", "code": "603258.SS", "pct": 10.00},
+            {"name": "华阳国际", "code": "002949.SZ", "pct": 9.99},
+        ],
+    }],
+    # ⛔ 关键：sector 全是东财行业名，与「短剧/互动影游」字面无关
+    "limit_up_stocks": [
+        {"name": "华智数媒", "code": "300426.SZ", "sector": "广告营销", "boards": "2天2板", "pct": 20.03},
+        {"name": "浙文影业", "code": "601599.SS", "sector": "纺织制造", "boards": None, "pct": 10.09},
+        {"name": "大晟文化", "code": "600892.SS", "sector": "游戏Ⅱ", "boards": None, "pct": 10.07},
+        {"name": "龙版传媒", "code": "605577.SS", "sector": "出版", "boards": None, "pct": 10.02},
+        {"name": "电魂网络", "code": "603258.SS", "sector": "游戏Ⅱ", "boards": None, "pct": 10.00},
+        {"name": "华阳国际", "code": "002949.SZ", "sector": "工程咨询", "boards": None, "pct": 9.99},
+        {"name": "九阳股份", "code": "002242.SZ", "sector": "小家电", "boards": None, "pct": 10.0},
+    ],
+    "leaders": [],
+    "boards": {},
+}
+
+
+def _media_sig():
+    return {"type": "涨停", "code": "300426", "name": "华智数媒",
+            "sector": "短剧/互动影游", "pct": 20.03}
+
+
+def test_theme_members_returns_codes():
+    m = ss._theme_members(MEDIA_LATEST, "短剧/互动影游")
+    assert m is not None
+    assert m["zt_count"] == 8
+    assert "300426" in m["codes"] and "601599" in m["codes"]
+    assert len(m["codes"]) == 6
+
+
+def test_theme_members_missing_returns_none():
+    assert ss._theme_members(MEDIA_LATEST, "不存在的题材") is None
+
+
+def test_theme_members_no_zt_stocks_still_returns_count():
+    """有题材但没给成分 → codes 空、zt_count 仍在（⛔ 不许因此把家数当 0）。"""
+    d = {"top5": [{"name": "锂电池", "zt_count": 5}], "limit_up_stocks": [], "leaders": []}
+    m = ss._theme_members(d, "锂电池")
+    assert m is not None and m["codes"] == set() and m["zt_count"] == 5
+
+
+def test_relay_collects_all_media_by_code():
+    """11-03 核心回归：东财行业名一个都匹配不上，但 6 只成分靠 code 全部收进 ladder。
+
+    ⚠️ `ladder` 字段按卡面上限只回 `RELAY_HINT_LADDER_MAX` 只（防刷屏），
+    完整收集数看 `ladder_count`。
+    """
+    r = ss._relay_hint([_media_sig()], MEDIA_LATEST)
+    assert r is not None and r["sector"] == "短剧/互动影游"
+    assert r["ladder_count"] == 6, "6 只成分全部收到（旧口径按东财行业名只收到 0~2 只）"
+    assert len(r["ladder"]) == ss.RELAY_HINT_LADDER_MAX, "卡面按上限截断"
+    # 前排 = 2 板那只，其余按涨幅降序
+    assert r["front"]["code"] == "300426"
+    got = {x["code"] for x in r["ladder"]}
+    # ⛔ 小家电九阳不在成分里 → 不得混进来（这正是关键词口径会犯的错）
+    assert "002242" not in got
+    assert r["zt_count"] == 8
+
+
+def test_relay_excludes_non_member_even_if_name_matches():
+    """⛔ 有权威成分后，名称匹配不再扩权：名字像但不在成分里 → 不收。"""
+    d = json.loads(json.dumps(MEDIA_LATEST))
+    d["limit_up_stocks"].append(
+        {"name": "短剧杂毛", "code": "000001.SZ", "sector": "短剧/互动影游",
+         "boards": None, "pct": 9.9})
+    r = ss._relay_hint([_media_sig()], d)
+    assert "000001" not in {x["code"] for x in r["ladder"]}
+
+
+def test_relay_falls_back_to_name_when_no_codes():
+    """成分缺失时退回名称匹配（降级不阻断）——旧行为必须仍可用。"""
+    d = {"top5": [{"name": "锂电池", "zt_count": 2}],
+         "limit_up_stocks": [{"name": "时代万恒", "code": "600241.SS",
+                              "sector": "锂电池", "boards": "4天4板", "pct": 9.98}],
+         "leaders": [], "boards": {}}
+    r = ss._relay_hint([{"type": "涨停", "code": "600241", "name": "时代万恒",
+                         "sector": "锂电池", "pct": 9.98}], d)
+    assert r is not None and r["ladder_count"] == 1
+    assert r["zt_count_src"] == "xgb"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 2026-11-03 属性标签不得当题材 + 东财板块快照降频
+#   实证：11-03 10:32 选股宝 top5 第 4 位就是「业绩增长」3 家——
+#   那是「今日涨停的原因归属」，不是资金炒作的板块，⛔ 不能推成接力方向。
+# ═══════════════════════════════════════════════════════════════════════════
+def test_attr_plate_not_chosen_as_relay_sector():
+    """信号命中「业绩增长」→ 不返回它，继续找下一个真题材。"""
+    d = {
+        "top5": [{"name": "业绩增长", "zt_count": 3}, {"name": "短剧/互动影游", "zt_count": 8}],
+        "limit_up_stocks": [], "leaders": [], "boards": {},
+    }
+    sig = {"type": "涨停", "code": "300426", "name": "某票", "sector": "业绩增长", "pct": 10.0}
+    assert ss._relay_sector_of([sig], d) is None, "⛔ 业绩增长不是题材"
+
+
+def test_attr_plate_skipped_to_real_theme():
+    d = {
+        "top5": [{"name": "业绩增长", "zt_count": 3}, {"name": "短剧/互动影游", "zt_count": 8}],
+        "limit_up_stocks": [], "leaders": [], "boards": {},
+    }
+    sig = {"type": "涨停", "code": "601599", "name": "浙文影业",
+           "sector": "短剧/互动影游", "pct": 10.09}
+    assert ss._relay_sector_of([sig], d) == "短剧/互动影游"
+
+
+def test_board_snapshot_caches_success(monkeypatch):
+    """成功抓取 → 60s 内复用，不再打接口（东财按时刻限频，密集重试会被封）。"""
+    monkeypatch.setattr(ss, "ENABLE_SPIRIT_RELAY_BACKSEAT", True)
+    monkeypatch.setattr(ss, "_BOARD_SNAP_CACHE", {})
+    calls = {"n": 0}
+
+    class _Resp(dict):
+        pass
+
+    def _fake_get(url, t=8, headers=None):
+        calls["n"] += 1
+        return {"data": {"diff": [{"f12": "300426", "f14": "华智数媒", "f3": 20.03,
+                                   "f8": 12.8, "f10": 6.2, "f6": 3e9, "f21": 3.7e9}]}}
+
+    monkeypatch.setattr(ss, "http_get", _fake_get)
+    a = ss._board_snapshot("BK0486")
+    b = ss._board_snapshot("BK0486")
+    assert a and b and calls["n"] == 1, "第二次必须命中缓存"
+    assert a["300426"]["pct"] == 20.03
+
+
+def test_board_snapshot_fail_backoff(monkeypatch):
+    """失败 → 短退避缓存 20s，避免立刻重试加剧封禁。"""
+    monkeypatch.setattr(ss, "ENABLE_SPIRIT_RELAY_BACKSEAT", True)
+    monkeypatch.setattr(ss, "_BOARD_SNAP_CACHE", {})
+    calls = {"n": 0}
+
+    def _fail(url, t=8, headers=None):
+        calls["n"] += 1
+        raise RuntimeError("RemoteDisconnected")
+
+    monkeypatch.setattr(ss, "http_get", _fail)
+    assert ss._board_snapshot("BK9999") is None
+    assert ss._board_snapshot("BK9999") is None
+    assert calls["n"] == 3, "首轮 3 个 host 各 1 次；第二次直接吃退避缓存，0 请求"
+
+
+def test_board_snapshot_none_is_not_empty(monkeypatch):
+    """⛔ 抓不到 = None（不知道），不是 {}（没有）——卡面据此写「未取到」。"""
+    monkeypatch.setattr(ss, "ENABLE_SPIRIT_RELAY_BACKSEAT", True)
+    monkeypatch.setattr(ss, "_BOARD_SNAP_CACHE", {})
+    monkeypatch.setattr(ss, "http_get", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    assert ss._board_snapshot("BK0486") is None

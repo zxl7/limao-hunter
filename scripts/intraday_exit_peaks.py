@@ -15,10 +15,15 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from common.theme_base import live_theme_counts, parse_zt_count  # noqa: E402
+
 CACHE = ROOT / "cache"
 SNAP = CACHE / "pulse_snapshots"
 
@@ -106,23 +111,21 @@ def update_peaks(
                 rec["seal_yi_peak_at"] = at
             out["stocks"][code] = rec
 
-    top5 = latest.get("top5") or []
-    if isinstance(top5, list):
-        for sector in top5:
-            if not isinstance(sector, dict):
-                continue
-            name = str(sector.get("name") or "").strip()
-            zt = _num(sector.get("zt_count"))
-            if not name or zt is None:
-                continue
-            zt_int = max(0, int(zt))
-            rec = dict(out["sectors"].get(name) or {})
-            rec.update({"current_zt_count": zt_int, "current_observed_at": at})
-            peak = _num(rec.get("zt_count_peak"))
-            if peak is None or zt_int > peak:
-                rec["zt_count_peak"] = zt_int
-                rec["zt_count_peak_at"] = at
-            out["sectors"][name] = rec
+    counts = live_theme_counts(latest)
+    # 退出当轮 Top5 的旧值仅是最后一次观察，不能冒充当前值。
+    out["sectors"] = {name: {**rec, "in_current_top5": False}
+                      for name, rec in out["sectors"].items()}
+    for name, fact in counts.items():
+        zt_int = fact["zt_count"]
+        rec = dict(out["sectors"].get(name) or {})
+        rec.update({"current_zt_count": zt_int, "current_observed_at": at,
+                    "in_current_top5": True, "count_evidence": fact})
+        peak = parse_zt_count(rec.get("zt_count_peak"))
+        if zt_int is not None and (peak is None or zt_int > peak):
+            rec["zt_count_peak"] = zt_int
+            rec["zt_count_peak_at"] = at
+            rec["zt_count_peak_evidence"] = dict(fact)
+        out["sectors"][name] = rec
     return out
 
 

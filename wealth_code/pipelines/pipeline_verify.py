@@ -109,6 +109,27 @@ def save_pool_call(trade_date: str, result: dict[str, Any]) -> None:
         print(f"[VERIFY] ⚠️ 池内裁决结论落盘失败（{_e}）——不影响本次判定")
 
 
+def _attach_premium_board(pool_res: dict[str, Any], zt_rows: list[dict[str, Any]],
+                          quotes: dict[str, Any], *, prev_date: str,
+                          trade_date: str) -> None:
+    """把「昨日连板 · 今晨竞价溢价榜」挂到 `pool_res["meta"]`（2026-11-04 用户）。
+
+    ⛔ 纯**读数**：不参与名额裁断、不改 `participate`、不影响任何已冻结结论。
+      因此**无论裁决是新算还是读回已冻结快照，都允许补算**（旧快照没有这个字段）。
+    ⛔ 失败只打印，绝不打断裁决 —— 溢价榜看不到是小事，裁决丢掉是大事。
+    """
+    try:
+        from core import auction_premium as _ap
+        prem = _ap.build_premium_board(zt_rows, quotes,
+                                       prev_date=prev_date, trade_date=trade_date)
+        pool_res.setdefault("meta", {})["premium_board"] = prem
+        print(f"[VERIFY] 📈 昨日连板竞价：{prem['count']} 只 → "
+              f"溢价 {prem['premium_count']} / 折价 {prem['discount_count']}"
+              f"（中位 {prem['median_gap']}%）")
+    except Exception as e:  # noqa: BLE001
+        print(f"[VERIFY] 昨日连板溢价榜跳过：{e}")
+
+
 def _load_full_zt_rows(date10: str) -> list[dict[str, Any]]:
     """读取依据日的完整涨停池，个股事实优先来自统一底库。
 
@@ -345,6 +366,14 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
                 can_enter = False
                 ai_meta["ice_ban"] = True
                 ai_meta["ice_warn"] = "冰点期AI预案命中，但账户硬闸禁止入场"
+    # ⛔ 两池契约（2026-11-03 用户「观察仅作参照，不自动交易」）：
+    #    `participation_eligibility=observe_only` 的票无论 AI/机械怎么判，都不得形成入场。
+    #    ⛔ 无论这个标记来自哪个方向 —— 回暖解冻、机械回退、冻结消费都不解锁。
+    from core.two_pool import observation_only
+    if observation_only(cand):
+        can_enter = False
+        mech_can_enter = False
+        ai_meta.update(ai_view="watch", ai_note="板块观察参照，不参与交易")
     # 隔日收益
     if can_enter and next_close is not None and quote is not None:
         auction_price = float(quote.get("auction_price") or 0.0)
@@ -360,6 +389,7 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
         "trade_date10": _next_day(date10),
         "code": cand.get("code"),
         "name": cand.get("name"),
+        "participation_eligibility": cand.get("participation_eligibility"),
         "bucket": cand.get("bucket"),
         "bucket_label": cand.get("bucket_label"),
         "relay_rank": int(cand.get("relay_rank") or 0),
@@ -545,6 +575,10 @@ def run_verify(
             if pool_res:
                 print(f"[VERIFY] 🎯 池内裁决（当日已冻结快照）→ 买入 "
                       f"{len((pool_res.get('meta') or {}).get('participate') or [])} 只")
+                # 旧快照没有溢价榜 → 补算（纯读数，不动已冻结裁决）
+                if "premium_board" not in (pool_res.get("meta") or {}):
+                    _attach_premium_board(pool_res, _load_full_zt_rows(date10), quotes,
+                                          prev_date=date10, trade_date=trade_date10)
             else:
                 # 09:25 首次抓取时同步冻结昨日完整涨停池；不能只用已筛选的候选池，
                 # 否则红开比例会被选股结果高估。全市场报价不足则闸门自然不放宽。
@@ -566,9 +600,46 @@ def run_verify(
                     candidates, quotes, plan=_load_plan(trade_date10),
                     stance=ai_caliber.ai_stance(trade_date10),
                     market_open=market_open_read,
+                    # 🌊 2026-11-04 独苗高开闸：要**昨日完整涨停池**算「同板块其余票红开率」。
+                    #    ⛔ 不能只给候选池：池内大消费只有 3 只、红开 2 只=67%，
+                    #       全市场同族 10 只只 3 只红开=30% —— 结论完全相反（11-04 东方海洋）。
+                    #    ⛔ 必须用 `theme_open_rows` 而非 `zt_rows`：后者还负责「市场最高板」
+                    #       兜底，传进去会改身位闸参照系，并让测试吃到生产文件（11-04 实测 3 例红）。
+                    theme_open_rows=full_zt_rows,
                     relay_plan=_relay_plan)
+                # 📈 昨日连板 · 今晨竞价溢价榜（2026-11-04 用户）
+                _attach_premium_board(pool_res, full_zt_rows, quotes,
+                                      prev_date=date10, trade_date=trade_date10)
+
                 if persist:
                     save_pool_call(trade_date10, pool_res)
+                    # 🗂 数据源聚合（2026-11-04 用户「源必须聚合，展现可以分散」）：
+                    #    当日竞价终裁 + 报价写进 `cache/snapshot/<date>.json`，
+                    #    下游（卡面/诊断/单票视图）从这里读，不再各自去找原始文件。
+                    #    ⛔ 只搬运已冻结的结论，不重算、不改裁决；失败不影响主链。
+                    #    ⛔ 只在 persist=True 时写（dry-run 绝不落盘，09-21 血案同源铁律）。
+                    #    ⛔ 只在**生产** CACHE_DIR 时写：测试把 CACHE_DIR 指到 tmp_path，
+                    #       若照旧写死 HUNTER_ROOT，就会把 9-14/9-15 这类测试日期灌进
+                    #       生产快照目录（2026-11-04 实测：跑完测试多出两个幽灵日期）。
+                    _prod_cache = Path(__file__).resolve().parent.parent / "cache"
+                    if Path(CACHE_DIR).resolve() == _prod_cache.resolve():
+                        try:
+                            from core import snapshot as _snap
+                            _snap.put_section(trade_date10, "verdict", {
+                                "stance": pool_res.get("stance"),
+                                "quota": pool_res.get("quota"),
+                                "effective_quota": (pool_res.get("meta") or {}).get("effective_quota"),
+                                "participate": (pool_res.get("meta") or {}).get("participate"),
+                                "market_open": (pool_res.get("meta") or {}).get("market_open"),
+                                "slot_policy": (pool_res.get("meta") or {}).get("slot_policy"),
+                                "anchor_lines": (((pool_res.get("meta") or {}).get("defense")
+                                                  or {}).get("anchor") or {}).get("lines"),
+                                "views": pool_res.get("views"),
+                            })
+                            if quotes:
+                                _snap.put_section(trade_date10, "quotes", quotes)
+                        except Exception as _se:      # 聚合失败 ≠ 裁决失败
+                            print(f"[VERIFY] 快照聚合跳过：{_se}")
                     # 🎯 动态仓位方案落盘（2026-10-15）：供尾盘潜伏按 decision_date
                     # 取当天仓位约束、加权出「账户当日收益」。落盘失败不得打断裁决。
                     if _relay_plan is not None:
@@ -585,6 +656,16 @@ def run_verify(
                       + ("" if persist else "（dry-run·不落盘）"))
             ai_decisions = _inject_pool_views(ai_decisions, pool_res, candidates)
         # AI 定调只影响 AI 预案本身；观察/放弃票不能由机械逃生阀改写为成交。
+
+    # 聚合实际使用的竞价输入；日期沿用候选权威日期，不换算或重新取最新文件。
+    if persist and Path(CACHE_DIR).resolve() == _PROD_CACHE_DIR.resolve():
+        try:
+            from core import snapshot as _snap
+            _candidate_section = _snap.build_candidate_section(candidates)
+            _candidate_section["candidate_date"] = date10
+            _snap.put_section(trade_date10, "candidates", _candidate_section)
+        except Exception as exc:
+            print(f"[VERIFY] 候选快照聚合跳过：{exc}")
 
     # ── 卡面「指标打满」要用的静态属性（2026-10-21 用户）──────────────────
     # ⛔ 为什么要有这个白名单：`_build_record` 只从候选行搬它自己认识的字段

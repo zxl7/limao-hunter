@@ -64,6 +64,20 @@ RELAY_MOOD_PRESSURE_ADJUST = -5.0
 # 主线接力/1进2 中位档 tideRelayGate>=0 继续收严）；ice（情绪分≤2）冰点禁买保留清零。
 # ⛔ 可逆开关：True=旧行为(risk_off 一票否决清零) / False=新行为(risk_off 降档收严)
 TIDE_BLOCK_ON_RISK_OFF = False
+
+# 🔓 三档严格判据的 tide 门槛（2026-11-04 用户「放宽」）。
+# ⛔ 原为字面量 `>= 0`，而 `tide_relay_gate` 恒等于
+#    {"risk_on": 4.0, "neutral": 0.0, "risk_off": -4.0}[regime] ——
+#    即 **risk_off 日该值永远是 -4.0，三档从数学上不可能命中任何票**，
+#    与上面 2026-08-18「risk_off 只做档位收严、不一票否决」的原意矛盾。
+#    实证 11-04：全市场最高 3 板（无 6 板 → 高度突破档必然空），
+#    6 只 3 板里紫竹/闽发/高争/大晟/浙文全被这一条卡掉，最终 relay=0。
+# ✅ 放到 -4（与高度突破档同值）：risk_off 仍比 neutral 严一档，
+#    但不再一票否决 —— 个股层还有 raw/leaderFactor/breakRisk 等各自的硬门槛兜底。
+# ⛔ 可逆：ENABLE_TIDE_GATE_RELAX=0 → 逐字回到 `>= 0`。
+TIDE_GATE_STRICT_FLOOR = (-4.0
+                          if (os.environ.get("ENABLE_TIDE_GATE_RELAX") or "1").strip().lower()
+                          not in {"0", "false", "off", "no", ""} else 0.0)
 # ============================================================================
 # 🔒 低板孤军不进接力池（2026-10-12 用户「你推了一个没有板块的独苗！这在接力中
 #    非常不可取」·C 方案）：低板（boards ≤ LONE_LOWBOARD_MAX）且孤军
@@ -73,6 +87,78 @@ TIDE_BLOCK_ON_RISK_OFF = False
 # ⛔ 可逆：ENABLE_LONE_LOWBOARD_EXCLUDE=False → 逐字回到改动前（孤军照进接力池）。
 ENABLE_LONE_LOWBOARD_EXCLUDE = True
 LONE_LOWBOARD_MAX = 2
+
+# 🔢 排序用打分（2026-11-04 用户「平起平坐没问题，但是在排序的时候尽量做好打分这块，
+#    按照打分来排序」）。
+# ⛔ 原排序键里 **板数不在有效位、综合分排最后**，实测 11-03：4 板东方海洋排第 7、
+#    raw 最低（63.7）的圣阳股份排第 1 —— 那不是「按打分」，是「按带动 + 连续天数」。
+# ✅ 现口径：角色 → 是否板块龙一 → **板数高** → **综合分高** → 带动 → 其余。
+#    主序仍是龙头优先（「接力票必须是龙头」铁律不动），打分只在**同角色同板数**内定先后。
+# ⛔ 可逆：ENABLE_SCORE_PRIORITY_SORT=0 → 逐字回到旧键。
+_SCORE_SORT = (os.environ.get("ENABLE_SCORE_PRIORITY_SORT") or "1").strip().lower() not in {
+    "0", "false", "off", "no", ""
+}
+
+# 🔢 观察池容量（2026-11-04 用户「扩容」）。
+# ⛔ 原为硬编码 `watch_sorted[:8]`。实证 11-04：涨停 119 只的日子，
+#    龙版传媒（3 板·短剧 6 家·成交额达标）排 `selection_rank=11`，
+#    被判 `watch_capacity_cutoff` 截掉 —— 而它前一天就在观察池里、当天刚连板。
+#    「观察池」的本义是把值得盯的票留在视野里，池子小到把连续晋级票挤出去，就失去意义。
+# ✅ 默认 12（8 → 12）。`WATCH_POOL_CAP=8` 回退旧容量。
+def _watch_cap() -> int:
+    try:
+        return max(1, int(os.environ.get("WATCH_POOL_CAP") or 12))
+    except (TypeError, ValueError):
+        return 12
+
+
+# 🔓 观察池准入放宽（2026-11-04 用户「观察池现在都是准龙头」）。
+# ⛔ 原判据只认 `two_pool.watch_kind()` 的两类锚点（一字核心 / 容量核心），
+#    把既有的 `高标/题材核心`、`补充观察` 两条路径一并废掉 ——
+#    实证 11-04：龙版传媒（3板·短剧6家·昨日已在池）被判「不符合两类观察资格」删掉。
+# ✅ 放宽为「`watch_kind` 命中 **或** 角色是龙头/准龙头」→ 三档分组逻辑重新生效。
+# ⛔ `ENABLE_WATCH_WIDEN=0` 逐字回到旧行为（只认两类锚点）。
+_WATCH_WIDEN = (os.environ.get("ENABLE_WATCH_WIDEN") or "1").strip().lower() not in {
+    "0", "false", "off", "no", ""
+}
+
+# 🎯 2 板及以上**全部**进观察池（2026-11-04 用户）。
+# 用户原话：「从 2 进 3 开始仔细观察，相当于 2 进 3 以上的票全部都要进观察池…
+#            首板这边的票，有选择性地进观察池。」
+# ⛔ 这条**优先于** `watch_kind` 角色判据：2 板以上的票不再要求「是龙头」才可见。
+#    理由：首板看不出东西（用户原话），2 进 3 才是真正要盯的位置；
+#    把它们挡在池外等于把观察池变成「龙一专榜」，看不到同身位的其他票。
+# ⛔ 只保留**硬性无交易权限/必排**两类例外：688（无权限）、ST。
+# ⛔ 全部进 = **不占 `WATCH_POOL_CAP` 名额**（容量只约束首板那批），
+#    否则涨停多的时候「全部都要进」会被容量悄悄截断（历史 2 板+ 最多 16 只）。
+# ⛔ `ENABLE_WATCH_ALL_MULTI_BOARD=0` 回退（回到只认角色/一类锚点的旧口径）。
+_WATCH_ALL_MULTI = (os.environ.get("ENABLE_WATCH_ALL_MULTI_BOARD") or "1").strip().lower() not in {
+    "0", "false", "off", "no", ""
+}
+
+
+def _watch_hard_excluded(cand: dict[str, Any]) -> bool:
+    """观察池硬性排除：无交易权限 / 必排标的。⛔ 这两类不因任何放宽规则进入。"""
+    code = str(cand.get("code") or "")
+    name = str(cand.get("name") or "").upper()
+    return code.startswith("688") or "ST" in name
+
+
+# 🔁 昨日在池且今日晋级者优先占位（2026-11-04 用户「b 占位」）。
+# 逻辑：昨天我已经在盯它，今天它晋级了 → 该继续盯，而不是被新票挤出视野。
+# ⛔ 只影响观察池**排序先后**，不改入池资格（没资格的票不会因此进来）。
+#    `ENABLE_WATCH_CARRYOVER=0` 回退。
+_WATCH_CARRYOVER = (os.environ.get("ENABLE_WATCH_CARRYOVER") or "1").strip().lower() not in {
+    "0", "false", "off", "no", ""
+}
+# ⛔ 落盘口径说明必须与实际排序键同源（两处调同一函数，禁止各写一份）
+# ⛔ 刻意做成**函数**而非模块级常量：常量在 import 时固化，测试要验证开关切换
+#    就只能 `importlib.reload`，而 reload 会让其他模块已持有的引用失效
+#    （2026-11-04 实测污染 `test_snapshot_guard` 4 例：TypeError）。
+def sort_note() -> str:
+    """排序口径说明（随 `ENABLE_SCORE_PRIORITY_SORT` 变化）。"""
+    return ("板块龙→板数→综合分→带动性→题材广度" if _SCORE_SORT
+            else "板块龙→连板高度→带动性→题材广度→综合分")
 # ============================================================================
 # ----------------------------------------------------------------------------
 # 2026-09-09 用户「冰点也要给我推接力池·买不买由人来决定」：解除 P1-6 ice freeze——
@@ -514,7 +600,7 @@ def _relay_core_ok(row: dict[str, Any]) -> bool:
         and _to_num(row.get("open")) < OPEN_MAX_CORE
         and _to_num(row.get("breakRisk")) < BREAK_RISK_MAX_CORE
         and _to_num(row.get("stepContextScore")) >= 38
-        and _to_num(row.get("tideRelayGate")) >= 0
+        and _to_num(row.get("tideRelayGate")) >= TIDE_GATE_STRICT_FLOOR
     )
 
 
@@ -532,7 +618,7 @@ def _relay_high_mark_ok(row: dict[str, Any]) -> bool:
         and _to_num(row.get("leaderPhilosophyScore")) >= 76
         and _to_num(row.get("breakRisk")) < BREAK_RISK_MAX_HIGH_MARK
         and _to_num(row.get("open")) <= OPEN_MAX_HIGH_MARK
-        and _to_num(row.get("tideRelayGate")) >= 0
+        and _to_num(row.get("tideRelayGate")) >= TIDE_GATE_STRICT_FLOOR
     )
 
 
@@ -554,7 +640,7 @@ def _relay_one_to_two_ok(row: dict[str, Any]) -> bool:
         and _to_num(row.get("capacityFactorScore")) >= 68
         and _to_num(row.get("qualityScore")) >= 80
         and _to_num(row.get("breakRisk")) < 68
-        and _to_num(row.get("tideRelayGate")) >= 0
+        and _to_num(row.get("tideRelayGate")) >= TIDE_GATE_STRICT_FLOOR
     )
 
 
@@ -599,6 +685,21 @@ def _relay_emergency_ok(row: dict[str, Any]) -> bool:
     )
 
 
+def _is_carryover_promoted(m: dict[str, Any], prev_pool_boards: dict[str, int]) -> bool:
+    """该票是否「昨日已在池 ∧ 今日板数更高」。
+
+    ⛔ 只在 `prev_pool_boards` 有数据时调用（调用方已判空）。
+    ⛔ 板数取今日 `lbc`/`boards`，缺失按 0 —— 不猜，不晋级就不标记。
+    ⛔ 不要求「必须是首发入池理由相同」：昨日在池这件事本身已证明它在视野内。
+    """
+    cand = m.get("_cand") if isinstance(m.get("_cand"), dict) else {}
+    code = str(cand.get("code") or m.get("code") or "")
+    if not code or code not in prev_pool_boards:
+        return False
+    today = _to_num(cand.get("boards") or m.get("lbc"))
+    return today > _to_num(prev_pool_boards.get(code))
+
+
 def _relay_fallback(by_raw: list[dict[str, Any]], *, selection_key=None) -> tuple[list[dict[str, Any]], str]:
     """非 strict 场景的收严级联（risk_off 降档 / ice 解冻共用）：relaxed → broad → emergency → none。
     每档取 raw_score 前 3；无候选则自然下探，全无 → ([], "none")（诚实空，不强制塞）。"""
@@ -629,7 +730,7 @@ def _is_lone_lowboard(cand: dict[str, Any]) -> bool:
     return _to_num(cand.get("boards"), 1) <= LONE_LOWBOARD_MAX and lone
 
 
-def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse: dict[str, Any] | None, ai: dict[str, Any] | None, *, comparison=None, first_board_out: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], str]:
+def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse: dict[str, Any] | None, ai: dict[str, Any] | None, *, comparison=None, first_board_out: list[dict[str, Any]] | None = None, prev_pool_boards: dict[str, int] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], str]:
     """
     faithful §4.4 四档接力选择 + 观察池生成。
 
@@ -639,6 +740,11 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
 
     `first_board_out`（P2·2026-10-18）：传入 list 则**额外**填充「新方向首板独立观察槽」，
     ⛔ 不占 relay/watch 任何名额、不改变二者内容；不传 = 旧行为（无第三块）。
+
+    `prev_pool_boards`（2026-11-04 用户「b 占位」）：`{code: 昨日板数}`，
+    来自**上一交易日**的 `candidates-<D>.json` 的 relay+watch。
+    传入时，观察池里「昨日已在池 ∧ 今日板数更高」的票会被提到前面优先占位
+    （⛔ 只调顺序，不改资格）。不传 = 旧行为。
     """
     from copy import deepcopy
     from core import leader_cycle
@@ -646,8 +752,42 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
     entries = (comparison or {}).get("entries") or {}
     active = bool(leader_cycle.ENABLE_PRESELECT_STATUS and entries
                   and all(str(c.get("code")) in entries for c in scored))
+    core_enabled = os.environ.get("ENABLE_CORE_BEFORE_CUTOFF", "1") not in ("0", "false", "False", "")
+    core_active = bool(active and core_enabled)
+
     def selection_key(m):
-        return (*entries[str(m.get("code"))]["key"], _to_num(m.get("_raw")))
+        old_key = entries[str(m.get("code"))]["key"]
+        if core_active:
+            cand = m.get("_cand") or {}
+            confirmed_dragon = (cand.get("is_sector_dragon") is True
+                                and ("dragon_rank" not in cand or
+                                     (not isinstance(cand["dragon_rank"], bool)
+                                      and _to_num(cand["dragon_rank"], 0) == 1)))
+            from core import two_pool
+            rate_key = (two_pool.promotion_rate(cand),) if two_pool.enabled() else ()
+            if _SCORE_SORT:
+                # 🔢 2026-11-04 用户「按照打分来排序」。
+                # ⛔ 原键 = (角色, 龙一, 带动, 连续天数, 历史最高板, 联动, 竞争, -线内排名, 晋级率, raw)
+                #    —— **板数不在有效位、综合分排最后**，实测 11-03：4 板东方海洋排第 7、
+                #    raw 最低（63.7）的圣阳股份排第 1。这不是「按打分排序」，是「按带动+连续天数」。
+                # ✅ 现键 = (角色, 龙一, **板数**, **综合分**, 带动, 连续天数, 历史, 联动, 竞争, -线内排名, 晋级率)
+                #    —— 主序仍是「角色 → 是否板块龙一」（龙头铁律不动），
+                #    之后**先比板数、再比打分**，与 `_leader_preference_key` 的口径对齐。
+                # ⛔⛔ 符号方向：本函数被 `sorted(..., reverse=True)` 使用 → **key 越大越优先**。
+                #     → 板数与分数都必须取**正值**（大在前）。写成 `-boards` 会变成「板数低的优先」、
+                #       `-raw` 会变成「分数低的优先」——2026-11-04 第一版就这么写错了，
+                #       被 `test_unconfirmed_or_conflicting_rank_not_preferred` 当场抓出
+                #       （raw 最低的 000013 反而被顶进接力池）。
+                return (old_key[0], int(confirmed_dragon),
+                        _to_num(cand.get("boards") or m.get("lbc")),
+                        _to_num(m.get("_raw")),
+                        *old_key[1:], *rate_key)
+            return (old_key[0], int(confirmed_dragon), *old_key[1:], *rate_key, _to_num(m.get("_raw")))
+        if _SCORE_SORT:
+            # 非 active 分支同样插入板数与分数（原键末尾只有 raw，板数在 `_leader_preference_key` 里）
+            # ⛔ 同一条符号纪律：reverse=True → 取正值。
+            return (old_key[0], _to_num(m.get("lbc")), _to_num(m.get("_raw")), *old_key[1:])
+        return (*old_key, _to_num(m.get("_raw")))
     raw_key = selection_key if active else lambda m: _to_num(m.get("_raw"))
     # 1) 计算 raw_score + 映射 tactics 字段
     mapped: list[dict[str, Any]] = []
@@ -675,6 +815,21 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
            不能把复盘点赞的跟风票顶到板块龙前面，也不能改 raw_score / 入池资格。
         """
         cand = row.get("_cand") if isinstance(row.get("_cand"), dict) else {}
+        if _SCORE_SORT:
+            # 🔢 2026-11-04：把综合分从**最后一位**提到板数之后。
+            #    原序 = 板块龙 → 复盘倾斜 → 板数 → 带动 → 题材广度 → 龙头因子 → 综合分
+            #    —— 同板数内先比带动、再比题材广度，分数几乎不起作用。
+            #    现序 = 板块龙 → 复盘倾斜 → 板数 → **综合分** → 带动 → 题材广度 → 龙头因子
+            #    ⛔ 板块龙/复盘/板数三位一个字没动（「接力票必须是龙头」铁律）。
+            return (
+                float(bool(cand.get("is_sector_dragon"))),
+                _to_num(cand.get("review_bonus")),
+                _to_num(row.get("lbc")),
+                _to_num(row.get("_raw")),
+                _to_num(cand.get("carry_cnt")),
+                _to_num(cand.get("theme_mates_cnt")),
+                _to_num(row.get("leaderFactorScore")),
+            )
         return (
             float(bool(cand.get("is_sector_dragon"))),
             _to_num(cand.get("review_bonus")),
@@ -739,13 +894,92 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
     # 3) 观察池：排除接力，按 raw_score 排序，容量/高标分组，最多 8
     watch_cands = [m for m in by_raw if str(m.get("code")) not in relay_codes]
     # 梯队必须观察（题材龙一若未进接力，纳入）——保留 spec watch 完整性
+    from core import two_pool
+    if two_pool.enabled():
+        # ⛔ 2026-11-04 时序 bug（实证「龙版传媒连板了却不在观察池」）：
+        #    原实现直接拿 `m["_cand"]` 判 `watch_kind`，但**此时 leader_role 还没注入**
+        #    （注入发生在下面的 `_restore`，从 `entries` 取）→ `core` 判据恒 False
+        #    → `watch_kind` 返回 None → **几乎全部候选被这条过滤误杀**。
+        #    实证 11-04：龙版传媒 3 板·短剧 6 家·昨日就在池里，`_cand.leader_role=None`
+        #    但 `entries[605577].leader_role = "准龙头"`，只因判早了就被丢掉。
+        # ✅ 先按 `entries` 补 leader_role/core_theme 再判，判据才拿得到真实角色。
+        _wc: list[dict[str, Any]] = []
+        for m in watch_cands:
+            cand = dict(m.get("_cand") or {})
+            ev = entries.get(str(m.get("code"))) if active else None
+            if isinstance(ev, dict):
+                if not cand.get("leader_role"):
+                    cand["leader_role"] = ev.get("leader_role")
+                if not cand.get("core_theme"):
+                    cand["core_theme"] = ev.get("core_theme")
+                # `is_sector_dragon` 由更晚的 `_attach_sector_ladder` 判定；
+                # 这里用「角色是龙头/准龙头」等价兜底，避免因字段未生成而误杀。
+                if cand.get("is_sector_dragon") is None and ev.get("leader_role") in {"龙头", "准龙头"}:
+                    cand["leader_role"] = ev.get("leader_role")
+            # ⛔ 2026-11-04 用户「观察池现在都是准龙头」（其实反了：是靠 watch_kind 进来的
+            #    只剩一字/容量两类，普通龙头全被挡）。原判据只认 `watch_kind` 两类锚点，
+            #    把 `高标/题材核心`、`补充观察` 两条既有路径一并废掉。
+            # ✅ 放宽为：`watch_kind` 命中 **或** 角色是龙头/准龙头 → 进观察池候选，
+            #    分组仍由下方既有逻辑决定（≥3板→高标/题材核心，容量→容量核心，其余→补充观察）。
+            #    ⛔ 只放宽「能不能进观察池」，买方资格仍由 `buyable=False` 与后续闸门把守。
+            _role = str(cand.get("leader_role") or "")
+            _b = _to_num(cand.get("boards") or m.get("lbc"))
+            # 🎯 2 板及以上 → **无条件进观察池**（用户「2 进 3 以上的票全部都要进」）。
+            #    只挡 688/ST 这类无交易权限的。⛔ 不要求龙头身份 —— 那正是本轮要放开的。
+            if _WATCH_ALL_MULTI and _b >= 2 and not _watch_hard_excluded(cand):
+                m["_multi_board"] = True
+                _wc.append(m)
+                continue
+            if _watch_hard_excluded(cand):
+                continue
+            _hit = two_pool.watch_kind(cand) or (
+                _WATCH_WIDEN and _role in {"龙头", "准龙头"})
+            if _hit:
+                _wc.append(m)
+        watch_cands = _wc
     watch_sorted = sorted(watch_cands, key=priority_key, reverse=True)
-    watch_mapped = watch_sorted[:8]
+
+    # 🔁 昨日在池且今日晋级 → 优先占位（2026-11-04 用户「b 占位」）。
+    # ⛔ 用 `sorted` 的稳定排序做**二次分层**：先按 carryover 标记降序，再保留原 priority 顺序。
+    #    ⛔ 绝不改变入池资格 —— 没通过上层筛选的票不会因为这条进来。
+    if _WATCH_CARRYOVER and prev_pool_boards:
+        watch_sorted = sorted(
+            watch_sorted,
+            key=lambda m: 1 if _is_carryover_promoted(m, prev_pool_boards) else 0,
+            reverse=True,
+        )
+        for m in watch_sorted:
+            if _is_carryover_promoted(m, prev_pool_boards):
+                m["_carryover_promoted"] = True
+
+    # 🎯 2026-11-04 用户「2 进 3 以上的票全部都要进观察池；首板有选择性地进」：
+    #    **多板票不占容量名额** —— 容量只截断首板那批。
+    #    ⛔ 若统一 `[:cap]` 截断，涨停 100+ 的日子 2 板以上会被首板高分票挤出去，
+    #      「全部都要进」就成了一句空话（历史 2 板+ 中位 11 / 最多 16 > 旧容量 8）。
+    #    ⛔ 多板内部自己排：**板数降序 → 原 priority**（身位优先，同板数仍龙头优先）。
+    if _WATCH_ALL_MULTI:
+        _multi = [m for m in watch_sorted if m.get("_multi_board")]
+        _first = [m for m in watch_sorted if not m.get("_multi_board")]
+        # 稳定二次排序：先按板数降序（板数是这一档的主变量）
+        _multi = sorted(
+            _multi,
+            key=lambda m: _to_num((m.get("_cand") or {}).get("boards") or m.get("lbc")),
+            reverse=True,
+        )
+        watch_mapped = _multi + _first[:_watch_cap()]
+    else:
+        watch_mapped = watch_sorted[:_watch_cap()]
 
     # 4) 还原为原始候选并附 rank/bucket
     def _restore(m: dict[str, Any]) -> dict[str, Any]:
         c = dict(m.get("_cand") or {})
         c["raw_score"] = m.get("_raw")
+        # ⛔ `_carryover_promoted` 标在 `m` 上、不在 `_cand` 里 ——
+        #    不手动带过来，占位标记会在还原时丢掉（页面/诊断都看不到「它为什么排前面」）。
+        #    ⚠️ 落盘字段去掉前导下划线（`_` 是模块内部标记的惯例，对外字段不该带，
+        #       前端 lint 也会把 dangling underscore 判成警告）。
+        if m.get("_carryover_promoted"):
+            c["carryover_promoted"] = True
         c["quant_dims"] = raw_by_code.get(str(c.get("code")), {})
         if active:
             evidence = entries[str(c.get("code"))]
@@ -761,7 +995,8 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
     # 治「首板只能靠 relaxed/broad 兜底、或在 watch 8 位里被题材内票挤掉」
     # （实证 10-16：万丰奥威 watch 排第 9 被容量截断 → 复盘点名、选股消失）。
     # ⛔ 只填外部容器，relay/watch 一位不动、不占名额、不参与买入裁决。
-    if first_board_out is not None and new_direction_first_board_enabled():
+    from core import two_pool
+    if first_board_out is not None and new_direction_first_board_enabled() and not two_pool.enabled():
         _used_codes = {str(x.get("code") or "") for x in (relay + watch)}
         _first_board = select_new_direction_first_board(
             [_restore(m) for m in by_raw], exclude_codes=_used_codes
@@ -776,7 +1011,7 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
     for idx, it in enumerate(relay, start=1):
         it["relay_rank"] = idx
         it["leader_preference_rank"] = idx
-        it["leader_preference_note"] = "板块龙→连板高度→带动性→题材广度→综合分"
+        it["leader_preference_note"] = sort_note()
         it["relay_selection_mode"] = mode
         it["is_broad_fallback"] = mode in ("broad", "emergency")
         it["bucket"] = "relay"
@@ -795,7 +1030,7 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
     for idx, it in enumerate(watch, start=1):
         it["watch_rank"] = idx
         it["leader_preference_rank"] = idx
-        it["leader_preference_note"] = "板块龙→连板高度→带动性→题材广度→综合分"
+        it["leader_preference_note"] = sort_note()
         it["bucket"] = "watch"
         it["bucket_label"] = "观察池"
         style = it.get("style_tag")
@@ -824,6 +1059,12 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
         "relay_feedback": env.get("relay_feedback"),
         "mean_raw_score": round(sum(_to_num(c.get("raw_score")) for c in scored) / max(1, len(scored)), 2),
     }
+    diagnostics["core_before_cutoff"] = {
+        "enabled": core_enabled,
+        "active": core_active,
+        "priority_rule": ("旧key[0]角色→已确认题材龙一→旧key[1:]→raw"
+                          if core_active else "沿用旧排序"),
+    }
     if active:
         old_relay, old_watch, _, old_mode = select_relay_watch(scored, env, pulse, ai)
         old_positions = {c["code"]: (bucket, i) for bucket, rs in (("relay", old_relay), ("watch", old_watch))
@@ -848,4 +1089,27 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
                      for m in mapped]}
         for c in relay + watch:
             c["leader_preference_note"] = "当前角色→带动与连续性→已核实历史地位→竞争→原始分"
+    if two_pool.enabled():
+        relay, watch, pool_diag = two_pool.finalize(relay, watch, stage="select_relay_watch")
+        for i, r in enumerate(relay, 1):
+            r["relay_rank"] = i
+        selected = {str(r.get("code")) for r in relay + watch}
+        pool_diag["excluded"] = [{"code": c.get("code"), "name": c.get("name"),
+                                  "reason": "未通过既有接力资格或不符合两类观察资格"}
+                                 for c in scored if str(c.get("code")) not in selected]
+        diagnostics["two_pool_selection"] = pool_diag
+        diagnostics.update(relay_count=len(relay), watch_count=len(watch))
+    # 仅在资格与名单定稿后补展示理由，避免理由被误当作闸门降级证据。
+    for it in watch:
+        if it.get("watch_reason"):
+            continue
+        group = it.get("watch_group")
+        if group == "高标/题材核心":
+            it["watch_reason"] = "多板持续观察，跟踪连板延续与题材强弱；不参与"
+        elif group == "容量核心":
+            it["watch_reason"] = "容量观察，跟踪板块资金态度；不参与"
+        elif it.get("leader_role") in {"龙头", "准龙头"}:
+            it["watch_reason"] = f"{it['leader_role']}补充观察，跟踪题材地位变化；不参与"
+        else:
+            it["watch_reason"] = "补充观察，跟踪后续表现；不参与"
     return relay, watch, diagnostics, mode

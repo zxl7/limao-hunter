@@ -61,7 +61,10 @@ ENABLED_ENV = "POOL_ADMIT_ENABLED"
 PER_LINE_ENV = "POOL_ADMIT_PER_LINE"
 MIN_MATES_ENV = "POOL_ADMIT_MIN_MATES"
 
-DEFAULT_PER_LINE = 2
+DEFAULT_PER_LINE = 0
+# ↳ 2026-11-04 用户「解除每一个题材保留两只的限制吧，解除掉」→ 默认 0 = 不限。
+#   回退：`POOL_ADMIT_PER_LINE=2`（旧口径：每线只留龙头+次排）。
+#   ⛔ 解除的是「进池只数」，不是「买入资格」——后排仍由 pool_call 的身位闸/龙一闸拦。
 # 涨停池同题材 < 2 家 → 当作「没有成线」，不参与组内淘汰（1 家的"线"没有后排可言）
 DEFAULT_MIN_MATES = 2
 
@@ -79,12 +82,17 @@ def enabled() -> bool:
 
 
 def per_line() -> int:
-    """每条线最多留几只（默认 2 = 「尽量留两只活口」）。≤0 视为 1（不允许「一只都不留」）。"""
+    """每条线最多留几只。`0` = **不限**（2026-11-04 用户「解除每一个题材保留两只的限制」）。
+
+    `POOL_ADMIT_PER_LINE=2` 可逐字回退旧口径（每线留龙头+次排两只）。
+    ⛔ 0 不是「一只都不留」——`admit()` 里 0 走 `unlimited` 分支全留，
+       真正的淘汰仍由后面的龙一闸/身位闸/薄封闸/四条件/名额完成。
+    """
     try:
         n = int(str(os.environ.get(PER_LINE_ENV, DEFAULT_PER_LINE)).strip())
     except (TypeError, ValueError):
         return DEFAULT_PER_LINE
-    return n if n >= 1 else 1
+    return n if n >= 0 else 0
 
 
 def min_mates() -> int:
@@ -176,6 +184,39 @@ def relay_worth(row: dict[str, Any], *, was_relay: bool = False) -> bool:
     if was_relay:
         return True                                   # 四档已判过格，不推翻
     return _num((row or {}).get("boards")) >= RELAY_MIN_BOARDS
+
+
+# ── 首板「无辨识度」闸（2026-11-03 用户转述 NIKA 点评：「首板就不该进来」）──────
+# 症状（11-03 实测）：09:25 竞价卡 11 只里 **7 只是 1 板**，其中 4 只跟风首板
+#   （国金证券 carry=1 / 统一股份 2 / 华瓷股份 0 / 三峡新材 1）与唯一 6 板龙头
+#   青岛食品并排陈列，卡面按综合分排，1 板稿排在 6 板前面。
+# 判据：**首板没有晋级可接，只有它把这条线带起来了才配做 1进2 候选**。
+#   带动家数 = 封板后同题材跟封数（`carry_cnt`，`core.sector_leader` 已在用），
+#   ≥3 说明这条线因它点火；<3 就是单打独斗的杂毛。
+# ⛔ 不动 `relay_worth`（那是「进接力池」的资格）；本闸更靠前，决定**进不进池**。
+# ⛔ 可回滚：`POOL_ADMIT_FIRST_BOARD_MIN_CARRY=0` 恢复旧口径（首板全进观察池）。
+FIRST_BOARD_MIN_CARRY_ENV = "POOL_ADMIT_FIRST_BOARD_MIN_CARRY"
+FIRST_BOARD_MIN_CARRY_DEFAULT = 3
+
+
+def first_board_min_carry() -> int:
+    try:
+        return max(0, int(os.environ.get(FIRST_BOARD_MIN_CARRY_ENV, FIRST_BOARD_MIN_CARRY_DEFAULT)))
+    except (TypeError, ValueError):
+        return FIRST_BOARD_MIN_CARRY_DEFAULT
+
+
+def first_board_worthy(row: dict[str, Any], *, was_relay: bool = False,
+                       min_carry: int | None = None) -> bool:
+    """首板是否够格进池。非首板一律 True（本闸只管 1 板）。"""
+    if was_relay:
+        return True                                   # 四档已判过「1进2」，不推翻
+    if _num((row or {}).get("boards")) >= 2:
+        return True
+    need = first_board_min_carry() if min_carry is None else min_carry
+    if need <= 0:
+        return True                                   # 闸关
+    return _num((row or {}).get("carry_cnt")) >= need
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -347,8 +388,9 @@ def admit(relay: list[dict[str, Any]],
     if not enabled():
         return relay, watch, {"enabled": False, "reason": "POOL_ADMIT_ENABLED=0"}
 
-    cap = per_line_cap if isinstance(per_line_cap, int) and per_line_cap >= 1 else per_line()
+    cap = per_line_cap if isinstance(per_line_cap, int) and per_line_cap >= 0 else per_line()
     floor = (min_mates_floor if isinstance(min_mates_floor, int) else min_mates())
+    unlimited = int(cap) <= 0          # 0 = 不限（2026-11-04 用户解除每线两只限制）
 
     # 原 bucket 归属（relay 优先），用于收敛后还原
     bucket: dict[str, str] = {}
@@ -399,6 +441,15 @@ def admit(relay: list[dict[str, Any]],
             group_diag.append({"theme": th, "kept": len(ranked), "dropped": 0,
                                "mates": mates, "note": "small_line"})
             continue
+        if unlimited:
+            # 2026-11-04 用户解除每线两只限制：整条线全留（不再有「线下后排」这一刀）。
+            keep.extend(ranked)
+            group_diag.append({
+                "theme": th, "mates": mates, "kept": len(ranked), "dropped": 0,
+                "kept_names": [str(r.get("name") or "") for r in ranked],
+                "dropped_names": [], "note": "per_line_unlimited",
+            })
+            continue
         keep.extend(ranked[:cap])
         dropped.extend(ranked[cap:])
         group_diag.append({
@@ -420,12 +471,31 @@ def admit(relay: list[dict[str, Any]],
     #    → **同线第 2 只 = 活口 → 观察池**（`POOL_ADMIT_PER_LINE=2` 的第二席，
     #       用户 17:25「每个板块尽量留两只活口」——留一只活口若恰是后排，整条线就没了入口）
     relay_codes = {str(r.get("code")) for r in relay}          # 原 relay 身份，作资格参考
+
+    # ── 首板「无辨识度」闸（2026-11-03）─────────────────────────────────
+    # ⛔ 位置必须在**重新分桶之前**：否则杂毛首板会先被判成「次排活口」进观察池，
+    #    再想剔就得从桶里捞，容易漏（实测 11-03 观察池 7 只里 4 只是这种）。
+    _fb_dropped: list[dict[str, Any]] = []
+    _kept: list[dict[str, Any]] = []
+    for r in keep:
+        if first_board_worthy(r, was_relay=str(r.get("code")) in relay_codes):
+            _kept.append(r)
+        else:
+            _fb_dropped.append(r)
+    keep = _kept
+    for r in _fb_dropped:
+        r["_pool_admit_dropped"] = True
+        r["_pool_admit_drop_reason"] = f"1板且带动仅 {int(_num(r.get('carry_cnt')))} 家（< {first_board_min_carry()}）"
+
     out_relay: list[dict[str, Any]] = []
     out_watch: list[dict[str, Any]] = []
     for r in keep:
         code = str(r.get("code") or "")
         is_front = line_rank.get(code, 0) == 0
-        if is_front and relay_worth(r, was_relay=code in relay_codes):
+        from core import two_pool
+        if (is_front and relay_worth(r, was_relay=code in relay_codes)
+                and (not two_pool.enabled() or code in relay_codes)
+                and not two_pool.observation_only(r)):
             out_relay.append(r)                 # 前排龙头 → 接力
         else:
             out_watch.append(r)                 # 次排活口 → 容量观察
@@ -467,8 +537,10 @@ def admit(relay: list[dict[str, Any]],
         "min_mates": floor,
         "before": {"relay": len(relay), "watch": len(watch)},
         "after": {"relay": len(new_relay), "watch": len(new_watch)},
-        "dropped": len(dropped),
+        "dropped": len(dropped) + len(_fb_dropped),
         "dropped_names": [str(r.get("name") or "") for r in dropped],
+        "first_board_dropped": [str(r.get("name") or "") for r in _fb_dropped],
+        "first_board_min_carry": first_board_min_carry(),
         "groups": group_diag,
         "theme_missing": len(theme_missing),
     }

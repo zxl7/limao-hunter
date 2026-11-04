@@ -76,6 +76,18 @@ def _build(monkeypatch, plan: dict | None, ai_plan: dict | None = None):
     """构造盘后卡：动态仓位方案用注入值（不依赖真实账本回撤），AI 预案用显式注入。"""
     if plan is not None:
         monkeypatch.setattr(rp, "build_plan_from_files", lambda *a, **k: plan)
+    monkeypatch.setattr(bc, "_cycle_phase_block", lambda **kw: [])
+    # ⛔ 2026-11-04 隔离修复：`build_eod_card` 会调 `_load_zt_snapshot()` 读**当天真实**
+    #    涨停池来渲染连板天梯。不 patch 的话，测试结果随当日缓存漂移
+    #    （实证：11-04 归档变成 119 只/最高 3 板后，本用例凭空失败，
+    #     而卡面逻辑一个字没改 —— 属于环境依赖，不是回归）。
+    #    ⛔ 而且原断言里的 `"4板"` 其实是**靠天梯里恰好出现「4板」**才通过的
+    #    （relay 行渲染的是 `4进5`），属巧合依赖 —— 天梯一旦不出现就假失败。
+    #    ✅ 这里给一份**自洽的模拟快照**：天梯 4 板就是被测的那只票，断言不再靠巧合。
+    monkeypatch.setattr(bc, "_load_zt_snapshot", lambda *a, **k: {
+        "date": "2026-10-14", "zt_count": 36, "max_boards": 4,
+        "ladder": {"4": ["新经典"], "2": ["超声电子"]},
+    })
     return bc.build_eod_card({
         "date": "2026-10-14", "regime": "neutral",
         "relay": [dict(_RELAY)], "watch": [dict(_WATCH)],
@@ -89,8 +101,8 @@ def test_eod_card_shows_dynamic_position_two_numbers(monkeypatch):
                          theme_info={"day_count": 31, "theme_count": 164})
     card = _build(monkeypatch, plan)
     hits = [t for t in _texts(card) if "明日接力仓位建议" in t]
-    assert hits, "盘后卡必须包含动态仓位块"
-    body = hits[0]
+    assert not hits, "盘后隐藏明日仓位"
+    body = bc._relay_position_block(plan, day_word="明天")[0]["text"]["content"]
     # 弱档基数：1 只 / 每只 ≤30% / 总仓 ≤30%；回撤 -19.64% → ×0.2751 → 实际 8.2%
     assert "行情好的话能给到：最多 1 只 · 每只不超过 30% · 总仓位不超过 30%" in body
     assert "实际压到：明天最多同时持有 1 只" in body
@@ -107,10 +119,11 @@ def test_eod_card_position_block_uncompressed_when_no_drawdown(monkeypatch):
                          theme_info={"day_count": 31, "theme_count": 164})
     card = _build(monkeypatch, plan)
     hits = [t for t in _texts(card) if "明日接力仓位建议" in t]
-    assert hits
-    assert "明天最多同时持有 3 只 · 每只不超过 50% · 总仓位不超过 100%" in hits[0]
-    assert "实际压到" not in hits[0]
-    assert "行情好的话能给到" not in hits[0]
+    assert not hits
+    body = bc._relay_position_block(plan, day_word="明天")[0]["text"]["content"]
+    assert "明天最多同时持有 3 只 · 每只不超过 50% · 总仓位不超过 100%" in body
+    assert "实际压到" not in body
+    assert "行情好的话能给到" not in body
 
 
 def test_eod_card_position_block_uses_relay_single_source(monkeypatch):
@@ -126,22 +139,23 @@ def test_eod_card_position_block_uses_relay_single_source(monkeypatch):
     bc.build_eod_card({"date": "2026-10-14", "regime": "neutral",
                        "relay": [dict(_RELAY)], "watch": [], "diagnostics": {},
                        "ai_plan": {}})
-    assert seen.get("called"), "盘后卡必须走 core.relay_position 取方案（唯一判据源）"
+    assert not seen.get("called"), "隐藏展示后不应额外读取账户计算明日仓位"
 
 
 # ── ② AI 买入预案块：只出预案档，⛔ 不拍板「买哪只」 ────────────────────
 def test_eod_card_shows_ai_plan_with_bias_only(monkeypatch):
     card = _build(monkeypatch, None, ai_plan=_AI_PLAN)
     hits = [t for t in _texts(card) if "AI 明日买入预案" in t]
-    assert hits, "盘后卡必须包含 AI 预案块"
+    assert not hits, "盘后删除独立预案块，重点标记回到池内"
     joined = "\n".join(_texts(card))
-    assert "定调：可小仓·回撤过线压着做" in joined
-    assert "方向：AI 短剧 / 传媒出版" in joined
-    assert "重点看（1 只·竞价不超 5% 才买）" in joined
+    assert "定调：" not in joined
+    assert "AI 短剧 / 传媒出版" not in joined
+    assert "明天重点看·待竞价核验" in joined
     assert "新经典(603096)" in joined and "4板" in joined
     # 风险段由 `_narr_render` 转成 turquoise 标签并收尾（段名带冒号被剥掉）
     assert "turquoise'>⚠️ 风险</text_tag>：封单很薄、换手 22%" in joined
-    assert "一般候选 1 只（前排都不达标才轮到）：超声电子" in joined
+    assert "超声电子" in joined and "仅作板块参照·不可买" in joined
+    assert "一般预案 1 只" not in joined
     # ⛔ 盘后不拍板：不得出现「买入」结论行
     assert ">买入</text_tag>" not in joined
     assert "今日买入" not in joined
@@ -161,12 +175,25 @@ def test_eod_card_plan_block_separates_avoid_from_normal(monkeypatch):
                                "reason": "封单只剩 4 万，等于没封。\n⚠️风险：同方向只有它一家。"}
     card = _build(monkeypatch, None, ai_plan=plan)
     joined = "\n".join(_texts(card))
-    assert "回避 1 只：洗霸股份" in joined
-    # 回避票不得混进「一般候选」名单
-    _normal_lines = [ln for ln in joined.split("\n") if "一般候选" in ln]
-    assert _normal_lines and all("洗霸股份" not in ln for ln in _normal_lines)
+    assert "洗霸股份" not in joined and "603200" not in joined
+    assert "一般预案" not in joined
     fails, _ = ccr.scan(joined)
     assert fails == [], f"白话门禁命中机器黑话: {fails}"
+
+
+def test_eod_plan_checks_core_without_promoting_observation():
+    import copy
+    raw = copy.deepcopy(_AI_PLAN)
+    rows = {"603096": {**_RELAY, "is_sector_dragon": True, "dragon_rank": 2},
+            "000823": {**_WATCH, "is_sector_dragon": True, "dragon_rank": 1}}
+    before = copy.deepcopy((raw, rows))
+    txt = "\n".join(_texts({"elements": bc._ai_plan_eod_block(raw, rows, relay_codes=set())}))
+    assert "未确认题材核心" in txt and "已标注题材龙一" in txt
+    assert "保留原资格·不自动转可买" in txt
+    assert "仅预案，待竞价核验" in txt
+    assert "不超 5% 才买" not in txt
+    assert "同方向今天整体在跌" in txt
+    assert (raw, rows) == before
 
 
 def test_eod_card_plan_block_absent_when_no_view(monkeypatch):
@@ -184,6 +211,83 @@ def test_attach_eod_ai_plan_injects_next_day(monkeypatch, tmp_path):
     payload2 = {"date": "2026-10-14", "ai_plan": {}}
     bc.attach_eod_ai_plan(payload2)
     assert payload2["ai_plan"] == {}
+
+
+def test_eod_render_is_read_only_without_metrics_or_lifecycle(monkeypatch):
+    import copy
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("纯渲染不得调用统计、周期、生命周期或补算")
+
+    for name in ("_load_metrics", "_nav_drawdown_block", "_cycle_phase_block",
+                 "_board_track_block", "_hist_gene_line", "_post_pool_blocks",
+                 "_ai_plan_eod_block"):
+        monkeypatch.setattr(bc, name, forbidden)
+    monkeypatch.setattr(bc._pquiz, "annotate", forbidden)
+    monkeypatch.setattr(bc._cycle_phase, "track_state", forbidden)
+    monkeypatch.setattr(bc, "_load_zt_snapshot", lambda: {"ladder": {"2": ["测试甲"]}})
+    payload = {"date": "2026-11-03", "relay": [dict(_RELAY)],
+               "watch": [dict(_WATCH)], "ai_plan": {}}
+    before = copy.deepcopy(payload)
+    joined = "\n".join(_texts(bc.build_eod_card(payload)))
+    assert payload == before
+    import card_lint
+    ok, errors, warnings = card_lint.lint_card(bc.build_eod_card(payload))
+    assert ok and not errors
+    for term in ("历史基因", "已记录", "胜率", "净值", "回撤", "战绩", "在册连板",
+                 "明日买入预案", "低位方向"):
+        assert term not in joined
+
+
+def test_eod_focus_is_explicit_and_observation_never_buy(monkeypatch):
+    import copy
+    plan = copy.deepcopy(_AI_PLAN)
+    plan["views"]["603096"] = {"view": "participate"}
+    plan["views"]["000823"]["bias"] = "focus"
+    joined = "\n".join(_texts(_build(monkeypatch, None, plan)))
+    assert "明天重点看·待竞价核验" not in joined
+    assert joined.count("明天重点参照·不可买") == 1
+    assert "AI 明日买入预案" not in joined
+
+
+def test_eod_direction_is_optional_theme_comment_not_third_pool(monkeypatch):
+    payload = {"date": "2026-11-03", "relay": [], "watch": [], "ai_plan": {},
+               "low_pool": [{"code": "999999", "name": "池外甲"}]}
+    assert "低位方向" not in "\n".join(_texts(bc.build_eod_card(payload)))
+    payload["direction"] = "题材甲仍待验证。池外甲(999999)重点买。"
+    joined = "\n".join(_texts(bc.build_eod_card(payload)))
+    assert "题材甲仍待验证" not in joined and "非低位确认" not in joined
+    assert "低位方向" not in joined
+    assert "999999" not in joined and "池外甲" not in joined
+    assert "低位池" not in joined
+
+
+def test_plain_ai_plan_direction_is_not_low_direction(monkeypatch):
+    joined = "\n".join(_texts(_build(monkeypatch, None, _AI_PLAN)))
+    assert "低位方向" not in joined and "非低位确认" not in joined
+    assert _AI_PLAN["direction"] not in joined
+    assert "封单很薄、换手 22%" in joined
+    assert "同方向今天整体在跌" in joined
+
+
+def test_one_word_observation_omits_invalid_trading_expectations(monkeypatch):
+    import copy
+    payload = {"date": "2026-11-03", "relay": [], "watch": [{
+        **_WATCH, "is_one_word": True, "participation_eligibility": "observe_only",
+        "price": 4.81, "watch_group": "一字核心",
+        "expectation": {"expected_range": [None, None], "confidence": 0,
+                        "auction_amount_range": [0, 0]},
+        "narrative": "风险：开板后有回落风险。"}], "ai_plan": {}}
+    before = copy.deepcopy(payload)
+    joined = "\n".join(_texts(bc.build_eod_card(payload)))
+    assert payload == before
+    assert "仅作板块参照·不可买" in joined
+    assert "现价4.81" in joined and "开板后有回落风险" in joined
+    assert "预期" not in joined and "竞价额" not in joined and "可信" not in joined
+    assert "仅作重点参照" not in joined
+    payload["watch"][0]["expectation"] = {}
+    joined = "\n".join(_texts(bc.build_eod_card(payload)))
+    assert "预期" not in joined and "竞价额" not in joined and "可信" not in joined
 
 
 # ── ③ 与 decision_outlook 同值：同一张卡不得出现两个单票上限 ─────────────

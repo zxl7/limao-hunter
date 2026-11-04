@@ -19,9 +19,12 @@
   python3 feedback_matrix.py --dry-run  # 只打印不写
 """
 import json
+import math
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import NamedTuple
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -281,7 +284,7 @@ def _trend_signal(prev_date: str = None):
         return {"promote_downtrend": False, "avg_pct_weak": False, "defense_level": 0, "history": []}
 
 
-def sentiment_score(promote, lb_promote, avg_pct, nuke, broken_rate, max_trend,
+def _legacy_sentiment_score(promote, lb_promote, avg_pct, nuke, broken_rate, max_trend,
                     zt_expand, up_rate, idx_avg, break_count=0,
                     market_amount_yi=0.0, breadth_up=0, breadth_down=0,
                     regulatory_pressure=0.0):
@@ -394,6 +397,360 @@ def sentiment_score(promote, lb_promote, avg_pct, nuke, broken_rate, max_trend,
     return round(s, 1), label
 
 
+# 可逆：只切公式，消费方继续读同一份 feedback；不回写历史。
+SENTIMENT_MODEL = "continuous_v3" if os.getenv("ENABLE_SMOOTH_SENTIMENT", "1") != "0" else "legacy_v2"
+
+
+def _continuous(value, points):
+    """有界连续插值；缺失因子不贡献分数，不伪造弱势。"""
+    if value is None or isinstance(value, bool):
+        return 0.0
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(value):
+        return 0.0
+    if value <= points[0][0]:
+        return points[0][1]
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        if value <= x1:
+            return y0 + (y1 - y0) * (value - x0) / (x1 - x0)
+    return points[-1][1]
+
+
+# ---------------------------------------------------------------------------
+# 情绪因子注册表（单一数据源）
+#
+# 每个因子只在这里声明一次：取值输入 / 所属维度 / 插值点表 / 方向 / 来源。
+# `sentiment_score` 与 `sentiment_breakdown` 共用同一份声明，避免
+# 「算分用一套点表、解释用另一套」的分叉；新增或调整因子只改本表。
+#
+# ⚠️ 元组顺序 = 浮点累加顺序。调整顺序会改变末位精度，
+#    必须重跑 tests/test_feedback_matrix.py 的等值回归。
+# ---------------------------------------------------------------------------
+
+class _Factor(NamedTuple):
+    """单个评分因子的声明式规格。"""
+
+    key: str                    # 因子标识（同时是诊断输出键）
+    label: str                  # 中文名（卡片/诊断展示）
+    dim: str                    # 所属维度键
+    points: tuple | dict        # 共用点表 tuple / 按输入分列的 dict（多输入取最大扣分）
+    inputs: tuple               # 参与取值的输入字段
+    source: str                 # 数据来源（血缘诊断）
+    sign: int = 1               # +1 加分项 / -1 扣分项
+    optional: bool = False      # True=无观测时不参与，而非记 0
+
+
+# 维度：答「强弱落在哪一类」，不替代总分。
+DIMENSION_LABELS = {
+    "expansion": "涨停扩张",
+    "breadth": "市场广度",
+    "money": "赚钱效应",
+    "relay": "接力质量",
+    "loss": "亏钱效应",
+    "index": "指数环境",
+    "height": "高度趋势",
+    "liquidity": "量能",
+    "regulation": "监管压力",
+}
+
+FACTOR_REGISTRY: tuple[_Factor, ...] = (
+    _Factor("zt_expand", "涨停扩张", "expansion",
+            ((-.6, -2), (-.3, -1.5), (-.1, -.5), (0, 0), (.1, .5), (.3, 1.2), (.6, 2)),
+            ("zt_expand",), "zt_pool"),
+    _Factor("up_rate", "昨涨停上涨占比", "breadth",
+            ((15, -1.5), (35, -.8), (50, 0), (70, 1.2), (90, 1.5)),
+            ("up_rate",), "quotes"),
+    _Factor("avg_pct", "昨涨停均涨幅", "money",
+            ((-5, -1.2), (-3, -.8), (-1, -.3), (0, 0), (1, .3), (3, .8), (5, 1.2)),
+            ("avg_pct",), "quotes"),
+    _Factor("promote", "晋级率", "relay",
+            ((0, -.8), (.15, -.5), (.25, 0), (.35, .4), (.5, .8), (.7, 1)),
+            ("promote",), "zt_pool"),
+    _Factor("lb_promote", "连板晋级率", "relay",
+            ((0, -.5), (.3, -.2), (.4, 0), (.5, .3), (.7, .5)),
+            ("lb_promote",), "zt_pool"),
+    _Factor("broken_rate", "炸板率", "loss",
+            ((0, .5), (.15, .3), (.25, 0), (.4, -.7), (.6, -1.2)),
+            ("broken_rate",), "latest.broken"),
+    _Factor("idx_avg", "三指数均涨幅", "index",
+            ((-3, -1), (-1, -.4), (0, 0), (1, .4), (3, 1)),
+            ("idx_avg",), "latest.index"),
+    _Factor("max_trend", "最高板趋势", "height",
+            ((-1, -.5), (0, 0), (1, .5)),
+            ("max_trend",), "zt_pool"),
+    # 核按钮与其子集真破位各用自身点表，再取最大——避免同一批亏损票被罚两遍，
+    # 也避免把两个不同分布的输入并成一张表（会系统性低估/高估惩罚）。
+    _Factor("loss", "核按钮/真破位", "loss",
+            {"nuke": ((0, 0), (1, .3), (3, .8), (5, 1.3), (10, 2), (20, 2.5)),
+             "break_count": ((0, 0), (1, .5), (3, 1), (10, 2), (20, 2.5))},
+            ("nuke", "break_count"), "quotes+ma", sign=-1),
+    _Factor("market_amount_yi", "两市成交额", "liquidity",
+            ((9000, -.4), (15000, 0), (20000, .2), (30000, .4)),
+            ("market_amount_yi",), "latest.market", optional=True),
+    _Factor("breadth_ratio", "全市场涨跌比", "breadth",
+            ((0, -1), (.25, -.7), (.5, 0), (.75, .5), (1, .7)),
+            ("breadth_ratio",), "latest.breadth", optional=True),
+    _Factor("regulatory_pressure", "监管打击强度", "regulation",
+            ((0, 0), (2, .3), (4, .6), (6, 1), (10, 1.2)),
+            ("regulatory_pressure",), "regulatory_events", sign=-1, optional=True),
+)
+
+
+def factor_set(model=None) -> tuple[_Factor, ...]:
+    """因子集工厂：按模型返回可分解的因子声明。
+
+    legacy_v2 是整段独立旧公式，不做因子分解 → 返回空元组，
+    由调用方按 `score_decomposable=False` 处理，不伪造一份等价注册表。
+    """
+    return FACTOR_REGISTRY if (model or SENTIMENT_MODEL) == "continuous_v3" else ()
+
+
+def _observed(value) -> bool:
+    """是否为真实观测值；bool/None/非有限数都不是观测。"""
+    if value is None or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _has_core_observation(promote, lb_promote, avg_pct, nuke, broken_rate,
+                          max_trend, zt_expand, up_rate, idx_avg) -> bool:
+    """核心输入至少有一项真实观测，才允许出分。
+
+    只认 int/float（字符串数字不算观测）——与评分主入口保持同一判定，
+    避免主分说「未知」、诊断却算出 5 分的双口径。
+    """
+    for value in (promote, lb_promote, avg_pct, nuke, broken_rate,
+                  max_trend, zt_expand, up_rate, idx_avg):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if math.isfinite(value):
+            return True
+    return False
+
+
+def _factor_values(promote, lb_promote, avg_pct, nuke, broken_rate, max_trend,
+                   zt_expand, up_rate, idx_avg, break_count,
+                   market_amount_yi, breadth_up, breadth_down,
+                   regulatory_pressure) -> dict:
+    """因子输入装配（唯一入口）。
+
+    派生量（广度比例）只在此处计算一次；缺失一律 None，由注册表判定是否参与，
+    ⛔ 不在插值层用 0 冒充观测。
+    """
+    total = 0.0
+    if _observed(breadth_up) and _observed(breadth_down):
+        up, down = float(breadth_up), float(breadth_down)
+        total = up + down
+    amount = float(market_amount_yi) if _observed(market_amount_yi) else None
+    return {
+        "zt_expand": zt_expand,
+        "up_rate": up_rate,
+        "avg_pct": avg_pct,
+        "promote": promote,
+        "lb_promote": lb_promote,
+        "broken_rate": broken_rate,
+        "idx_avg": idx_avg,
+        "max_trend": max_trend,
+        "nuke": nuke,
+        "break_count": break_count,
+        "market_amount_yi": amount if amount and amount > 0 else None,
+        "breadth_ratio": (float(breadth_up) / total) if total > 0 else None,
+        "regulatory_pressure": regulatory_pressure if _observed(regulatory_pressure) else None,
+    }
+
+
+def _contributions(values: dict, factors: tuple[_Factor, ...]) -> list[tuple]:
+    """按注册表顺序产出 (因子, 贡献, 是否观测到)；未观测项贡献为 0 但保留位置。"""
+    out = []
+    for spec in factors:
+        seen = [k for k in spec.inputs if _observed(values.get(k))]
+        if not seen:
+            out.append((spec, 0.0, False))
+            continue
+        if isinstance(spec.points, dict):
+            raw = max(_continuous(values[k], spec.points[k]) for k in seen)
+        else:
+            raw = _continuous(values[seen[0]], spec.points)
+        out.append((spec, spec.sign * raw, True))
+    return out
+
+
+def _aggregate(contribs: list[tuple]) -> tuple[float, list[dict]]:
+    """累加总分并汇总分维度；累加顺序严格等于注册表顺序以保持浮点等值。"""
+    strength = 0.0
+    dims: dict[str, dict] = {}
+    for spec, value, seen in contribs:
+        strength += value
+        dim = dims.setdefault(spec.dim, {
+            "key": spec.dim,
+            "label": DIMENSION_LABELS.get(spec.dim, spec.dim),
+            "value": 0.0,
+            "observed": False,
+            "factors": [],
+        })
+        dim["value"] += value
+        dim["observed"] = dim["observed"] or seen
+        dim["factors"].append({
+            "key": spec.key,
+            "label": spec.label,
+            "value": round(value, 4),
+            "observed": seen,
+            "source": spec.source,
+        })
+    for dim in dims.values():
+        dim["value"] = round(dim["value"], 4)
+    return strength, list(dims.values())
+
+
+def _score_from_strength(strength: float) -> tuple[float, str]:
+    """中心化软收敛 + 分档；保留 1/10 原分制边界。"""
+    raw = 5.0 + (5.0 if strength >= 0 else 4.0) * math.tanh(strength / 6.0)
+    score = round(max(1.0, min(10.0, raw)), 1)
+    label = ("亢奋" if score >= 9 else "偏强" if score >= 7 else
+             "修复" if score >= 4.5 else "分歧" if score >= 2.5 else "退潮")
+    return score, label
+
+
+def sentiment_score(promote, lb_promote, avg_pct, nuke, broken_rate, max_trend,
+                    zt_expand, up_rate, idx_avg, break_count=None,
+                    market_amount_yi=None, breadth_up=None, breadth_down=None,
+                    regulatory_pressure=None):
+    """同刻行情强度，不是时间均值。比例参数与 legacy 相同，up_rate 为百分数。
+
+    连续因子保留原有方向；核按钮和其子集真破位用 max 避免重复惩罚。
+    对中心化强度软收敛，代替硬裁剪；极端共振仍可进入 <2 / >9。
+    风控仍独立消费原始风险事实，不能用平滑分抵消破位证据。
+
+    可选参数默认 None = **未提供该观测**，不是「观测到 0」：
+    缺省值若写 0，会让诊断把「没取到」渲染成「已确认无风险」。
+    两者对分数贡献同为 0，但 `observed` 标记与缺失清单必须能区分。
+    """
+    if not _has_core_observation(promote, lb_promote, avg_pct, nuke, broken_rate,
+                                 max_trend, zt_expand, up_rate, idx_avg):
+        return None, "未知"
+    if SENTIMENT_MODEL == "legacy_v2":
+        # 回退旧公式仍须兼容采集端的可空字段，缺失不触发比较异常。
+        promote = promote if promote is not None else .25
+        lb_promote = lb_promote if lb_promote is not None else .4
+        avg_pct = avg_pct if avg_pct is not None else 0.0
+        nuke = nuke if nuke is not None else 0
+        broken_rate = broken_rate if broken_rate is not None else .25
+        max_trend = max_trend if max_trend is not None else 0
+        zt_expand = zt_expand if zt_expand is not None else -.01
+        up_rate = up_rate if up_rate is not None else 50
+        idx_avg = idx_avg if idx_avg is not None else 0
+        break_count = break_count if break_count is not None else 0
+        return _legacy_sentiment_score(
+            promote, lb_promote, avg_pct, nuke, broken_rate, max_trend,
+            zt_expand, up_rate, idx_avg, break_count, market_amount_yi,
+            breadth_up, breadth_down, regulatory_pressure)
+    values = _factor_values(promote, lb_promote, avg_pct, nuke, broken_rate, max_trend,
+                            zt_expand, up_rate, idx_avg, break_count,
+                            market_amount_yi, breadth_up, breadth_down,
+                            regulatory_pressure)
+    strength, _dims = _aggregate(_contributions(values, factor_set()))
+    return _score_from_strength(strength)
+
+
+def _coverage_grade(observed: int, total: int) -> tuple[float, str]:
+    """因子覆盖率分级。
+
+    回答「这个分有多少观测支撑」——只做标记，不改分、不设停发阈值。
+    ⛔ 不在此处决定「覆盖不足就不出分」：那需要自然样本校准，
+       未校准的阈值会把「少几个因子」误判成「行情不可知」。
+    """
+    if total <= 0:
+        return 0.0, "none"
+    cov = round(observed / total, 3)
+    if cov >= 0.85:
+        return cov, "high"
+    if cov >= 0.6:
+        return cov, "medium"
+    return cov, "low"
+
+
+def sentiment_breakdown(promote, lb_promote, avg_pct, nuke, broken_rate, max_trend,
+                        zt_expand, up_rate, idx_avg, break_count=None,
+                        market_amount_yi=None, breadth_up=None, breadth_down=None,
+                        regulatory_pressure=None) -> dict:
+    """分维度诊断：回答「这个分是被什么撑起、被什么拖住」。
+
+    只读同源因子集，不改变 `sentiment_score` 的结果，也不构成买卖依据。
+    缺失项保留 `observed=False`，⛔ 不把「未观测」渲染成 0 贡献的中性证据。
+    """
+    if SENTIMENT_MODEL != "continuous_v3":
+        return {"model": SENTIMENT_MODEL, "decomposable": False,
+                "reason": "legacy_v2 为整段独立公式，不做因子分解"}
+    if not _has_core_observation(promote, lb_promote, avg_pct, nuke, broken_rate,
+                                 max_trend, zt_expand, up_rate, idx_avg):
+        # 与主分同口径：全核心缺失时诊断也是未知，不能自算出中性 5 分。
+        total = len(factor_set())
+        return {"model": SENTIMENT_MODEL, "decomposable": True,
+                "score": None, "label": "未知", "strength": None,
+                "dimensions": [], "observed_dimensions": 0, "observed_factors": 0,
+                "total_factors": total, "coverage": 0.0, "coverage_grade": "none",
+                "missing_factors": [f.key for f in factor_set()],
+                "support": None, "drag": None}
+    values = _factor_values(promote, lb_promote, avg_pct, nuke, broken_rate, max_trend,
+                            zt_expand, up_rate, idx_avg, break_count,
+                            market_amount_yi, breadth_up, breadth_down,
+                            regulatory_pressure)
+    contribs = _contributions(values, factor_set())
+    strength, dims = _aggregate(contribs)
+    score, label = _score_from_strength(strength)
+    seen = [d for d in dims if d["observed"]]
+    missing = [spec.key for spec, _v, ok in contribs if not ok]
+    observed_factors = len(contribs) - len(missing)
+    coverage, grade = _coverage_grade(observed_factors, len(contribs))
+    support = max(seen, key=lambda d: d["value"], default=None)
+    drag = min(seen, key=lambda d: d["value"], default=None)
+    return {
+        "model": SENTIMENT_MODEL,
+        "decomposable": True,
+        "score": score,
+        "label": label,
+        "strength": round(strength, 4),
+        "dimensions": dims,
+        "observed_dimensions": len(seen),
+        "observed_factors": observed_factors,
+        "total_factors": len(contribs),
+        "coverage": coverage,
+        "coverage_grade": grade,
+        "missing_factors": missing,
+        "support": ({"key": support["key"], "label": support["label"], "value": support["value"]}
+                    if support and support["value"] > 0 else None),
+        "drag": ({"key": drag["key"], "label": drag["label"], "value": drag["value"]}
+                 if drag and drag["value"] < 0 else None),
+    }
+
+
+def sync_snapshot_sentiment(feedback, snapshot_path):
+    """只回填产生本次反馈的同一快照；拒绝跨轮/跨日与错误反馈。"""
+    if feedback.get("error") or not feedback.get("source_snapshot_ts"):
+        return False
+    snapshot = load_json(snapshot_path) or {}
+    source_ts = feedback["source_snapshot_ts"]
+    if snapshot.get("ts") != source_ts or str(source_ts)[:10] != feedback.get("date"):
+        return False
+    score = feedback.get("sentiment_score")
+    if not isinstance(score, (int, float)) or isinstance(score, bool) or not math.isfinite(score):
+        return False
+    detail = dict(snapshot.get("sentiment_detail") or {})
+    detail.update({"score": score, "label": feedback.get("sentiment_label"),
+                   "model": feedback.get("sentiment_model"), "source": "feedback_matrix",
+                   "source_at": source_ts, "status": "ready",
+                   "quality": feedback.get("sentiment_quality"),
+                   "inputs_missing": feedback.get("sentiment_inputs_missing") or []})
+    snapshot.update({"sentiment": detail["label"], "sentiment_detail": detail})
+    return bool(save_json(snapshot_path, snapshot))
+
+
 def main():
     dry = "--dry-run" in sys.argv[1:]
     force = "--force" in sys.argv[1:]  # 2026-08-20 加：绕过120s缓存强制重算（修代码后立即生效）
@@ -456,7 +813,9 @@ def main():
     # 缓存短路：同日期快照且 <120s 前算过 → 静默跳过（守护每60s唤醒不重复刷行情）
     out = CACHE / "feedback_matrix.json"
     old = load_json(out)
-    if not dry and not force and old.get("prev_date") == snap.get("date") and old.get("generated_ts"):
+    if (not dry and not force and old.get("prev_date") == snap.get("date")
+            and old.get("generated_ts") and old.get("sentiment_model") == SENTIMENT_MODEL
+            and old.get("source_snapshot_ts") == latest.get("ts")):
         try:
             # ⚠️ 2026-10-14 审计 P1-⑦：写侧已改 iso_bj()（ISO8601 +08:00），读侧因此
             #    改用 parse_dt 宽松解析 —— 兼容**存量**空格格式（'2026-10-13 17:19:11'）。
@@ -677,13 +1036,41 @@ def main():
     except Exception:
         regulatory_pressure = 0.0
 
-    # 评分：行情全失败时 avg_pct 用 None → 该因子取0分
-    score, label = sentiment_score(promote, lb_promote, avg_pct or 0.0, nuke_count,
-                                    broken_rate, max_trend,
-                                    zt_expand, up_rate, idx_avg, break_count=break_count,
-                                    market_amount_yi=market_amount_yi,
-                                    breadth_up=breadth_up, breadth_down=breadth_down,
-                                    regulatory_pressure=regulatory_pressure)
+    # 缺失观测不充当弱势/零风险证据；保留质量字段供消费方识别。
+    sentiment_inputs_missing = []
+    if not quotes:
+        sentiment_inputs_missing.extend(["avg_pct", "up_rate", "nuke", "break_count"])
+    if not lb_prev:
+        sentiment_inputs_missing.append("lb_promote")
+    if not latest.get("index"):
+        sentiment_inputs_missing.append("idx_avg")
+    if not isinstance((latest.get("broken") or {}).get("count"), (int, float)):
+        sentiment_inputs_missing.append("broken_rate")
+    if market_amount_yi <= 0:
+        sentiment_inputs_missing.append("market_amount_yi")
+    if breadth_up + breadth_down <= 0:
+        sentiment_inputs_missing.append("breadth")
+    # 主分与诊断共用同一组装入参（单一入口），防止「算分一套、解释另一套」。
+    _score_args = (promote, lb_promote if lb_prev else None, avg_pct,
+                   nuke_count if quotes else None,
+                   broken_rate if "broken_rate" not in sentiment_inputs_missing else None,
+                   max_trend, zt_expand, up_rate if quotes else None,
+                   idx_avg if "idx_avg" not in sentiment_inputs_missing else None)
+    _score_kwargs = {"break_count": break_count if quotes else None,
+                     "market_amount_yi": market_amount_yi,
+                     "breadth_up": breadth_up, "breadth_down": breadth_down,
+                     "regulatory_pressure": regulatory_pressure}
+    score, label = sentiment_score(*_score_args, **_score_kwargs)
+
+    # 分维度诊断（ENABLE_SENTIMENT_BREAKDOWN=0 关闭）：只增可解释性，不参与买卖裁决。
+    sentiment_breakdown_out = None
+    if os.getenv("ENABLE_SENTIMENT_BREAKDOWN", "1") != "0":
+        try:
+            _bd = sentiment_breakdown(*_score_args, **_score_kwargs)
+            # 诊断与主分必须同值；不一致说明装配出现分叉，宁可弃用也不落矛盾数据。
+            sentiment_breakdown_out = _bd if (_bd.get("score"), _bd.get("label")) == (score, label) else None
+        except Exception as exc:
+            print(f"[feedback_matrix] 情绪诊断生成失败（不影响主分）: {exc}")
 
     m = {
         "generated_ts": iso_bj(),
@@ -728,6 +1115,12 @@ def main():
         "promote_list": promote_names[:8],
         "sentiment_score": score,
         "sentiment_label": label,
+        "sentiment_model": SENTIMENT_MODEL,
+        "sentiment_quality": "partial" if sentiment_inputs_missing else "complete",
+        "sentiment_inputs_missing": sentiment_inputs_missing,
+        # 分维度诊断：哪个维度撑起/拖住本分；缺失因子标 observed=False，不当 0 证据。
+        "sentiment_breakdown": sentiment_breakdown_out,
+        "source_snapshot_ts": latest.get("ts"),
         "regulatory_pressure": regulatory_pressure,  # 监管打击强度 0-10（P1-8）
     }
 
@@ -738,6 +1131,7 @@ def main():
     # 读历史5日 emotion_*.json，检测 promote_rate 连续下滑 / 溢价走弱 → 防守警示字段
     m["trend"] = _trend_signal(prev_date=_now().strftime("%Y-%m-%d"))
     save_json(out, m)
+    sync_snapshot_sentiment(m, SNAP / "latest.json")
     try:
         from scripts.selection_effect import publish as publish_selection_effect
         if not publish_selection_effect(m):

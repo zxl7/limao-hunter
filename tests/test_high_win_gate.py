@@ -52,6 +52,64 @@ def _env(regime="risk_on", pressure=False):
     return {"regime": regime, "relay_feedback": {"pressure": pressure}}
 
 
+def _exec_eod_statement(source_prefix, namespace):
+    """只执行编排中指定的语句，隔离整条生产链及其读写副作用。"""
+    import ast
+
+    source = Path(pe.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    matches = [node for node in ast.walk(tree) if isinstance(node, ast.stmt)
+               and (ast.get_source_segment(source, node) or "").startswith(source_prefix)]
+    assert len(matches) == 1
+    block = ast.Module(body=matches, type_ignores=[])
+    exec(compile(block, pe.__file__, "exec"), namespace)
+
+
+@pytest.mark.parametrize("before,moved,enabled,expected", [
+    (0, [], True, "前置链路已无接力"),
+    (1, [{"name": "测试", "missing": ["情绪"]}], True, "四条件未同时成立"),
+    (1, [], True, None),
+    (0, [], False, None),
+])
+def test_空池日志仅归因真实移出(before, moved, enabled, expected, capsys):
+    _exec_eod_statement('if _hw_diag.get("enabled"):', {
+        "_hw_diag": {"enabled": enabled, "moved": moved, "regime": "ice"},
+        "_relay_before_hw": before, "relay": [],
+    })
+    output = capsys.readouterr().out
+    if expected:
+        assert expected in output
+    assert ("四条件未同时成立" in output) == (expected == "四条件未同时成立")
+    assert ("前置链路已无接力" in output) == (expected == "前置链路已无接力")
+
+
+def test_仍有接力不打印空池日志(capsys):
+    _exec_eod_statement('if _hw_diag.get("enabled"):', {
+        "_hw_diag": {"enabled": True, "moved": []},
+        "_relay_before_hw": 1, "relay": [_row()],
+    })
+    assert "接力池为空" not in capsys.readouterr().out
+
+
+def test_晋级诊断读取还原后的公开字段(capsys):
+    namespace = {
+        "_prev_pool_boards": {"600001": 2, "600002": 2},
+        "watch": [
+            {"code": "600001", "name": "真实晋级", "boards": 3, "carryover_promoted": True},
+            {"code": "600002", "name": "内部字段", "boards": 3, "_carryover_promoted": True},
+        ],
+        "diagnostics": {},
+    }
+    _exec_eod_statement("if _prev_pool_boards:", namespace)
+    assert namespace["diagnostics"]["watch_carryover"] == {
+        "prev_pool_size": 2,
+        "promoted": [{"code": "600001", "name": "真实晋级", "boards": 3}],
+    }
+    output = capsys.readouterr().out
+    assert "真实晋级" in output
+    assert "内部字段" not in output
+
+
 # ────────────────── 1. 四齐 → 保留 ──────────────────
 def test_all_four_conditions_keep_relay() -> None:
     relay, watch, diag = pe.apply_high_win_gate([_row()], [], _env())

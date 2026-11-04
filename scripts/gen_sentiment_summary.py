@@ -80,8 +80,7 @@ def _cycle_hint(days):
     """简单规则周期提示（AI 定调的机械输入，非最终结论）"""
     if not days:
         return "数据不足"
-    scores = [d.get("sentiment_score") for d in days]
-    scores = [s for s in scores if s is not None]
+    scores = [s for s in comparable_sentiment(days) if s is not None]
     last3 = scores[-3:] if len(scores) >= 3 else scores
     if len(last3) >= 3 and last3[-1] <= 2 and all(x <= last3[0] + 1 for x in last3):
         return "退潮/冰点（连续低位）"
@@ -133,7 +132,8 @@ def _cycle_why(days, news_rows, rotation):
     drivers 只列真实发生变化的维度（无变化不硬凑），text 可直接作为卡面「为何变」一行。
     数据不足（<2 个有分日）返回 None，不编造。
     """
-    scored = [d for d in days if d.get("sentiment_score") is not None]
+    comparable = comparable_sentiment(days)
+    scored = [d for d, score in zip(days, comparable) if score is not None]
     if len(scored) < 2:
         return None
     prev, cur = scored[-2], scored[-1]
@@ -228,6 +228,17 @@ def turn_signal(seq: list) -> dict:
             "sentiment_seq_last3": [v for v in seq[-3:]], "divergence": diverg}
 
 
+def comparable_sentiment(days):
+    """切换公式不构造拐点：只取最新模型连续尾段，其余保留时间轴空值。"""
+    if not days:
+        return []
+    model = days[-1].get("sentiment_model") or "legacy_v2"
+    start = len(days) - 1
+    while start > 0 and (days[start - 1].get("sentiment_model") or "legacy_v2") == model:
+        start -= 1
+    return [row.get("sentiment_score") if i >= start else None for i, row in enumerate(days)]
+
+
 def build():
     today = sys.argv[1] if len(sys.argv) > 1 else date.today().isoformat()
     emo_files = {str(d): p for d, p in _recent(DAILY_DIR, "emotion_", WINDOW)}
@@ -243,6 +254,7 @@ def build():
             "date": ds,
             "sentiment_score": e.get("sentiment_score"),
             "sentiment_label": e.get("sentiment_label"),
+            "sentiment_model": e.get("sentiment_model") or "legacy_v2",
             "zt_count": e.get("zt_count"),
             "promote_rate": e.get("promote_rate"),
             "nuke_count": e.get("nuke_count"),
@@ -284,9 +296,9 @@ def build():
             "nuke_seq": [d.get("nuke_count") for d in days],
             "zt_seq": [d.get("zt_count") for d in days],
             # 窗口分层（2026-09-10 用户拍板·当日=执行/3日=拐点确认/5日=纪律/10日=归纳）
-            "sentiment_ma3": ma3([d.get("sentiment_score") for d in days]),
+            "sentiment_ma3": ma3(comparable_sentiment(days)),
             "ma3_window": MA3_WINDOW,
-            "turn_signal": turn_signal([d.get("sentiment_score") for d in days]),
+            "turn_signal": turn_signal([v for v in comparable_sentiment(days) if v is not None]),
         },
         "cycle_hint": _cycle_hint(days),
         "news": news_rows,
@@ -320,6 +332,7 @@ def build():
             "date": ds,
             "sentiment_score": e.get("sentiment_score"),
             "sentiment_label": e.get("sentiment_label"),
+            "sentiment_model": e.get("sentiment_model") or "legacy_v2",
             "promote_rate": e.get("promote_rate"),
             "nuke_count": e.get("nuke_count"),
             "max_boards": e.get("max_boards"),
@@ -348,9 +361,9 @@ def _refresh_md(days, why=None, rotation=None, news_rows=None):
     if not days or not MD_PATH.exists():
         return
     text = MD_PATH.read_text(encoding="utf-8")
-    _seq = [d.get("sentiment_score") for d in days]
+    _seq = comparable_sentiment(days)
     _ma3 = ma3(_seq)
-    _turn = turn_signal(_seq)
+    _turn = turn_signal([v for v in _seq if v is not None])
     lines = ["## 5日情绪演变表", "", "> 🤖 自动生成（gen_sentiment_summary.py · 数据源 emotion_*.json 结构化快照）", ""]
     lines.append("| 日期 | 情绪分 | 3日窗 | 涨停 | 晋级率 | 核按钮 | 最高板 | 主线 |")
     lines.append("|------|--------|-------|------|--------|--------|--------|------|")

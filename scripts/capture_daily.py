@@ -18,6 +18,7 @@
 零新增数据源：复用 intraday_pulse 的 http_post/rc/ts/parse_tomorrow/parse_theme_stocks/build_sector_flow_snapshot。
 """
 import sys
+import os
 import json
 import subprocess
 from pathlib import Path
@@ -73,6 +74,13 @@ ENABLE_THEME_LINE_AUDIT = True
 # 动机：market_memory 只是当日快照、历史被覆盖（实测只剩 7 天）→「前期的热门题材」
 #       这类跨日口径没法长窗验证。False = 不归档（行为等同改动前）。
 ENABLE_TOP5_HISTORY = True
+
+# ── 数据源聚合守门 钩子开关（2026-11-04 用户「源必须聚合」·可逆）─────────────
+# 盘后链末步跑 `snapshot_build.py --guard`：补全 4 个只有构建器会写的 section
+# （market/themes/ladder/lines）→ 一致性校验 → 落 health section。
+# ⛔ 只告警不阻断；环境变量 ENABLE_SNAPSHOT_GUARD=0 / 本常量 False = 不挂（行为等同改动前）。
+# 与 core.snapshot.GUARD_ENV 同一个环境变量，避免两处开关打架。
+ENABLE_SNAPSHOT_GUARD = os.environ.get("ENABLE_SNAPSHOT_GUARD", "1") not in ("0", "false", "False", "")
 
 # ── 归档日集合差对账窗口（2026-10-14 审计 P1-④）────────────────────────────
 # 对账「最近 N 个**参考日**」内 flow / eruption 相对 zt 的缺口。
@@ -528,6 +536,18 @@ def capture_emotion(today: str) -> dict:
         "prev_max_boards": d.get("prev_max_boards"),
         "sentiment_score": d.get("sentiment_score"),
         "sentiment_label": d.get("sentiment_label"),
+        "sentiment_model": d.get("sentiment_model") or "legacy_v2",
+        "sentiment_quality": d.get("sentiment_quality"),
+        "sentiment_inputs_missing": d.get("sentiment_inputs_missing"),
+        "source_snapshot_ts": d.get("source_snapshot_ts"),
+        # 保留重算所需原始因子，旧历史不回填。
+        "broken_rate": d.get("broken_rate"),
+        "idx_avg": d.get("idx_avg"),
+        "zt_expand": d.get("zt_expand"),
+        "max_trend": d.get("max_trend"),
+        "market_amount_yi": d.get("market_amount_yi"),
+        "breadth": d.get("breadth"),
+        "regulatory_pressure": d.get("regulatory_pressure"),
         # ⚠️ 这里**故意**沿用上游值的原名：`feedback_matrix` 的 `generated_ts` 实为
         # **15:00 收盘源时刻**（不是采集时刻）—— 属审计 P1-⑦ 点名的「字段名与语义不符」。
         # 保留原值以免改变下游字符串切片行为；语义已在规范中登记，迁移另行立项。
@@ -979,7 +999,31 @@ def main():
     except Exception as e:
         ld_msg = f"leader_daily ERR:{e}"
 
-    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {arch_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {gg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | {th_msg} | {ld_msg} | {technical_msg} | pruned={removed}")
+    # 14) 🗂 数据源聚合 + 一致性守门（2026-11-04 用户「源必须聚合」·架构级）。
+    #     ⛔ 必须排在盘后链**最末**：此刻当日涨停池已定稿（第 2 步）、题材快照已落盘
+    #       （15:30 eod）；此步只补四个市场维度，不覆盖早盘竞价候选和终裁。
+    #     `snapshot_build.py --guard` = 补全 market/themes/ladder/lines 四个只有构建器会写的
+    #       section → 跑 validate → 落 health section（打开当日快照即知数据健不健康）。
+    #     ⛔ 只告警不阻断（与第 13 步及其余末步同一纪律）；异常/超时只降级。
+    if ENABLE_SNAPSHOT_GUARD:
+        try:
+            import subprocess as _sp
+            _sg = _sp.run([sys.executable,
+                           str(Path(__file__).resolve().parent / "snapshot_build.py"),
+                           "--date", today, "--only", "market,themes,ladder,lines", "--guard"],
+                          capture_output=True, text=True, timeout=120)
+            _sgl = [x for x in (_sg.stdout or "").splitlines() if "守门" in x or "覆盖" in x]
+            if _sg.returncode != 0:
+                detail = (_sg.stderr or _sg.stdout or "无输出").strip()[-240:]
+                sg_msg = f"snapshot_guard ERR:rc={_sg.returncode} {detail}"
+            else:
+                sg_msg = (_sgl[-1].strip()[:70] if _sgl else "ok")
+        except Exception as e:
+            sg_msg = f"snapshot_guard ERR:{e}"
+    else:
+        sg_msg = "snapshot_guard=skip(开关关闭)"
+
+    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {arch_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {gg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | {th_msg} | {ld_msg} | {technical_msg} | {sg_msg} | pruned={removed}")
 
 
 if __name__ == "__main__":

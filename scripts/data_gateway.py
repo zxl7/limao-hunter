@@ -31,10 +31,15 @@ def main(argv: list[str] | None = None) -> int:
     registry = sub.add_parser("stock-registry", help="查询系统已观测的单票事实")
     registry.add_argument("--code", required=True)
 
+    profile = sub.add_parser("stock-profile", help="查询单票事实画像（跨源聚合·只读）")
+    profile.add_argument("--code", required=True)
+
     args = parser.parse_args(argv)
     try:
         if args.command == "market-daily":
             payload = data_gateway.market_daily(args.code, args.limit)
+        elif args.command == "stock-profile":
+            payload = data_gateway.stock_profile(args.code)
         else:
             payload = data_gateway.stock_registry(args.code)
     except (ValueError, RuntimeError) as exc:

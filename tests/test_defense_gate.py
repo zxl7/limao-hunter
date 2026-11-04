@@ -525,17 +525,31 @@ def test_pool_call_env_block_kills_quota():
     assert not [c for c, v in res["views"].items() if v["view"] == "participate"]
 
 
-def test_pool_call_env_defensive_caps_quota_to_one():
-    """≥2 条命中 → 名额压到 1 只。"""
+def test_pool_call_env_defensive_caps_then_min_two_widens(monkeypatch):
+    """≥2 条命中 → 环境腿先把名额压到 1；2026-11-04「尽量推两个」在**允许买**时放宽回 2。
+
+    ⛔ 只放宽名额，不放宽准入：本夹具只有 1 只票过闸 → 实际仍只买 1 只。
+    开关 `POOL_CALL_MIN_TWO_SLOTS=False` 逐字回退到「环境压到 1」。
+    """
     cands = _candidates()
     cands["environment"] = {"sentiment_score": 2.0, "promote_rate": 21.0, "nuke_count": 3,
                             "break_count": 0, "broken_rate": 10.0}
-    res = pool_call.call_pool(cands, QUOTES_1008, plan=_plan(), stance="selective",
-                              line_cores={}, market_open=MO_1008, sector_flow=FLOW_0930,
-                              zt_series=ZT_SERIES, zt_days=ZT_DAYS)
+
+    def _run():
+        return pool_call.call_pool(cands, QUOTES_1008, plan=_plan(), stance="selective",
+                                   line_cores={}, market_open=MO_1008, sector_flow=FLOW_0930,
+                                   zt_series=ZT_SERIES, zt_days=ZT_DAYS)
+
+    res = _run()
     assert res["meta"]["defense"]["env"]["level"] == "defensive"
-    assert res["meta"]["effective_quota"] == 1
-    assert len(res["meta"]["participate"]) == 1
+    assert res["meta"]["effective_quota"] == 2          # 名额被放宽（原 stance selective=2）
+    assert res["meta"]["slot_policy"]["min_two_slots_applied"] is True
+    assert len(res["meta"]["participate"]) == 1         # 准入没放宽 → 仍只 1 只合格
+
+    monkeypatch.setattr(pool_call, "POOL_CALL_MIN_TWO_SLOTS", False)
+    old = _run()
+    assert old["meta"]["effective_quota"] == 1          # 回退旧口径：环境压到 1
+    assert len(old["meta"]["participate"]) == 1
 
 
 def test_pool_call_defense_subswitches_are_reversible(monkeypatch):

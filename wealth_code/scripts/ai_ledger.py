@@ -125,6 +125,9 @@ def _effective_view(row: dict, pool_views: dict) -> str:
     保证结算/账本时序不被改写。真·旧数据（既无 9:25 也无 bias，只有 legacy view）
     仍走 `row.get("view") or "participate"` 兜底（缺 view 视为 participate）。
     """
+    from core.two_pool import observation_only
+    if observation_only(row):
+        return "watch"
     code = str(row.get("code") or "").strip()
     m = pool_views.get(code)
     if isinstance(m, dict) and str(m.get("view") or "").strip():
@@ -472,6 +475,15 @@ def cmd_record(args) -> int:
         #    ⛔ 缺即 None、不校验、不抛错——见上方 `ENABLE_PAYOFF_WARNING` 段
         _tgt, _stp, _payoff_warning = _payoff_of(pk)
         _horizon, _horizon_warning = _horizon_of(pk)
+        # 🎯 2026-11-04「只能推一只时仓位控死50%」：AI **原始申报**的单票仓位另存一份，
+        #    因为下面 `position` 会被行情档位（弱档 30% / 中档 40%）压小。
+        #    09:25 真实只有 1 只参与时，结算按「单票上限 50%」重裁要用原始申报，
+        #    ⛔ 不得拿被压过的 30% 反推（否则「AI 想给 5 成」会被永久记成 3 成）。
+        _pk_pos = pk.get("position")
+        try:
+            _pk_pos_f = float(_pk_pos) if _pk_pos is not None else None
+        except (TypeError, ValueError):
+            _pk_pos_f = None
         row = {
             "decision_date": ddate,
             "code": code,
@@ -479,12 +491,15 @@ def cmd_record(args) -> int:
             "reason": (pk.get("reason") or "").strip(),
             "factors": pk.get("factors") or {},
             # 候选冻结时的排序评分（满分 100）：供 AI 台账按当日真实候选口径复盘，绝不在结算时重算。
+            "participation_eligibility": _candidate.get("participation_eligibility"),
             "ranking_score": _candidate.get("score"),
             "entry_max_gap": float(pk.get("entry_max_gap", DEFAULT_ENTRY_MAX_GAP)),
             # 单票仓位上限：默认 50%（2026-09-14 用户「买入仓位不超过 50%」）；
             # 🎯 若早盘接力动态方案启用 → 按行情强弱档位的基础单票上限裁（行情转弱自动收紧）。
             "position": ((_ai_caliber.clamp_position(pk.get("position"), _relay_per_cap)
                           if _ai_caliber else pk.get("position"))),
+            # AI 原始申报仓位（未经行情档位裁剪）——仅供 09:25 单票场景重裁，⛔ 不参与裁决
+            "position_requested": _pk_pos_f,
             # 盘后预案档（focus/normal/avoid·昨日唯一结论）；未给 → None（旧口径兼容）
             "bias": _bias or None,
             # ⛔ 越权兜底留痕（2026-09-22）：非空 = 该票的 bias 与机械证据冲突（或已被降级）
@@ -594,6 +609,115 @@ def _load_quotes(trade_date: str) -> dict:
         return {}
 
 
+# ── 竞价报价新鲜度校验（2026-11-03 修）────────────────────────────────────────
+# 事故：`auction_quotes-2026-09-30.json` 里 603533 掌阅科技的记录是
+#   {"prev_close": 21.5, "auction_price": 21.76, "time": "2026-09-29 15:00:01"}
+# —— prev_close 是 **09-28** 收盘、21.76 是 **09-29 开盘**，整条记录其实是 09-29 的竞价，
+#   却在 09-30 09:27 被抓取落进 09-30 的文件（上游当时还没更新到当日集合竞价）。
+# 后果：结算按 (09-30收盘 23.88 − 09-29竞价 21.76)/21.76 = **+9.74%**，
+#   而真实口径 (23.88 − 23.90)/23.90 = **−0.08%**，一日虚增 9.8pp 并带歪其后全部净值。
+#
+# 判据（⛔ 不用「今天开不开盘」，只看这份报价是不是当日的）：
+#   ① 报价自带 `time` 的**日期部分** ≠ 交易日的 → 跨日，判定陈旧（最硬证据，零额外请求）
+#   ② 有当日日K时，竞价价与当日开盘价偏差 > QUOTE_MAX_DEV_PCT → 判定异常
+#      （A股集合竞价成交价 **就是** 开盘价，正常应逐分一致；实测 13/14 条历史偏差 0.00%）
+# 命中后 **不跳过**，而是换成日K开盘价并连带换前收（同为前复权，口径一致），
+# 同时把 price_src / quote_time 写进账本 —— 交易确实发生过，要按真实价记，且可事后追溯。
+QUOTE_MAX_DEV_PCT = 5.0        # 竞价价与开盘价允许的最大偏差（%），超出即视为取错行
+# 日K缓存目录：**模块级变量**而非函数内字面量 —— 单测用 `monkeypatch.setattr(al, "KLINE_DIR", …)`
+# 隔离，否则校验会去读真实生产K线，把测试桩里的假价格覆盖掉（2026-11-03 实测 5 条用例因此变红）。
+KLINE_DIR = BASE / "cache" / "kline_qfq"
+
+
+def _cached_bars(code: str) -> list[dict]:
+    """读 `cache/kline_qfq/<code>.json` 的 bars（前复权·含 open/close）。缺失→[]。"""
+    try:
+        p = KLINE_DIR / f"{code}.json"
+        d = json.loads(p.read_text(encoding="utf-8"))
+        bars = d.get("bars") or []
+        return [b for b in bars if isinstance(b, dict) and b.get("date")]
+    except Exception:
+        return []
+
+
+def _open_of(code: str, trade_date: str, allow_network: bool = False) -> float | None:
+    """当日开盘价（= 集合竞价成交价）。先查本地K线缓存；陈旧时才允许联网补。"""
+    key = str(trade_date).replace("-", "")
+    for b in _cached_bars(code):
+        if str(b.get("date")).replace("-", "") == key:
+            try:
+                return float(b["open"])
+            except Exception:
+                return None
+    if not allow_network:
+        return None
+    try:
+        import common.tencent_kline as tk
+        for b in tk.fetch_kline_ohlc(code, n=8):
+            if str(b.get("date", "")).replace("-", "") == key and b.get("open"):
+                return float(b["open"])
+    except Exception:
+        pass
+    return None
+
+
+def _prev_close_of(code: str, trade_date: str, allow_network: bool = False) -> float | None:
+    """上一交易日收盘价（前复权）。用于替换陈旧报价里的 prev_close。"""
+    key = str(trade_date).replace("-", "")
+    bars = _cached_bars(code)
+    for i, b in enumerate(bars):
+        if str(b.get("date")).replace("-", "") == key:
+            if i == 0:
+                break
+            try:
+                return float(bars[i - 1]["close"])
+            except Exception:
+                return None
+    if not allow_network:
+        return None
+    try:
+        import common.tencent_kline as tk
+        rows = [r for r in tk.fetch_kline_ohlc(code, n=8) if r.get("date")]
+        for i, b in enumerate(rows):
+            if str(b.get("date", "")).replace("-", "") == key and i > 0:
+                return float(rows[i - 1]["close"])
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_auction(code: str, trade_date: str, q: dict) -> dict:
+    """把一条报价解析成可信的 (ap, prev_close, src, note)。
+
+    返回 {"ap": float|None, "prev_close": float|None, "src": "auction_quote"|"kline_open",
+          "note": str|None, "quote_time": str|None}
+    """
+    ap = q.get("auction_price")
+    prev = q.get("prev_close")
+    qtime = str(q.get("time") or "").strip() or None
+    qday = (qtime or "")[:10].replace("/", "-")
+    stale = bool(qday) and qday != trade_date
+    # 先用缓存判断偏差（零网络）；只在已判陈旧时才允许联网补价
+    open_px = _open_of(code, trade_date, allow_network=stale)
+    dev = None
+    if open_px and ap is not None and float(open_px) > 0:
+        dev = abs(float(ap) - float(open_px)) / float(open_px) * 100
+    bad_dev = dev is not None and dev > QUOTE_MAX_DEV_PCT
+    if (stale or bad_dev) and open_px:
+        fixed_prev = _prev_close_of(code, trade_date, allow_network=stale) or prev
+        why = (f"竞价报价跨日（time={qtime}）" if stale
+               else f"竞价价 {ap} 与当日开盘价 {open_px} 偏差 {dev:.2f}%")
+        return {
+            "ap": float(open_px), "prev_close": fixed_prev, "src": "kline_open",
+            "note": f"{why} → 改用 {trade_date} 开盘价 {open_px} 结算",
+            "quote_time": qtime,
+        }
+    return {
+        "ap": float(ap) if ap is not None else None, "prev_close": prev,
+        "src": "auction_quote", "note": None, "quote_time": qtime,
+    }
+
+
 def _close_of(code: str, trade_date: str) -> float | None:
     """T+1 收盘价（腾讯日K·前复权·ifzq host 2026-09-09 已修）。失败→None（诚实跳过）。"""
     try:
@@ -636,6 +760,28 @@ def cmd_settle(args) -> int:
     if not due:
         print(f"[ai_ledger] {tdate} 无待结算 AI 决策")
         return 0
+
+    # ── 🎯 单票场景仓位重裁（2026-11-04 用户「只能推一只时仓位控死50%」）────────
+    # 判定源＝09:25 **冻结**的池内裁决（`pool_call-<trade_date>.json`）：
+    #   · `meta.slot_policy.single_pick=True` ∧ 该票 `position_cap` 有值 → 单票上限生效；
+    #   · 实际上限 = position_cap（= MAX_POSITION_PER_STOCK × 回撤乘数，单一源见
+    #     core/relay_position.single_pick_cap）。
+    # 重裁 = min(AI 原始申报, 上限)：⛔ 不是强制打满 50%，AI 报 3 成仍记 3 成；
+    #   ⛔ 也不让弱档 30%/中档 40% 继续压低（那正是「卡面说 50%、账本记 30%」的病根）。
+    # 两票及以上完全不进这个分支（沿用 record 时的 per_pick/total 裁剪）。
+    for r in todo:
+        _fz = pool_views.get(str(r.get("code") or "")) or {}
+        _cap = _fz.get("position_cap") if _fz.get("single_pick") else None
+        if not isinstance(_cap, (int, float)) or float(_cap) <= 0:
+            continue
+        _base = r.get("position_requested")
+        if not isinstance(_base, (int, float)):
+            _base = r.get("position")
+        if isinstance(_base, (int, float)) and float(_base) > 0:
+            r["position"] = round(min(float(_base), float(_cap)), 4)
+        # 留痕：账本可直接回答「这笔用的是单票上限」
+        r["position_cap"] = round(float(_cap), 4)
+
     quotes = _load_quotes(tdate)
     # AI 决策为唯一入场授权：不再用逃生阀把观察票提升为成交。
     traded, skipped = [], []
@@ -648,8 +794,13 @@ def cmd_settle(args) -> int:
     for r in todo:
         code = str(r["code"])
         q = quotes.get(code) or {}
-        ap = q.get("auction_price")
-        prev_close = q.get("prev_close")
+        # 报价新鲜度校验（2026-11-03）：跨日/与开盘价严重不符的报价必须换掉，
+        # 否则一条 09-29 的竞价会让 09-30 记出 +9.74%（真实 −0.08%），并带歪其后全部净值。
+        _res = _resolve_auction(code, tdate, q)
+        if _res["note"]:
+            print(f"  ⚠️ {code} {r.get('name') or ''}：{_res['note']}", file=sys.stderr)
+        ap = _res["ap"]
+        prev_close = _res["prev_close"]
         if ap is None:
             skipped.append((code, "无竞价数据（auction_quotes 缺失该票）"))
             continue
@@ -676,8 +827,13 @@ def cmd_settle(args) -> int:
             skipped.append((code, f"缺 T+1 收盘价（{tdate}）"))
             continue
         ret = round((float(close) - float(ap)) / float(ap) * 100, 2)
-        traded.append({"code": code, "name": r.get("name") or "", "auction_price": float(ap),
-                       "close": float(close), "return_pct": ret, "reason": r.get("reason")})
+        _rec = {"code": code, "name": r.get("name") or "", "auction_price": float(ap),
+                "close": float(close), "return_pct": ret, "reason": r.get("reason")}
+        # 只有「换过价」才留痕：正常行不加字段，避免历史结构无谓变宽
+        if _res["src"] != "auction_quote":
+            _rec["price_src"] = _res["src"]
+            _rec["quote_time"] = _res["quote_time"]
+        traded.append(_rec)
     # 账本：**只记有实际买入的交易日**（2026-09-14 用户「全量以 AI 为唯一口径」后与
     # 账户账本 account_nav_history.jsonl 同语义——那边由 nav_ledger 只收 can_enter ∧ covered
     # 的样本，0 成交不落行；此处若给空仓日写 0% 行，会让「记录天数」与胜率口径两轨打架）。
