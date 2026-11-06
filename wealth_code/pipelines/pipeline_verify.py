@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,6 +29,8 @@ from typing import Any
 from core.signal_eval import evaluate_realtime_signal
 from core import ai_caliber
 from core import pool_call
+from core import auction_state as _ast
+from core import expected_gap as _expected_gap
 from core.nav_ledger import sync_account_nav_ledger
 from core.strategy_metrics import build_account_strategy_metrics, sync_account_strategy_metrics
 from adapters.input_auction import load_auction_quotes
@@ -50,6 +53,25 @@ _PROD_CACHE_DIR = Path(__file__).resolve().parent.parent / "cache"
 # 非 wealth_code/cache）。ROOT=wealth_code → ROOT.parent=狸猫猎手（项目根）。
 HOLDINGS_PATH = ROOT.parent / "cache" / "holdings.json"
 BJ_TZ = timezone(timedelta(hours=8))
+
+# ── 早盘冻结守卫（2026-11-05「旁白/数据准备链路综合」）─────────────────────
+# 平台 09:25 的 `verify --fetch` 只做数据准备，但该入口默认 persist=True：
+# 若它在真实竞价报价落地前抢跑成功，会用残缺报价算出「今天买哪只」并冻结，
+# 且 save_pool_call 幂等不覆盖 → 09:26 正式推卡时 load_pool_call 直接沿用错误快照。
+# ⛔ 只挡「冻结结论」，不挡报价抓取 / 昨日结算 / 卡面计算；历史日期回放不挡。
+#    回退：VERIFY_EARLY_FREEZE_GUARD=0。
+VERIFY_FREEZE_NOT_BEFORE = (9, 25, 30)
+ENABLE_VERIFY_EARLY_FREEZE_GUARD = os.environ.get("VERIFY_EARLY_FREEZE_GUARD", "1") != "0"
+
+
+def early_freeze_blocked(trade_date: str, now: datetime | None = None) -> bool:
+    """当日 09:25:30 之前不允许把池内裁决冻结落盘。"""
+    if not ENABLE_VERIFY_EARLY_FREEZE_GUARD:
+        return False
+    n = now or datetime.now(BJ_TZ)
+    if str(trade_date) != n.strftime("%Y-%m-%d"):
+        return False                      # 历史/回放不挡
+    return (n.hour, n.minute, n.second) < VERIFY_FREEZE_NOT_BEFORE
 
 
 def pool_call_path(trade_date: str) -> Path:
@@ -225,6 +247,20 @@ def _inject_pool_views(ai_decisions: dict[str, dict] | None,
         r["view"] = m.get("view")
         r["plan_bias"] = m.get("bias")
         r["pool_reason"] = m.get("reason")
+        # 🔁 11-05：竞价复核翻案标记必须跟着 `view` 一起注入决策行，
+        #    否则 ai_caliber.decide 仍会拿盘后 observe_only 身份把翻案票判回不买。
+        for _k in ("rechecked_from_observe", "recheck_class",
+                   "auction_recheck", "volume_band",
+                   # 🎯 11-05 竞价三态：manual_only 必须跟 view 一起注入，
+                   #    否则 decide() 可能把「人工二次机会」写成系统成交记录。
+                   "auction_state", "auction_r", "auction_route",
+                   "auction_state_reason", "manual_only",
+                   # 🎯 11-05 纠偏：逐票质量预期开幅与相对预期偏离，随冻结件透传。
+                   #    11-05 删 5%/红开后，20cm 标志与低开留痕也须随决策行进 decide。
+                   "expected_gap_pct", "gap_vs_expected",
+                   "is_20cm", "low_open_expected", "low_open_guard"):
+            if m.get(_k) is not None:
+                r[_k] = m.get(_k)
         r["line_is_core"] = bool(m.get("line_is_core"))
         r["line_core"] = m.get("line_core")
         r["follower_gate"] = bool(m.get("follower_gate"))
@@ -281,7 +317,7 @@ def _next_day(date10: str) -> str:
     return next_a_share_trading_day(date10) or date10
 
 
-def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close: float | None, *, date10: str, regime: str | None = None, sector_support: dict[str, Any] | None = None, ai_decisions: dict[str, dict] | None = None, valve_code: str | None = None) -> dict[str, Any]:
+def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close: float | None, *, date10: str, regime: str | None = None, sector_support: dict[str, Any] | None = None, ai_decisions: dict[str, dict] | None = None, valve_code: str | None = None, pool_views: dict[str, dict] | None = None) -> dict[str, Any]:
     """
     构建单条结算 record（含 performance.open_check / next_day）。
     regime: 情绪体制（P1-6 冰点禁买硬开关·signal_eval 消费）。
@@ -369,11 +405,21 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
     # ⛔ 两池契约（2026-11-03 用户「观察仅作参照，不自动交易」）：
     #    `participation_eligibility=observe_only` 的票无论 AI/机械怎么判，都不得形成入场。
     #    ⛔ 无论这个标记来自哪个方向 —— 回暖解冻、机械回退、冻结消费都不解锁。
-    from core.two_pool import observation_only
-    if observation_only(cand):
+    from core.two_pool import observation_only, rechecked_entry
+    _pool_mark = (pool_views or {}).get(str(cand.get("code") or "").strip())
+    # 🔁 11-05：竞价复核翻案票以冻结件为准，盘后 observe_only 身份不再二次否决。
+    if observation_only(cand) and not rechecked_entry(_pool_mark):
         can_enter = False
         mech_can_enter = False
         ai_meta.update(ai_view="watch", ai_note="板块观察参照，不参与交易")
+    # 🎯 2026-11-05 用户「其他机会交给人工二次自己交易不做记录」：
+    #    B/C 态是人工机会，⛔ 不进系统的成交/净值/战绩记录。
+    #    翻案票（rechecked_entry）优先，⛔ 不得被分层标二次否决。
+    if ((_pool_mark or {}).get("manual_only") is True
+            and not rechecked_entry(_pool_mark)):
+        can_enter = False
+        mech_can_enter = False
+        ai_meta.update(manual_only=True, ai_note="人工二次机会，系统不记录")
     # 隔日收益
     if can_enter and next_close is not None and quote is not None:
         auction_price = float(quote.get("auction_price") or 0.0)
@@ -390,6 +436,7 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
         "code": cand.get("code"),
         "name": cand.get("name"),
         "participation_eligibility": cand.get("participation_eligibility"),
+        "recheck_unlocked": bool(rechecked_entry(_pool_mark)),
         "bucket": cand.get("bucket"),
         "bucket_label": cand.get("bucket_label"),
         "relay_rank": int(cand.get("relay_rank") or 0),
@@ -408,6 +455,11 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
         "core_theme": cand.get("core_theme"),
         "factor_hint": " ".join(cand.get("tags") or []),
         "expectation": cand.get("expectation") or {},
+        # 🎯 11-05 删 5%/红开：逐票质量预期（卡面三档判读与 ai_caliber.decide 同源）。
+        #    优先冻结件终裁值；缺冻结件时从候选昨日封板质量现算，⛔ 不编造。
+        "expected_gap_pct": ((_pool_mark or {}).get("expected_gap_pct")
+                             if (_pool_mark or {}).get("expected_gap_pct") is not None
+                             else _expected_gap.expected_gap_pct(cand)),
         "narrative": cand.get("narrative"),
         # 板块竞价承接力透传（2026-08-24）：供 verify 卡 🧲板块承接 标注
         "sector_support": sector_support,
@@ -584,6 +636,21 @@ def run_verify(
                 # 否则红开比例会被选股结果高估。全市场报价不足则闸门自然不放宽。
                 full_zt_rows = _load_full_zt_rows(date10)
                 market_open_read = build_market_open(full_zt_rows, quotes)
+                # 🎯 2026-11-05 用户拍板 A 档：三环联动**影子上下文**（只留痕，⛔ 不裁决）。
+                #    数据全部 09:25 前可得：全池报价 + 昨收完整涨停池 + 昨收选股宝题材快照
+                #    + T-1 及更早的日线（模块内显式裁掉 T 日，⛔ 无未来函数）。
+                #    缺题材快照 / 计算失败 → None，pool_call 不写任何影子字段，裁决完全不受影响。
+                _sgc_ctx = None
+                try:
+                    from core import sector_gap_context as _sgc
+                    if _sgc.enabled():
+                        _sgc_ctx = _sgc.build_day_context(
+                            prev_date=date10, quotes=quotes, zt_rows=full_zt_rows) or None
+                        if not _sgc_ctx:
+                            print("[VERIFY] 三环影子上下文跳过：缺选股宝题材快照（不裁决）")
+                except Exception as _e:                # 诚实降级，绝不打断 09:25 主链
+                    _sgc_ctx = None
+                    print(f"[VERIFY] 三环影子上下文跳过：{_e}")
                 # 🎯 早盘接力·动态仓位（2026-10-13 用户需求·relay_position 唯一判据源）
                 # 用**真实 09:25 读数**合成方案（昨日强势 + 今晨竞价 + 题材沉淀 + 净值回撤），
                 # 注入 call_pool 做名额的最终向下裁断。⛔ 失败/未开启 → 不裁断（诚实降级）。
@@ -596,6 +663,29 @@ def run_verify(
                     except Exception as _e:              # 诚实降级·不得打断裁决
                         print(f"[VERIFY] 早盘接力动态仓位方案跳过：{_e}")
                         _relay_plan = None
+                # 📏 同题材身位（2026-11-06 用户 A）：身位差的分母必须是**炒作题材**，
+                #    不是申万行业。`full_zt_rows` 只带 sector/industry，直接用它会把
+                #    「同行业最高板」当成分母（一个行业里板数天然一致 → 身位差恒 0），
+                #    等于让新口径静默失效。⇒ 用选股宝 plates 快照算好后显式注入。
+                #    ⛔ 落行业兜底的票**不注入**：`main_theme` 会标 src=sector，
+                #    这类票在 pool_call 里拿不到题材 → basis=unknown → 不裁决（不猜）。
+                _code_theme_pos = None
+                try:
+                    from core import sector_gap_context as _sgc_theme
+                    _plates = _sgc_theme.load_plates_map(date10)
+                    if _plates:
+                        _code_theme_pos = {}
+                        for _row in (full_zt_rows or []):
+                            _cd = str(_row.get("code") or "").strip()
+                            if len(_cd) != 6:
+                                continue
+                            _th, _src = _sgc_theme.main_theme(_cd, _row, _plates)
+                            if _th and _src in ("plates", "theme"):
+                                _code_theme_pos[_cd] = _th
+                        _code_theme_pos = _code_theme_pos or None
+                except Exception as _e:              # 诚实降级：缺题材 → 身位不裁决
+                    _code_theme_pos = None
+                    print(f"[VERIFY] 同题材身位上下文跳过：{_e}")
                 pool_res = pool_call.call_pool(
                     candidates, quotes, plan=_load_plan(trade_date10),
                     stance=ai_caliber.ai_stance(trade_date10),
@@ -606,12 +696,21 @@ def run_verify(
                     #    ⛔ 必须用 `theme_open_rows` 而非 `zt_rows`：后者还负责「市场最高板」
                     #       兜底，传进去会改身位闸参照系，并让测试吃到生产文件（11-04 实测 3 例红）。
                     theme_open_rows=full_zt_rows,
+                    # 🎯 11-05 竞价三态分母 = 昨日全天成交额（昨收归档 cje_yi，
+                    #    09:25 前已存在）。复用上面已冻结的 full_zt_rows，不额外抓行情。
+                    prev_amounts=_ast.prev_amounts_from_rows(full_zt_rows),
+                    sector_gap=_sgc_ctx,
+                    code_theme=_code_theme_pos,
                     relay_plan=_relay_plan)
                 # 📈 昨日连板 · 今晨竞价溢价榜（2026-11-04 用户）
                 _attach_premium_board(pool_res, full_zt_rows, quotes,
                                       prev_date=date10, trade_date=trade_date10)
 
-                if persist:
+                _freeze_blocked = early_freeze_blocked(trade_date10)
+                if _freeze_blocked:
+                    print("[VERIFY] ⏳ 09:25:30 前不冻结池内裁决（防数据准备抢跑）；"
+                          "本次照常算卡，正式结论留给 09:26")
+                if persist and not _freeze_blocked:
                     save_pool_call(trade_date10, pool_res)
                     # 🗂 数据源聚合（2026-11-04 用户「源必须聚合，展现可以分散」）：
                     #    当日竞价终裁 + 报价写进 `cache/snapshot/<date>.json`，
@@ -632,6 +731,7 @@ def run_verify(
                                 "participate": (pool_res.get("meta") or {}).get("participate"),
                                 "market_open": (pool_res.get("meta") or {}).get("market_open"),
                                 "slot_policy": (pool_res.get("meta") or {}).get("slot_policy"),
+                                "recheck": (pool_res.get("meta") or {}).get("recheck"),
                                 "anchor_lines": (((pool_res.get("meta") or {}).get("defense")
                                                   or {}).get("anchor") or {}).get("lines"),
                                 "views": pool_res.get("views"),
@@ -649,11 +749,19 @@ def run_verify(
                         except Exception as _pe:
                             print(f"[VERIFY] 动态仓位方案落盘跳过：{_pe}")
                 _pm = pool_res.get("meta") or {}
+                _slot_v = _pm.get("slot_policy") or {}
+                _quota_txt = ("不限只数" if _slot_v.get("unlimited_slots")
+                              else f"{_pm.get('effective_quota', _pm.get('quota'))} 只")
                 print(f"[VERIFY] 🎯 9:25 池内裁决：池内 {_pm.get('pool_size')} 只 · "
                       f"定调 {_pm.get('stance') or '—'} · 当日可买 "
-                      f"{_pm.get('effective_quota', _pm.get('quota'))} 只 → "
+                      f"{_quota_txt} → "
                       f"买入 {len(_pm.get('participate') or [])} 只 {_pm.get('participate') or ''}"
                       + ("" if persist else "（dry-run·不落盘）"))
+                _rc_v = _pm.get("recheck") or {}
+                if _rc_v.get("enabled"):
+                    print(f"[VERIFY] 🔁 观察票竞价复核：{_rc_v.get('observed', 0)} 只逐票判过 · "
+                          f"{_rc_v.get('state_entered', 0)} 只进完整裁决 · "
+                          f"翻案买入 {len(_rc_v.get('participated') or [])} 只")
             ai_decisions = _inject_pool_views(ai_decisions, pool_res, candidates)
         # AI 定调只影响 AI 预案本身；观察/放弃票不能由机械逃生阀改写为成交。
 
@@ -698,7 +806,8 @@ def run_verify(
         rec = _build_record(cand, q, nc, date10=date10, regime=regime,
                             sector_support=(sector_support_map or {}).get(code),
                             ai_decisions=ai_decisions,
-                            valve_code=(valve or {}).get("code"))
+                            valve_code=(valve or {}).get("code"),
+                            pool_views=(pool_res or {}).get("views"))
         # 🔍 池外龙头校验（2026-10-21）：record 由 `_build_record(cand, ...)` 从**候选行**重建，
         #    ⛔ `_build_record` 不认这个字段 → 必须在出口处补，否则后端判了卡面也读不到
         #    （实测：views 里是 back、record 里却是 None，卡面 `_outpool_badge` 静默失效）。
@@ -765,6 +874,10 @@ def run_verify(
         "nav_rows": nav_rows,
         # 盘后卡写入的全局旁白随候选文件透传，使早盘验证卡 🗣️ 与盘后卡一致（无需重传 --narratives）
         "global_narrative": candidates.get("global_narrative"),
+        # 🎯 2026-11-05 旁白口径统一：撰写日显式写候选日（= 上一交易日盘后），
+        #    渲染层据此标「昨日」并做时点平移；⛔ 不再靠 _narr_basis_label 回退推断。
+        #    若 launchd 注入了当日 AI 旁白，cmd_verify 会用当日覆盖本字段（优先级更高）。
+        "narrative_date": summary.get("date10"),
     }
 
 

@@ -35,6 +35,15 @@ from common.market_time import iso_bj_from_unix
 
 logger = logging.getLogger("em_flow")
 
+
+def sector_risk_for_decision(data):
+    """展示参考榜不得进入自动判断；兼容没有状态字段的旧快照。"""
+    data = data or {}
+    if data.get("reference_only"):
+        return {**data, "inflow_top": [], "outflow_top": [],
+                "declining": [], "focus_declining": [], "count": None}
+    return data
+
 # ---- 端点与公共参数（CapitalPulse config.py 同源）----
 EM_FLOW_HOSTS = ["push2.eastmoney.com", "push2delay.eastmoney.com"]  # 实时优先 → delay 兜底
 EM_REFERER = "https://data.eastmoney.com/"

@@ -172,13 +172,28 @@ def test_board_gap_not_applied_to_first_board(tmp_path):
     assert not any("身位差" in r for r in first["rejects"]), first["rejects"]
 
 
-def test_board_gap_applied_to_second_board(tmp_path):
+def test_board_gap_applied_to_second_board(tmp_path, monkeypatch):
+    """身位差 ≥2 板：**旧口径**判 reject，**11-06 新口径**只写事实不 reject。
+
+    2026-11-06 用户 A 后，过筛不再因身位判死（职责还给 09:25 降权），
+    这里同时锁住两条路径，确认开关真能逐字回退。
+    """
     g = gene_dir(tmp_path, "600002")
     rows = [zt("600002", "二板后排", 2, cje=8.0, seal=2.0, lt=40.0),
             zt("600009", "最高板", 4, cje=9.0, seal=3.0, lt=50.0, sector="其他")]
+
+    # 旧口径回退：仍按全市场最高板判「后排」
+    monkeypatch.setattr(DS, "POS_SCREEN_FACT_ONLY", False)
     res = DS.screen_pool(rows, gene_cache=g, trade_date="2026-11-03", root=tmp_path)
     two = next(s for s in res["screened"] if s["code"] == "600002")
     assert any("身位差" in r for r in two["rejects"]), two["rejects"]
+
+    # 新口径（默认）：不 reject，只把事实留给 09:25
+    monkeypatch.setattr(DS, "POS_SCREEN_FACT_ONLY", True)
+    res2 = DS.screen_pool(rows, gene_cache=g, trade_date="2026-11-03", root=tmp_path)
+    two2 = next(s for s in res2["screened"] if s["code"] == "600002")
+    assert not any("身位差" in r for r in two2["rejects"]), two2["rejects"]
+    assert two2["facts"]["position_gap"]["market_gap"] == 2
 
 
 # ── ⑤ 一字板豁免成交额 ─────────────────────────────────────────────────────

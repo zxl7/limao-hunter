@@ -115,6 +115,13 @@
 - behavior_attribution 当前 profit_factor 为百分比求和之比；净投入收益不是时间加权净值；日级净现金流峰值是仓位代理。CSV量纲启发式和缺失收益处理须核对原始数据后解释。GATE_* 是诊断阈值，不等于已接入交易硬门。
 - target_pct / stop_pct / hold_horizon 为待接入字段，本次源码检索未发现账本实现；不能以已排期任务声称完成。
 
+### 短线精灵重复收敛契约（2026-11-05）
+
+- 三类重复分别治理，⛔ 不用一个「总去重」糊过去：①同一轮同 code（涨幅榜＋涨停池＋leaders 兜底三路拼接）由 `_dedup_signals` 在 up/down 合并后的唯一装配点收敛，`GROUP_VIEW_CACHE` 同源去重，避免联动家数虚高；②后排候选（跟风／今日可能涨停）当日已展示不重展，`ENABLE_SPIRIT_BACKSEAT_DELTA` 可回退；③接力方向 `_relay_identity` 只认「板块／前排／梯队／可参与成员」，涨幅与家数抖动属状态，⛔ 不得绕过 `RELAY_COOLDOWN_MIN`；`ENABLE_SPIRIT_RELAY_IDENTITY_DELTA=0` 回退旧指纹判定。
+- 三个「已展示」状态（`linkage_sent`／`backseat_shown`／`relay_state`）一律**仅成功送达才提交**；relay_state 按日切分，跨日旧档作废。发送失败下一轮可重试，不把未送达记成已推。
+- ⛔ 不改推送节奏：`--force` 早盘高频窗口「有信号就立刻推」是用户纪律；`batch_threshold`／`batch_timeout_min`／`max_signals`／`top_per_sector`／排序／评分／调度一律不动；`--send` 统一出口的 45s 内容 hash 防抖也不改。**卡片密度未收敛，跨通道（`live_signal` 透传卡 vs 主卡）未做全局节流**，需用户拍板后再动。
+- 只改未来正常产出；不重写旧事件流、卡文件或账本，不手动补跑、不推送测试卡。事件流缺 front／ladder／pct，回放压降为近似估算，不得当精确值或收益证明。
+
 ## 验证标准
 
 - 文档变更：元信息可读、链接和路径存在、参数/函数锚点可核实、无重复权威声明；只报告实际做过的验证。

@@ -22,12 +22,22 @@
 
 ## ⛔ 三条口径铁律（踩过的坑，别再犯）
 
-1. **红开可买 **≠** 全部可成交**：`可执行` = gap ≤ 5%（剔除买不到的）；`红开可买` =
-   `0 < gap ≤ 5`（现行「不接低开」纪律下真能下单的子集）。⛔ 混用会得出
-   「封板越差越好」的荒谬结论。
+1. **`0 < gap ≤ 5` 只是「红开小高开」这个统计子集，⛔ 不是「全部可成交」**：
+   2026-11-05 用户删掉「5% 高开」这条绝对线后（「有些票今天很强势明天它就可以高开，
+   有些票今天会弱势那么它低开一样能拉起来」），**买不到的唯一事实是竞价封死**
+   （`gap ≥ 涨停幅度 − 0.2pct`），而低开是可以买的（由 `ai_caliber.gap_zone` 的
+   `DEV = gap − E` 裁决）。本模块的 `buyable` 沿用 `0 < gap ≤ 5` **仅作统计子集**，
+   卡面读数必须说清是「红开 0~5% 这档」的胜率，⛔ 不得再写成「买不到 / 买不进」。
+   ⚠️ 若换成「未封死即算可买」，各档胜率会明显变化（差1板×弱封 62.5%→48.5%、
+   差≥2板×弱封 41.2%→45.3%，n 从 8/51 变 33/161）——**尚未切换**，见 shared_rules。
 2. **封板质量只预测「明天高开多少」，不预测「买了能赚多少」**：
    四条齐票晋级 63.9%，但红开可买平均 −2.28%——质量换来的高开被市场砍掉。
 3. **缺失字段不算命中**：缺 `zbc` 曾被当「零炸板」白送一条（2026-11-02 修的真 bug）。
+
+## 身位口径（11-06）
+
+`verdict` 的「放弃」按**同题材**身位判（`RELAY_FORECAST_LINE_POS`，默认开），
+⛔ 不再由全市场最高板一票否决 —— 跨题材没有传导关系。详见 `line_gap_of` 上方注释。
 
 ## 只读边界
 
@@ -38,9 +48,12 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import statistics
 from pathlib import Path
 from typing import Any
+
+from core import expected_gap as _eg        # 11-05 用户纠偏：质量预期开幅，同一事实源
 
 SCHEMA = "relay_forecast_v1"
 
@@ -193,6 +206,8 @@ def build_model(samples: list[dict] | None = None, *, cutoff: str | None = None)
                 cnt[b] = cnt.get(b, 0) + 1
         nb = len(gaps) or 1
 
+        # ⛔ 「红开 0~5%」统计子集，**不是**全部可成交（11-05 删线后 5% 不再等于买不到；
+        #    低开也能买）。保留此定义只为与历史归档口径可比，卡面须写明是这一档的胜率。
         buyable = [x for x in g
                    if 0 < (_num(x.get("open_gap")) or 0) <= 5
                    and x.get("relay_return") is not None]
@@ -243,21 +258,107 @@ def build_model(samples: list[dict] | None = None, *, cutoff: str | None = None)
                                 "end": dates[-1] if dates else None}}}
 
 
+# ── 同题材身位（11-06 用户拍板 A 的延伸）─────────────────────────────
+# 用户原话：「有时候龙头，比如说板块之间非板块之间的切换，比如说你传媒板块你已经涨了
+#   五板龙头了，但是光伏板块才一个板，这种身位差其实是没有影响的呀，它是走一个新的逻辑，
+#   甚至说可以做一个资金的承接方向，你这种身位差估计只能在同一个板块里面适用适用，
+#   不同板块之间它是没有关系的」
+#
+# ⇒ 选股卡这枚「放弃」标签原本由 `gap_to_top >= 2`（**全市场**最高板）触发，
+#   与 11-06 上午刚改掉的 ⑪b 身位闸同源同病。35 日实测（`scripts/research_position_gap.py`
+#   C 段 / `cache/research/position_gap_bt.json`）：
+#
+#   | 三桶 | 市场分母（旧） | 题材分母（新） |
+#   |---|---|---|
+#   | 最高板 | n=13 +1.77% / 53.8% | n=289 −1.10% / 40.1% |
+#   | 差1板  | n=20 −2.89% / 35.0% | n=103 **+0.52% / 53.4%** |
+#   | 差≥2板 | n=512 −0.93% / 41.8% | n=153 **−1.62% / 37.3%** |
+#   | 区分度 | **0.6pct**（≈抛硬币） | **6.3pct** |
+#
+#   relay 自己的旧可买口径 `0<gap≤5` 下更极端：题材分母 保留 +50.9%(n=179) vs
+#   放弃 32.8%(n=67) = **18.1pct**；市场分母「保留」只剩 n=7，不可用。
+#
+# ⛔ **不改统计模型本身**：`build_model` 的分组 key 仍是市场分母（归档样本 370 条只带
+#   `sector`、没有题材，plates 快照仅近 15 天无法回填）。本开关只改 verdict 的**判据**，
+#   `buy_win` 等数字来源不变。
+RELAY_FORECAST_LINE_POS = os.environ.get("RELAY_FORECAST_LINE_POS", "1") != "0"
+
+
+def line_gap_of(row: dict, theme_max_boards: int | None = None) -> tuple[int | None, int | None]:
+    """同题材身位差 → (line_gap, theme_max_boards)。算不出 → (None, None)。
+
+    取数优先级：`row["line_gap"]`（调用方已算）→ `row["theme_max_boards"]`
+    → 入参 `theme_max_boards`。⛔ 缺题材就返回 None（不裁决），绝不退回行业 sector。
+    """
+    g = _num(row.get("line_gap"))
+    if g is not None:
+        return int(g), _num(row.get("theme_max_boards"))
+    boards = int(_num(row.get("boards")) or 0)
+    tm = _num(row.get("theme_max_boards"))
+    if tm is None:
+        tm = _num(theme_max_boards)
+    if not boards or tm is None or tm < boards:
+        return None, None
+    return int(tm) - boards, int(tm)
+
+
 # ── 单票推测 ────────────────────────────────────────────────────────
-def forecast_one(row: dict, market_max: int, model: dict | None = None) -> dict:
-    """单只候选的次日推测（纯函数·不改入参）。`row` 可以是候选 dict 或台账行。"""
+def forecast_one(row: dict, market_max: int, model: dict | None = None, *,
+                 theme_max_boards: int | None = None,
+                 line_pos: bool | None = None) -> dict:
+    """单只候选的次日推测（纯函数·不改入参）。`row` 可以是候选 dict 或台账行。
+
+    `theme_max_boards`：该票所属炒作题材昨日最高板（由调用方按选股宝 plates 算好注入）。
+    """
+    use_line = RELAY_FORECAST_LINE_POS if line_pos is None else bool(line_pos)
     model = model if model is not None else build_model()
     boards = int(_num(row.get("boards")) or 0)
     gtt = row.get("gap_to_top")
     gap_to_top = int(gtt) if gtt is not None else max(0, int(market_max or 0) - boards)
+    line_gap, theme_max = line_gap_of(row, theme_max_boards)
     fcnt = factor_count(row)
     key = (pos_key(gap_to_top), "封板强(≥3)" if fcnt >= 3 else "封板弱(≤2)")
     g = (model.get("groups") or {}).get(key) or {}
 
     promo_board = ((model.get("by_boards") or {}).get(boards) or {}).get("promo")
     reasons: list[str] = []
+    pos_basis = "line" if (use_line and line_gap is not None) else "market"
 
-    if gap_to_top >= 2:
+    if pos_basis == "line":
+        # 同题材身位优先 —— 只有「在本题材里真是后排」才判放弃
+        if line_gap >= 2:
+            verdict = VERDICT_DROP
+            reasons.append(
+                f"{theme_max} 板是本题材最高、它 {boards} 板＝这条线第 {line_gap + 1} 档；"
+                f"同题材身位差 ≥2 这档 35 日实测 −1.62%、胜 37.3%"
+                f"（同题材差 1 板那档是 +0.52%/53.4%）")
+        elif boards >= CLIFF_BOARDS and (promo_board or 0) < CLIFF_PROMO_MAX:
+            verdict = VERDICT_WATCH
+            reasons.append(f"{boards} 板是历史崖位：这档晋级率只有 {promo_board}%"
+                           f"（{CLIFF_BOARDS} 板以上断崖）")
+            if g.get("buy_win") is not None:
+                reasons.append(f"即便买到，这组胜率 {g.get('buy_win')}%、平均 {g.get('buy_avg')}%")
+        elif line_gap == 1:
+            verdict = VERDICT_WAIT
+            reasons.append(
+                f"本题材最高 {theme_max} 板、它 {boards} 板＝只差 1 板（最快的一档）；"
+                f"这档 35 日实测 +0.52%、胜 53.4%，是身位里最好的一档")
+        else:                                   # line_gap == 0：自己就是这条线的锚
+            verdict = VERDICT_WATCH
+            reasons.append(
+                f"它自己就是本题材最高板（{boards} 板）：这档 35 日实测 −1.10%、胜 40.1%，"
+                f"不是不好，是没有「差 1 板」那档的确定性 → 先看不动")
+    elif use_line:
+        # 有开关但算不出题材（行业兜底/数据缺）→ ⛔ 不裁决，不拿全市场差否决
+        if boards >= CLIFF_BOARDS and (promo_board or 0) < CLIFF_PROMO_MAX:
+            verdict = VERDICT_WATCH
+            reasons.append(f"{boards} 板是历史崖位：这档晋级率只有 {promo_board}%"
+                           f"（{CLIFF_BOARDS} 板以上断崖）")
+        else:
+            verdict = VERDICT_WATCH
+            reasons.append("缺题材归属（落行业兜底）→ 身位不裁决；"
+                           f"全市场身位差 {gap_to_top} 板只是参照，不据此否决")
+    elif gap_to_top >= 2:
         verdict = VERDICT_DROP
         reasons.append(f"身位差 {gap_to_top} 板＝后排；这档真买到时胜率只有 "
                        f"{g.get('buy_win')}%、平均 {g.get('buy_avg')}%")
@@ -283,6 +384,9 @@ def forecast_one(row: dict, market_max: int, model: dict | None = None) -> dict:
         "schema": SCHEMA,
         "boards": boards,
         "gap_to_top": gap_to_top,
+        "line_gap": line_gap,
+        "theme_max_boards": theme_max,
+        "position_basis": pos_basis,
         "factor_count": fcnt,
         "group": f"{key[0]}·{key[1]}",
         "group_n": g.get("n"),
@@ -300,13 +404,27 @@ def forecast_one(row: dict, market_max: int, model: dict | None = None) -> dict:
         "by_band": g.get("by_band") or {},
         "verdict": verdict,
         "reasons": reasons,
+        # 🎯 11-05 用户纠偏：同一模型里再挂一份「按昨日封板质量，今天该开多少」。
+        #    `gap_median` 是「身位×封板强弱」分组的历史开幅中位数（会到 9.98%，
+        #    与 >5% 不买冲突）；`expected_gap_pct` 是六质量因子的收缩加性点估计，
+        #    09:25 拿它跟实测开幅相减才是分层判据。⛔ 两者用途不同，不互相覆盖。
+        "expected_gap_pct": _eg.expected_gap_pct(row),
+        "expected_gap_factors": _eg.detail(row)["expected_gap_factors"],
         "note": "只预测「明早大概怎么开、这档历史胜率」，⛔ 不是买入指令",
     }
 
 
 def annotate(rows: list[dict], market_max: int | None = None, *,
-             model: dict | None = None, cutoff: str | None = None) -> list[dict]:
-    """给候选原地挂 `forecast`（保持原顺序、不动其他字段、失败不打断主链）。"""
+             model: dict | None = None, cutoff: str | None = None,
+             theme_max_boards: dict[str, int] | None = None,
+             theme_of: dict[str, str] | None = None,
+             line_pos: bool | None = None) -> list[dict]:
+    """给候选原地挂 `forecast`（保持原顺序、不动其他字段、失败不打断主链）。
+
+    `theme_max_boards`：`{题材名: 昨日最高板}`（调用方按选股宝 plates 算）。
+    `theme_of`：`{代码: 题材名}`（缺省读候选行自己的 `theme`/`core_theme`）。
+    ⛔ 两者都缺 → 该票 `position_basis=market` → 不裁决，不退回行业 sector。
+    """
     if not rows:
         return rows
     try:
@@ -326,7 +444,12 @@ def annotate(rows: list[dict], market_max: int | None = None, *,
         if not isinstance(c, dict):
             continue
         try:
-            c["forecast"] = forecast_one(c, mm, m)
+            _code = str(c.get("code") or "")
+            _th = (theme_of or {}).get(_code) or str(
+                c.get("theme") or c.get("core_theme") or "").strip()
+            # 缺字段时也把可算出的 line_gap 写回行内，卡面/账本可直接读同一事实
+            _tm = (theme_max_boards or {}).get(_th) if (_th and theme_max_boards) else None
+            c["forecast"] = forecast_one(c, mm, m, theme_max_boards=_tm, line_pos=line_pos)
         except Exception as e:                               # noqa: BLE001
             c["forecast"] = {"schema": SCHEMA, "error": repr(e)}
     return rows
@@ -334,7 +457,12 @@ def annotate(rows: list[dict], market_max: int | None = None, *,
 
 # ── 展示（纯文本，颜色由调用方决定）──────────────────────────────────
 def line_for(cand: dict) -> tuple[str, str]:
-    """选股卡逐票一行 → (verdict, text)。无可推测时返回 ("", "")。"""
+    """选股卡逐票一行 → (verdict, text)。无可推测时返回 ("", "")。
+
+    ⛔ 11-05 用户删掉「5% 高开」这条绝对线后，「高开过 5%」**只是一个开幅分布事实**，
+    不再是「买不到」。今天唯一算买不到的是**竞价封死**（≥涨停−0.2pct），那要等 09:25
+    才有报价，盘后推不出来 → 所以这里只说分布，不贴买不到的结论。
+    """
     f = cand.get("forecast") or {}
     if not f or f.get("error") or f.get("gap_median") is None:
         return "", ""
@@ -343,14 +471,18 @@ def line_for(cand: dict) -> tuple[str, str]:
     p5 = f.get("p_over5")
     seg = [f"明早大概率开在 {med:+.1f}%"]
     if p5 is not None:
-        seg.append(f"{int(p5)}% 概率高开过 5%（买不到）")
-    if f.get("buy_win") is not None:
-        seg.append(f"这档真买到时胜率 {f['buy_win']}%（{f.get('buy_n')} 笔）")
+        seg.append(f"{int(p5)}% 概率高开过 5%")
+    # ⛔ 样本不足不报胜率：「100.0%（3 笔）」这种读数会误导（MIN_GROUP_N 同源纪律）
+    if f.get("buy_win") is not None and (f.get("buy_n") or 0) >= MIN_GROUP_N:
+        seg.append(f"红开 0~5% 这档胜率 {f['buy_win']}%（{f.get('buy_n')} 笔）")
     return v, "｜".join(seg)
 
 
 def summary_line(rows: list[dict]) -> str:
-    """选股卡顶部一句汇总：明天值得等几只、几只根本买不到。无数据 → ""。"""
+    """选股卡顶部一句汇总：明天值得等几只、几只根本买不到。无数据 → ""。
+
+    ⛔ 「高开过 5%」只作开幅分布提示，不写「买不到」（5% 线 11-05 已废）。
+    """
     fs = [r.get("forecast") or {} for r in rows or [] if isinstance(r, dict)]
     fs = [f for f in fs if f and not f.get("error") and f.get("gap_median") is not None]
     if not fs:
@@ -358,8 +490,8 @@ def summary_line(rows: list[dict]) -> str:
     wait = sum(1 for f in fs if f.get("verdict") == VERDICT_WAIT)
     watch = sum(1 for f in fs if f.get("verdict") == VERDICT_WATCH)
     drop = sum(1 for f in fs if f.get("verdict") == VERDICT_DROP)
-    hard = sum(1 for f in fs if (f.get("p_over5") or 0) >= 50)
-    tail = f"；其中 {hard} 只多半高开过 5%（买不到）" if hard else ""
+    high = sum(1 for f in fs if (f.get("p_over5") or 0) >= 50)
+    tail = f"；其中 {high} 只多半高开过 5%" if high else ""
     return (f"🔮 明早：可等 {wait} 只 ｜ 只观察 {watch} 只 ｜ 放弃 {drop} 只{tail}")
 
 

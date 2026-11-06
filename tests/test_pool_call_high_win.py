@@ -12,10 +12,18 @@
      · 关闭 `POOL_CALL_VOLUME_SOFT` → 恢复「量不够即观察」
 
 全隔离：不读真实 cache / 不联网。
+
+⚠️ 本文件锁 2026-11-02 旧口径（量能 0.7 单线 / 软化半仓）。11-05 新规则
+   （量能分档区间 / 不限制只数 / 平均分配仓位）见 test_volume_bands_even_allocation.py；
+   这里显式跑在回退口径，同时验证新开关可逆。
 """
 import sys
 from contextlib import contextmanager
 from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.usefixtures("legacy_pool_call_rules")
 
 WC = Path(__file__).resolve().parents[1] / "wealth_code"
 if str(WC) not in sys.path:

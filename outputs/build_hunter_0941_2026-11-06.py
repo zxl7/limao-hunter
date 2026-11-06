@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""盘中猎手-0930 · 2026-11-06 09:41 卡生成（数据源：latest.json 09:41:06 + feedback_matrix 09:41:14）"""
+import json
+
+ASOF = "09:41"
+
+elements = []
+
+def div(content):
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": content}})
+
+def hr():
+    elements.append({"tag": "hr"})
+
+# ① 结论定调
+div("**① 结论定调｜回避：今天没有能接的票。**\n"
+    "<text_tag color='green'>晋级率 9.5%（近 10 日门槛 20.5%）｜全市场只有 448 只在涨、4784 只在跌</text_tag>\n"
+    "隔夜纳指 -5.52%、韩国股市熔断，A股低开 2.11% 后拉回，但拉的是权重不是题材，钱一分没往涨停里加。")
+hr()
+
+# ② 信号摘要
+div("**② 信号摘要**\n"
+    "<text_tag color='green'>情绪演变：首卡基准（昨收 5.6/10·修复）→ 1.8/10·退潮｜转差 3.8 档（涨停 84→13）</text_tag>\n"
+    "🆕新 0｜🔥跃升 1（大消费）｜↗持续 3")
+div("可买 Top3：\n"
+    "<text_tag color='purple'>金刚光伏 +9.81% 现价20.49〔光伏·20cm 未封〕</text_tag>\n"
+    "<text_tag color='purple'>高特电子 +10.76% 现价23.06〔国产芯片·20cm 未封〕</text_tag>\n"
+    "<text_tag color='purple'>赛伍技术 +3.56% 现价11.05〔光伏·未封〕</text_tag>")
+hr()
+
+# ③ 题材与情绪核心
+div("**③ 题材与情绪核心**\n"
+    "<text_tag color='red'>市场总核心：闽发铝业(002578) 5 连板〔光伏·铝型材〕｜生命周期：加速</text_tag>")
+div("11-02 起连续 5 个交易日涨停（源端写 10 天 6 板，10-26 另有一板）；09:25:00 就封、封单 3.79 亿，换手 10.5%。"
+    "浙文影业同为 5 连板，最高位两人并排、没有独苗。")
+
+div("<text_tag color='red'>光伏 涨停5只〔↗持续〕｜均换 11.6%｜动因：民主党横扫美国会两院，IRA 补贴被砍的风险解除，隔夜美股 First Solar 涨超 11%</text_tag>\n"
+    "<text_tag color='red'>闽发铝业(002578) 10天6板 +10.11%｜现价5.01〔带领性►·突破性►·唯一性✗〕</text_tag>")
+div("跟风 永臻股份 4 天 4 板 +10.03%、海源复材 3 天 3 板 +9.97%、安彩高科 首板 +9.91%、贝特利 20cm 3 天 3 板。\n"
+    "💡 13 只涨停里 5 只在这条线上，是全场唯一有高度也有扩散的方向。\n"
+    "⚠️ <text_tag color='red'>这条线今天没有钱：流入榜前十只有光伏辅材 +0.7 亿，涨的是外围映射不是资金。</text_tag>\n"
+    "🎯 4 只已封的不追，只看没封的两只 20cm 回踩｜止损：-3%")
+
+div("<text_tag color='red'>大消费 涨停2只〔🔥跃升·1→2〕｜均换 3.0%｜动因：《广东省扩大消费实施方案》印发</text_tag>\n"
+    "<text_tag color='red'>南侨食品(605339) 2天2板 +10.03%｜现价15.80〔带领性►·突破性✗·唯一性✗〕</text_tag>")
+div("跟风 龙江交通 4 天 2 板 +10.12%、换手 5.8%；南侨 09:25 秒封但换手只有 0.3%，是没人卖的封板。\n"
+    "💡 两只都不是空间票，最高 2 板，是防守资金找低位。\n"
+    "🎯 不参与，2 板位置在大跌日没有溢价")
+
+div("<text_tag color='red'>短剧/互动影游 涨停2只〔↗持续〕｜均换 2.5%｜动因：AI 短剧出海与商业化提速</text_tag>\n"
+    "<text_tag color='red'>浙文影业(601599) 5天5板 +9.96%｜现价5.08〔带领性►·突破性✗·唯一性✗〕</text_tag>")
+div("跟风只有城市传媒首板 +9.93%，昨天 2 只今天还是 2 只，没有扩散。\n"
+    "💡 5 连板靠的还是 AI 短剧这条老逻辑，今天没有新催化。\n"
+    "⚠️ <text_tag color='red'>和光伏龙头并排 5 板，高度没有唯一性。</text_tag>\n"
+    "🎯 不追")
+
+div("↗ 机器人 1 只（春光科技 3 天 3 板），与开盘一致、没有扩散。")
+
+div("📌 依据：唯一性弱（两只 5 连板并排）｜带领性中（闽发 09:25 秒封、封单 3.79 亿，带出 4 只跟风）｜突破性弱（5 板是今天最高，大盘 -2.5% 不给 6 板空间）")
+div("📌 明日看点：闽发明天能不能封 6 板，以及光伏会不会只剩它一只还在封。")
+hr()
+
+# ④ 核心标的
+div("**④ 核心标的**\n"
+    "<text_tag color='red'>国光电器(002045) +10.00% 现价10.89〔智能眼镜·5天3板〕</text_tag>\n"
+    "<text_tag color='red'>立新能源(001258) +10.00% 现价9.57〔智能电网·首板〕</text_tag>\n"
+    "<text_tag color='red'>润建股份(002929) +6.40% 现价61.04〔算力运维·未封〕</text_tag>")
+hr()
+
+# ⑤ 板块资金流向（fields 交替双列）
+div("**⑤ 板块资金流向**")
+inflow = [("黄金", 1.8, False), ("贵金属", 1.5, False), ("铁路公路", 1.0, False),
+          ("风力发电", 1.0, False), ("水力发电", 0.9, False)]
+outflow = [("电子", -96.2, False), ("通信技术", -86.9, True), ("5G概念", -80.6, False),
+           ("半导体概念", -71.5, True), ("华为概念", -70.5, False)]
+fields = []
+for i in range(5):
+    n_in, v_in, f_in = inflow[i]
+    n_out, v_out, f_out = outflow[i]
+    star_in = "⭐" if f_in else ""
+    star_out = "⭐" if f_out else ""
+    fields.append({"is_short": True,
+                   "text": {"tag": "lark_md",
+                            "content": f"<text_tag color='red'>{n_in}{star_in} +{v_in:.1f}亿</text_tag>"}})
+    fields.append({"is_short": True,
+                   "text": {"tag": "lark_md",
+                            "content": f"<text_tag color='green'>{n_out}{star_out} {v_out:.1f}亿</text_tag>"}})
+elements.append({"tag": "div", "fields": fields})
+hr()
+
+# ⑥ AI综合研判
+div("**⑥ AI综合研判**")
+div("**① 主线定性：**\n"
+    "<text_tag color='purple'>⭐ 光伏＝确定性最强主线</text_tag>：5 只涨停占全场四成，有 5 连板、4 连板还有首板，唯一立得住的线。\n"
+    "<text_tag color='blue'>短剧＝确定性次强</text_tag>：2 只、一个 5 连板，只有一只跟风。\n"
+    "<text_tag color='yellow'>大消费、机器人＝只能低位跟</text_tag>：2 只和 1 只，最高 2 板，不成线。")
+div("**② 资金与情绪：**\n"
+    "钱在从算力硬件整条线撤——电子、通信、5G、半导体、华为、CPO 全在流出前头，跌停两只（东山精密、剑桥科技）也在这条链上；"
+    "流进来的只有黄金、贵金属、电力这类避险，加起来不到 6 亿。低开后指数拉回一半，是权重护盘，不是题材回暖。")
+div("**③ 风险与纪律：**\n"
+    "A. 昨天 84 只涨停今天只剩 13 只，9 只核按钮、19 只大跌，接力成功率不到一成，今天任何补涨都接在刀口上。\n"
+    "B. 两只 5 连板并排，高度没有唯一性；大盘 -2.5% 不给 6 板，光伏龙头一旦开板，整条线今天作废。\n"
+    "C. 隔夜纳指 -5.52%、韩国熔断，外围还在跌，今天的低开高走是修复不是反转，别把反弹当启动。")
+
+card = {
+    "title": f"盘中猎手·增量 | {ASOF} | 光伏·闽发铝业+10.11% | 涨停13",
+    "color": "red",
+    "elements": elements,
+    "note": "选股宝+东财+猎手 | 2026-11-06 09:41:06行情\n免责声明：以上内容基于公开数据和量化分析，仅供参考，不构成投资建议。市场有风险，投资需谨慎。",
+}
+
+with open("/tmp/limao_card.json", "w", encoding="utf-8") as f:
+    json.dump(card, f, ensure_ascii=False)
+print("elements:", len(elements))
+print("title:", card["title"])

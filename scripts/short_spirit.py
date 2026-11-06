@@ -241,6 +241,10 @@ RELAY_TRIGGER_TYPES = ("涨停", "接近涨停")
 # 指纹变了（如后排票涨停进前排）→ 立即重发；指纹不变 → 须过冷却才重发，防同板块连卡刷屏。
 # 设为 0 = 每张相关卡都显示（等于关闭限频）。
 RELAY_COOLDOWN_MIN = 20
+# 2026-11-05：接力段「身份 vs 状态」分离。关掉回到旧指纹判定（含涨幅抖动）。
+ENABLE_SPIRIT_RELAY_IDENTITY_DELTA = True
+# 2026-11-05：后排候选（跟风/今日可能涨停）当日已展示不重展。关掉回到每卡全量重算。
+ENABLE_SPIRIT_BACKSEAT_DELTA = True
 
 # ── 低强度合并（2026-09-17 用户「前后端都改」）──────────────────────────────
 # 用户规则：① 低强度推送合并（1 分钟内只推了一个、强度不高的合并）
@@ -604,7 +608,8 @@ def hot_keywords(d):
         if nm and nm != "其他":
             kws.add(nm)
             kws.add(nm.replace("概念", "").replace("板块", ""))
-    for x in ((d.get("sector_risk") or {}).get("inflow_top") or [])[:5]:
+    from common.em_flow import sector_risk_for_decision
+    for x in (sector_risk_for_decision(d.get("sector_risk")).get("inflow_top") or [])[:5]:
         nm = str(x.get("name") or "")
         if nm:
             kws.add(nm)
@@ -757,7 +762,10 @@ def _relay_state_path() -> Path:
 
 
 def _relay_fingerprint(r) -> str:
-    """内容指纹（09-15 铁律）：板块 + 前排 code + 涨停家数 + 身位 codes + 可接力 codes@涨幅。"""
+    """内容指纹（09-15 铁律）：板块 + 前排 code + 涨停家数 + 身位 codes + 可接力 codes@涨幅。
+
+    ⚠️ 含 `pct`（状态量），保留作诊断与回滚兼容；**是否重发展示改由 `_relay_identity` 决定**。
+    """
     fr = r.get("front") or {}
     return "|".join([
         str(r.get("sector") or ""), str(fr.get("code") or ""), str(r.get("zt_count") or 0),
@@ -766,21 +774,57 @@ def _relay_fingerprint(r) -> str:
     ])
 
 
-def _relay_should_emit(r, now):
-    """限频判定（返回 (是否发, 指纹)）。⛔ = 冷却 ∧ 指纹变化（禁纯时间冷却）。"""
-    fp = _relay_fingerprint(r)
-    if RELAY_COOLDOWN_MIN <= 0:
-        return True, fp
+def _relay_identity(r) -> str:
+    """方向身份：是哪个方向、龙头是谁、梯队与可参与的是哪几只。
+
+    ⛔ 不含 `pct`（涨幅每轮都在抖）、不含 `zt_count`（家数每分钟都在变）。
+       身份变了才叫「换人 / 换方向」；状态抖动只能等冷却，不许绕过限频。
+    """
+    fr = r.get("front") or {}
+    return "|".join([
+        str(r.get("sector") or ""), str(fr.get("code") or ""),
+        ",".join(str(x.get("code")) for x in (r.get("ladder") or [])),
+        ",".join(str(x.get("code")) for x in (r.get("tradable") or [])),
+    ])
+
+
+def _relay_load_state(now) -> dict:
+    """按日读取限频状态。跨日旧档一律作废。
+
+    11-05 实测 `short_spirit_relay_state.json` 里还留着 10-09 / 10-12 的板块记录，
+    平铺结构从不清理 → 改为 `{date, sectors:{...}}`；旧平铺档能读，但不跨日沿用。
+    """
     try:
         state = json.loads(_relay_state_path().read_text(encoding="utf-8"))
         if not isinstance(state, dict):
             state = {}
     except Exception:
         state = {}
-    prev = state.get(str(r.get("sector") or "")) or {}
-    if prev.get("sig") != fp:          # 内容变了 → 立即发（信息不丢）
+    today = now.strftime("%Y-%m-%d")
+    if state.get("date") != today:
+        return {"date": today, "sectors": {}}
+    sec = state.get("sectors")
+    if not isinstance(sec, dict):
+        sec = {k: v for k, v in state.items() if isinstance(v, dict)}
+    return {"date": today, "sectors": sec}
+
+
+def _relay_should_emit(r, now):
+    """限频判定（返回 (是否发, 指纹)）：身份变了立即发，状态抖动按冷却发。
+
+    ⛔ 旧版把 `code@pct` 写进指纹 → 后排涨幅每轮微动就判「内容变了」→ 立即绕过冷却。
+       11-04 实测同一板块「机器人」一天展示 7 次，多数只是涨幅/家数在抖。
+    """
+    fp = _relay_fingerprint(r)
+    if RELAY_COOLDOWN_MIN <= 0:
         return True, fp
-    try:                                # 内容没变 → 须过冷却
+    prev = _relay_load_state(now)["sectors"].get(str(r.get("sector") or "")) or {}
+    if not ENABLE_SPIRIT_RELAY_IDENTITY_DELTA:
+        if prev.get("sig") != fp:      # 回滚路径：沿用旧指纹判定
+            return True, fp
+    elif prev.get("ident") != _relay_identity(r):
+        return True, fp                # 换人 / 换梯队 / 换可参与票 → 信息不丢
+    try:
         last = datetime.strptime(str(prev.get("ts") or ""), "%Y-%m-%d %H:%M:%S")
         return (now - last).total_seconds() >= RELAY_COOLDOWN_MIN * 60, fp
     except Exception:
@@ -788,14 +832,12 @@ def _relay_should_emit(r, now):
 
 
 def _relay_mark(r, fp, now) -> None:
-    """记录本次已发（指纹 + 时间）。"""
-    try:
-        state = json.loads(_relay_state_path().read_text(encoding="utf-8"))
-        if not isinstance(state, dict):
-            state = {}
-    except Exception:
-        state = {}
-    state[str(r.get("sector") or "")] = {"sig": fp, "ts": now.strftime("%Y-%m-%d %H:%M:%S")}
+    """记录本次已展示（身份 + 内容指纹 + 时间），按日切分。"""
+    state = _relay_load_state(now)
+    state["sectors"][str(r.get("sector") or "")] = {
+        "ident": _relay_identity(r), "sig": fp,
+        "ts": now.strftime("%Y-%m-%d %H:%M:%S"),
+    }
     p = _relay_state_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1438,7 +1480,15 @@ def _leaders_as_pool(d):
             "main_flow_yi": 0.0,
             "industry": str(l.get("sector") or ""),
         })
-    return out
+    # 2026-11-05：latest.leaders 可能同一票多条（不同榜单），兜底池又直接 `pool + fb_pool`
+    #   → 同卡出现两行完全一样的票（09:57 实测 002428）。源头按 code 去重。
+    seen, uniq = set(), []
+    for row in out:
+        if row["code"] in seen:
+            continue
+        seen.add(row["code"])
+        uniq.append(row)
+    return uniq
 
 
 def _zt_observe_codes(pool, signals):
@@ -1783,7 +1833,7 @@ def build_signals(d, now, cfg):
     #   ⛔ 只改展示聚合的数据源，不改推送名额（max_signals / top_per_sector）、不改排序、不改评分。
     #   ⚠️ 走模块级缓存而非第 5 个返回值：本文件 POOL_CACHE / FETCH_STATUS 同套路，
     #      且 build_signals 返回值被 5 处测试 mock，改签名等于无谓地打断它们。
-    GROUP_VIEW_CACHE["view"] = ([_mk(s) for s in keep]
+    GROUP_VIEW_CACHE["view"] = (_dedup_signals([_mk(s) for s in keep])
                                 if ENABLE_SPIRIT_GROUP_FULL_POOL else None)
     # ⛔ 涨停当下性硬门（2026-09-07 用户「时间顺序第一」）：剔除上轮已观测为涨停的存量票
     if ENABLE_SPIRIT_TIMELINESS:
@@ -1913,6 +1963,38 @@ def _pct_tag(pct: float) -> str:
     if pct < 0:
         return f"<text_tag color='green'>{pct:+.2f}%</text_tag>"
     return f"<text_tag color='neutral'>{pct:+.2f}%</text_tag>"
+
+
+def _dedup_signals(signals):
+    """同轮同 code 只保留一条（入参通常已按 strength 降序 → 保留首条）。
+
+    2026-11-05 实测 09:57 一张卡里 `002428` 出现两行完全一样的「接近涨停」：
+    池由涨幅榜 + 涨停池 + leaders 兜底三路拼接，任一路径重复都会让同一票
+    占两个名额、卡面重两行、板块联动家数虚高。⛔ 只做身份去重，不改排序/评分/名额。
+    """
+    out, seen = [], set()
+    for s in signals or []:
+        code = str(s.get("code") or "")
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        out.append(s)
+    return out
+
+
+def _filter_backseat_shown(backseat, shown):
+    """后排候选跨卡增量：当日已展示过的 code 不再重复列。纯函数，不修改入参。
+
+    ⛔ 只过滤展示候选，不改 `backseat_pick` 的筛选逻辑，也不碰主信号推送。
+    """
+    if not isinstance(backseat, dict) or not shown:
+        return backseat
+    seen = {str(c) for c in shown}
+    out = dict(backseat)
+    for key in ("candidates", "potential"):
+        out[key] = [r for r in (out.get(key) or [])
+                    if str(r.get("code") or "") not in seen]
+    return out
 
 
 def _sector_group_summary(signals, *, merge_family=None):
@@ -2102,7 +2184,8 @@ def _linkage_delta(summary, sent):
     return rows[:SECTOR_GROUP_MAX], {row[0]: updates[row[0]] for row in rows[:SECTOR_GROUP_MAX]}
 
 
-def build_card(signals, sess, now, relay=None, backseat=None, group_view=None, group_summary=None):
+def build_card(signals, sess, now, relay=None, backseat=None, group_view=None,
+               group_summary=None, shown_sink=None):
     """飞书卡（2026-08-18 用户定·向窗口卡事件流风格看齐）：
     按异动类型分组（🔥涨停/🚀冲板/⚡快速拉升），一行一只，字段压缩到一行。
     ⛔ 2026-08-25 修复（用户抓包「又忘了红涨绿跌」+「红色颜色不对」）：
@@ -2181,6 +2264,8 @@ def build_card(signals, sess, now, relay=None, backseat=None, group_view=None, g
                                 and _sector_match_any(_sec, str(c.get("sector") or ""))][:BS_FOLLOW_MAX]
                         if _fol:
                             _bs_followed |= {str(x.get("code") or "") for x in _fol}
+                            if shown_sink is not None:
+                                shown_sink.update(str(x.get("code") or "") for x in _fol)
                             lines.append("　　↳ 跟风：" + "｜".join(
                                 f"{x['name']}({x['code']}) {_pct_tag(float(x['pct'] or 0))}"
                                 for x in _fol))
@@ -2200,6 +2285,8 @@ def build_card(signals, sess, now, relay=None, backseat=None, group_view=None, g
             if _pot:
                 lines.append("")
                 lines.append("**📈 今日可能涨停（后排）**：")
+                if shown_sink is not None:
+                    shown_sink.update(str(c.get("code") or "") for c in _pot)
                 for c in _pot:
                     _why = str(c.get("why") or "")
                     if float(c.get("vol_ratio") or 0) > 0:      # 量比有数据才写「温和放量」
@@ -2467,6 +2554,9 @@ def _run(args):
         signals = signals + sig_down
         kept += kept_d
         total += total_d
+    # ⛔ 2026-11-05：上涨/下跌两路 + 三路池源合并后，同 code 只留一条。
+    #   09:57 实测同一张卡把 002428 推了两行。此处是唯一装配点，覆盖审计/沉淀/推送池。
+    signals = _dedup_signals(signals)
     # 当日信号沉淀（2026-09-21 用户「做好沉淀」）：`signals` 只表达「本轮新触发」，
     # 覆盖写后上一轮的触发会消失 → 前端一刷新列表就空。故另存一份当日累积。
     _prev = load_json(OUT_PATH) or {}
@@ -2568,12 +2658,18 @@ def _run(args):
             _backseat = backseat_pick(POOL_CACHE.get("up") or [], card_signals, d, sess, cfg)
         except Exception as e:
             print(f"[short_spirit] 后排预判降级(已忽略): {e}")
+        # 2026-11-05：后排/跟风候选当日已展示不重展（只影响附带段，不动主信号）。
+        if ENABLE_SPIRIT_BACKSEAT_DELTA and _backseat:
+            _backseat = _filter_backseat_shown(
+                _backseat, pushed.get("backseat_shown") or [])
     _group_view = GROUP_VIEW_CACHE.get("view")
     _group_rows, _group_updates = _linkage_delta(
         _sector_group_summary(_group_view if _group_view is not None else card_signals),
         pushed.get("linkage_sent") or {}) if ENABLE_SPIRIT_SECTOR_GROUP else ([], {})
+    _backseat_shown: set = set()
     card = build_card(card_signals, sess, now, relay=relay, backseat=_backseat,
-                      group_view=_group_view, group_summary=_group_rows)
+                      group_view=_group_view, group_summary=_group_rows,
+                      shown_sink=_backseat_shown if ENABLE_SPIRIT_BACKSEAT_DELTA else None)
     cf = ROOT / "cache" / "short_spirit_card.json"
     save_json(cf, card)
     # ⛔ 有界修复（2026-09-17）：入池后、任何发送尝试之前可靠落盘 pending（update_last=False）。
@@ -2583,6 +2679,10 @@ def _run(args):
     rc = __import__("os").system(f'"{sys.executable}" "{ROOT}/scripts/push_card.py" --webhook feishu_webhook_intraday "{cf}"')
     if rc == 0:
         pushed.setdefault("linkage_sent", {}).update(_group_updates)
+        # ⛔ 仅成功送达才登记「已展示」：发送失败下一轮仍可重新给出这些候选。
+        if ENABLE_SPIRIT_BACKSEAT_DELTA and _backseat_shown:
+            pushed["backseat_shown"] = sorted(
+                set(pushed.get("backseat_shown") or []) | _backseat_shown)
         pushed["codes"] = (pushed.get("codes", []) or []) + [s["code"] for s in card_signals]
         # 池内超出 max_signals 的部分保留，不丢（下次触发再推）
         pushed["pending"] = [s for s in pending if s["code"] not in {x["code"] for x in card_signals}]

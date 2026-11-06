@@ -79,8 +79,11 @@ def test_anchor_yizi_20cm():
 
 
 def test_anchor_big_gap_above_hard_line():
+    """高开 6%（超旧 5% 线）→ 仍是「大高开·压仓」档，⛔ 但不许再说买不到。"""
     r = ac.anchor_read(_q(10.0, 6.0), code="600001")
     assert r["attitude"] == ac.ATT_BIG_GAP
+    assert "买不到" not in r["note"], "11-05 删线后 5% 已不是买不到"
+    assert "压" in r["note"] or "下调" in r["note"]
 
 
 def test_anchor_strong_is_only_actionable_window():
@@ -111,7 +114,8 @@ def test_anchor_unknown_when_quote_missing():
     (ac.ATT_WEAK, False, ac.LINE_WATCH),
     (ac.ATT_YIZI, False, ac.LINE_BUY_NEIGHBOR),  # 买不到 → 打隔壁
     (ac.ATT_YIZI, True, ac.LINE_WATCH),          # 自己一字 → 自己买不到
-    (ac.ATT_BIG_GAP, False, ac.LINE_BUY_NEIGHBOR),
+    # ⚠️ 11-06：5% 线已废 → 大高开不等于买不到，仍打核心（只按 gap_weight 压仓）
+    (ac.ATT_BIG_GAP, False, ac.LINE_BUY_CORE),
     (ac.ATT_STRONG, False, ac.LINE_BUY_CORE),
     (ac.ATT_STRONG, True, ac.LINE_BUY_CORE),
     (ac.ATT_FLAT, True, ac.LINE_WATCH),

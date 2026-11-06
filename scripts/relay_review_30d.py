@@ -160,7 +160,7 @@ def relay_return(code: str, trade_date: str, prev_close: float | None = None
 
 
 _GAP_BUCKETS = [(None, -3.0, "低开>3%"), (-3.0, 0.0, "低开0~3%"), (0.0, 3.0, "高开0~3%"),
-                (3.0, 5.0, "高开3~5%"), (5.0, None, "高开>5%(买不到)")]
+                (3.0, 5.0, "高开3~5%"), (5.0, None, "高开>5%")]
 
 
 def _gap_label(g: float) -> str:
@@ -367,7 +367,7 @@ def analyze() -> dict:
             note = str(s.get("note") or "")
             label = "其它"
             for key, lab in [
-                ("高开超过 5%", "高开超5%买不到"),
+                ("高开超过 5%", "高开超5%(旧硬线已废)"),
                 ("低于昨天的预期", "低开/不及预期放弃"),
                 ("量不够", "竞价量不够像诱多"),
                 ("只买前", "名额已满排后面"),

@@ -60,20 +60,21 @@ if [ -f "$DONE_MARK" ]; then
     exit 0
 fi
 
-# AI 旁白：平台自动化 9:20 生成；缺失则无旁白推卡（数据模块完整，不阻塞）
-# ⚠️ 2026-09-10 修复（用户调试发现）：旁白文件是**固定路径**（/tmp/wealth_narr_verify.json），
-#    若平台任务当天写入晚于本脚本 09:26:05 推卡（09-10 实测 09:27 才落盘），旧文件仍在，
-#    原逻辑会无条件注入 → 卡上用**前一日陈旧旁白**（09-10 卡实为 09-08 旁白，定性矛盾）。
-#    改为「旁白文件 mtime 必须是今日」才注入，陈旧则弃用并记日志（宁缺勿错）。
+# AI 旁白（2026-11-05 综合口径）：平台任务 09:25 触发，生成 /tmp/wealth_narr_verify.json。
+# ⚠️ 竞价卡自 2026-10-21 起默认隐藏全局旁白块（VERIFY_CARD_HIDE 默认含 global），
+#    所以「平台旁白晚到」并不影响竞价卡数据完整性；历史那条 ⚠️ 告警属空转虚警。
+# 三条铁律：宁缺勿错、不用昨日定性冒充今日、不因旁白阻塞推卡。
+#   · 文件 mtime 为今日 → 注入当日 AI 旁白（cmd_verify 写 narrative_date=今日）
+#   · 陈旧 / 缺失     → 不传 --narratives；pipeline_verify 透传候选文件里的盘后旁白，
+#                        并显式写 narrative_date=候选日，卡面标注「上一交易日」口径
+#   · 想看旁白：把 VERIFY_CARD_HIDE 里的 global 去掉即可（不改本脚本）
 PUSH_ARGS="--fetch --push"
 NARR_DAY=$(TZ=Asia/Shanghai date '+%Y-%m-%d')
 if [ -f "$NARR" ] && [ "$(TZ=Asia/Shanghai date -r "$NARR" '+%Y-%m-%d' 2>/dev/null)" = "$NARR_DAY" ]; then
     PUSH_ARGS="$PUSH_ARGS --narratives $NARR"
-    log "使用 AI 旁白 ${NARR}（今日 ${NARR_DAY}）"
-elif [ -f "$NARR" ]; then
-    log "⚠️ 旁白文件陈旧（mtime 非今日 ${NARR_DAY}，平台任务未及时写入）→ 弃用，无旁白推卡"
+    log "使用今日 AI 旁白 ${NARR}"
 else
-    log "旁白文件缺失（平台自动化未生成），无旁白推卡"
+    log "AI 旁白未就绪（平台任务晚到/未生成）→ 沿用候选内盘后旁白并标注撰写日；不注入陈旧文件"
 fi
 
 # ⚠️ 2026-10-13 修复：原为 `$ROOT/wealth_code` → `pipeline_eod` 等 `from common.*`

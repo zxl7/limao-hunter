@@ -108,7 +108,8 @@ def _strong_sectors(cache_dir: Path) -> set[str]:
         lv = json.loads((cache_dir / "pulse_snapshots" / "latest.json").read_text(encoding="utf-8"))
     except Exception:
         return out
-    sr = (lv or {}).get("sector_risk") or {}
+    from common.em_flow import sector_risk_for_decision
+    sr = sector_risk_for_decision((lv or {}).get("sector_risk"))
     for s in (sr.get("inflow_top") or []):
         if s.get("name"):
             out.add(str(s["name"]))

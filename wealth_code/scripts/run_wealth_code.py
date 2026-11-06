@@ -322,6 +322,81 @@ def adapt_verify_card_snapshot(res: dict, verdict_loader=None, *, enabled=None):
     return card_res, {"source": "snapshot", "reason": "equal", "date": date10}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 竞价快照双守卫（2026-11-06 落地·此前自 10-23 连续挂账）
+#
+# 背景：`--fetch` 分支原先**无条件**覆写 `auction_quotes-<今日>.json`。launchd 09:26
+# 已用干净 09:25 报价冻结了 `pool_call`、发了卡、写了账本；本任务 09:20 兜底或人工
+# 复跑时再抓一次（尤其过了 09:30 抓到累计额污染的空响应）就会**覆写裁决/卡面/账本
+# 的共同输入**，破坏「三方同源」铁律。外勤天只能靠人工用东财 09:25 逐笔还原。
+#
+# 两道守卫：
+#   ① 已有今日非空快照 → 默认**不重抓、不覆写**，直接复用已冻结的那份
+#      （`VERIFY_FETCH_FORCE=1` 显式强制重抓）
+#   ② 本次抓空 → **绝不写空文件**覆盖已有数据（保留旧快照）
+# 回退：`VERIFY_FETCH_GUARD=0` → 逐字回到旧行为（无条件写）。
+# ─────────────────────────────────────────────────────────────────────────────
+def _fetch_guard_enabled() -> bool:
+    return os.environ.get("VERIFY_FETCH_GUARD", "1") not in ("0", "false", "False", "")
+
+
+def _read_auction_snapshot(path: Path) -> dict[str, Any]:
+    """读取已有竞价快照；不存在/解析失败/空 → {}。"""
+    try:
+        if not path.exists() or path.stat().st_size <= 0:
+            return {}
+        d = json.loads(path.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _snapshot_stamp(snap: dict[str, Any]) -> str:
+    """取快照里最具代表性的时间戳（用于日志说明「复用的是哪一批报价」）。"""
+    for v in (snap or {}).values():
+        if isinstance(v, dict):
+            t = str(v.get("time") or "")
+            if t:
+                return t
+    return "?"
+
+
+def _guard_auction_snapshot(
+    aq_path: Path,
+    quotes: dict[str, Any],
+    *,
+    force: bool = False,
+    guard: bool = True,
+) -> tuple[dict[str, Any], str]:
+    """竞价快照落盘守卫（纯逻辑·可单测）。
+
+    返回 (最终用于裁决的 quotes, 动作标记)：
+      · `reuse_existing` —— 已有今日快照，复用不覆写（本次抓到的丢弃）
+      · `keep_on_empty`  —— 本次抓空，保留旧快照，不写空文件
+      · `write`          —— 正常写盘
+      · `write_empty_blocked` —— 抓空且无旧快照，不落空文件
+      · `write_legacy`   —— 守卫关闭，逐字旧行为
+
+    ⛔ 三条铁律：①「已有今日快照即已冻结裁决/已发卡/已写账本的同源输入」；
+       ② 抓空永不覆盖旧数据；③ `guard=False` 必须逐字回退旧行为。
+    """
+    if not guard:
+        aq_path.write_text(json.dumps(quotes, ensure_ascii=False), encoding="utf-8")
+        return quotes, "write_legacy"
+    prev = _read_auction_snapshot(aq_path)
+    # ⛔ 抓空判定必须排在「已存在即复用」之前：两者结果都是保留旧快照，
+    #    但日志语义不同 —— 抓空要如实报「抓取失败/数据未落地」，否则会被
+    #    「正常复用」掩盖，运维将看不见当天抓价失败。
+    if not quotes:
+        if prev:
+            return prev, "keep_on_empty"
+        return {}, "write_empty_blocked"
+    if prev and not force:
+        return prev, "reuse_existing"
+    aq_path.write_text(json.dumps(quotes, ensure_ascii=False), encoding="utf-8")
+    return quotes, "write"
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     candidates_path = None
     if args.candidates:
@@ -377,8 +452,22 @@ def cmd_verify(args: argparse.Namespace) -> int:
         trade_date = _next_day(str(cand.get("date") or ""))
         # 持久化今日竞价快照（供次日 09:25 结算上一交易日收益）
         aq_path = ROOT / "cache" / f"auction_quotes-{trade_date}.json"
-        aq_path.write_text(json.dumps(quotes, ensure_ascii=False), encoding="utf-8")
         print(f"[VERIFY] 抓取竞价 {len(quotes)}/{len(codes)} 只（缺失 {len(codes)-len(quotes)}）")
+        # 🛡️ 双守卫（见 _guard_auction_snapshot 文档）：保护已冻结裁决/已发卡/已写账本的同源输入
+        _force = os.environ.get("VERIFY_FETCH_FORCE", "") in ("1", "true", "True")
+        _before = len(quotes)
+        quotes, _act = _guard_auction_snapshot(
+            aq_path, quotes, force=_force, guard=_fetch_guard_enabled())
+        if _act == "reuse_existing":
+            print(f"[VERIFY] 🛡️ 已有今日竞价快照 {len(quotes)} 只"
+                  f"（{_snapshot_stamp(quotes)} 起）→ 复用不覆写"
+                  f"（本次抓到 {_before} 只已丢弃；需强制重抓设 VERIFY_FETCH_FORCE=1）")
+        elif _act == "keep_on_empty":
+            print(f"[VERIFY] 🛡️ 本次抓空 → 保留已有 {len(quotes)} 只快照，不写空文件")
+        elif _act == "write_empty_blocked":
+            print("[VERIFY] ⛔ 本次抓空且无历史快照 → 不落空文件（裁决将基于空报价）")
+        elif _act == "write":
+            print(f"[VERIFY] 竞价快照落盘 {len(quotes)} 只（本次抓取 {_before} 只）")
         # 当日开盘信号（next_close 未知 → 收益 pending，净值次日结算）
         # 🎯 早盘接力·动态仓位（2026-10-13 用户需求）：真实 09:25 运行置 relay=True，
         #    用真实竞价读数 + 昨日强势 + 题材沉淀 + 净值回撤合成方案 → 动态裁断名额。

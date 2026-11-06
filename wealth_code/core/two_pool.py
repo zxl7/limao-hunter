@@ -23,6 +23,105 @@ def observation_only(row):
     return row.get("participation_eligibility") == "observe_only"
 
 
+# ── 🔁 盘后降级票的 09:25 复核类别（11-05 用户 A 方案·单一源）────────────────
+# 用户原话：「观察肯定也要再通过竞价这里再判一遍，而不是直接 pass 掉」。
+# ⛔ 保守白名单：只有明确属于「状态类」的降级才允许被竞价新证据解锁；
+#    其余一律只复核留痕、不放行。竞价能推翻市场/状态级判断，推不翻事实权限
+#    与有回测证据的个股赔率闸（10-28 冰点解冻同一铁律）。
+RECHECK_HARD_GROUPS = {"最高板封单过薄", "一字龙头", "一字核心", "容量核心"}
+RECHECK_HARD_MARKS = ("封单只占流通", "一字封死买不进", "一字封死、厚封单", "薄封")
+RECHECK_STATE_GROUPS = {"过筛未过·只观察"}
+
+
+def repair_recheck_enabled() -> bool:
+    """「历史连板修复」组能否进 09:25 复核（2026-11-06 用户「可以放进来」）。
+
+    ## 为什么放开（`scripts/research_open_gap_band.py`，270 票次 / 28 交易日）
+
+    该组的盘后拒因固定是「逐日历史连板后断板再涨停；非价量N形态确认」——
+    **是一条量价形态条件，不是事实权限**，而 09:25 竞价本身就是最直接的量价证据，
+    恰好能推翻它。但原白名单没有这个分组，于是**整组 8 只全部 restricted**，
+    连进完整裁决链的机会都没有。
+
+    实测这 8 只：**当日 +2.98% / 胜 75%**，是所有盘后分组里最好的一组
+    （对照：补充观察 −0.01%/胜47%、已获资格组 −1.67%/胜31%、容量核心 −1.13%）。
+    11-05 当天涨得最好的三只——德才股份 −0.10%→**+10.11%**、万向德农 −2.30%→+6.23%、
+    福莱新材 +2.81%→+6.99%——全在这个组里，全部被整组挡住。
+
+    ⛔ 只解锁「复核资格」，不放宽任何个股闸：DEV(gap_zone) / 量能 / 身位 / 龙一 /
+       薄封 / 顶部空间硬闸一律原样；身份仍是 observe_only，买不买由竞价现场判。
+    ⛔ 样本仅 8 只，`POOL_CALL_RECHECK_REPAIR=0` 可逐字回退。
+    """
+    return os.environ.get("POOL_CALL_RECHECK_REPAIR", "1") != "0"
+
+
+# 「历史连板修复」组的拒因关键词。⛔ 用整句特征而非「断板再涨停」四字——
+# 后者过宽，会把别的组的文案一起捞进来。
+RECHECK_REPAIR_GROUP = "历史连板修复"
+RECHECK_REPAIR_MARKS = ("非价量N形态确认", "断板再涨停；")
+# 🔁 11-06 修文案匹配缺口：本元组是**拒因文案的关键词**，而 `daily_screen` 实际写出的
+#    门槛类拒因还有「换手板成交额 X 亿 < 5亿（少数资金对倒，易被做局）」这一种写法
+#    （§三·G 换手板成交额门槛）。它属于用户定义的「门槛」类状态，却因字面不含
+#    「成交额/题材门槛」而掉出白名单，被判 restricted → 09:25 永远拿不到翻案资格。
+#    实测 11-06：贝特利(301697·涨 20%)、春光科技(603657·涨 10%) 均卡在此。
+#    ⛔ 仍受身位闸等既有闸约束：翻案只解锁「复核资格」，不等于能买。
+RECHECK_STATE_MARKS = ("同题材仅", "未成线", "成交额/题材门槛", "带动", "梯队", "情绪",
+                       "换手板成交额", "题材家数", "门槛未过")
+
+
+def recheck_class(row):
+    """返回 "state" / "hard" / "restricted"。
+
+    state      = 盘后状态类（题材家数/梯队/带动/情绪/门槛），09:25 可用真实报价复核解锁。
+    hard       = 事实权限或个股赔率硬闸（一字/688/ST/最高板薄封），竞价再强也不推翻。
+    restricted = 个股级准入未过（历史修复被前置准入/题材龙拦等）或分组无依据，
+                 仍逐票复核留痕，但不取得买入资格。
+    ⛔ 缺字段/老候选 → 一律 restricted（诚实降级，不误放行）。
+    """
+    code = str(row.get("code") or "")
+    name = str(row.get("name") or "").upper()
+    if code.startswith("688") or "ST" in name or row.get("is_one_word") is True:
+        return "hard"
+    group = str(row.get("watch_group") or "")
+    reason = str(row.get("watch_reason") or "")
+    if group in RECHECK_HARD_GROUPS or any(m in reason for m in RECHECK_HARD_MARKS):
+        return "hard"
+    # ⛔ 状态类优先于历史修复标记：分组白名单在前，历史修复票（分组「历史连板修复」）
+    #    不会因此被误放行；但「过筛未过·同题材未成线」的票不该只因带修复档案就被判死。
+    if group in RECHECK_STATE_GROUPS and any(m in reason for m in RECHECK_STATE_MARKS):
+        return "state"
+    # 🔓 2026-11-06 用户「可以放进来」：「历史连板修复」组（拒因＝量价形态条件）
+    #    从整组 restricted 改为可复核。⛔ 判据是「组名 ∧ 该组固定拒因」双命中，
+    #    不按「只要带修复档案就放行」——那会把别的组的修复票一起捞进来。
+    if (repair_recheck_enabled() and group == RECHECK_REPAIR_GROUP
+            and any(m in reason for m in RECHECK_REPAIR_MARKS)):
+        return "state"
+    repair = row.get("historical_repair")
+    if isinstance(repair, dict) and repair.get("blocked_by"):
+        return "restricted"
+    return "restricted"
+
+
+def recheck_unlock_enabled() -> bool:
+    """竞价复核翻案能否取得入场资格。`POOL_CALL_RECHECK_UNLOCK=0` 逐字回退。"""
+    return os.environ.get("POOL_CALL_RECHECK_UNLOCK", "1") != "0"
+
+
+def rechecked_entry(row: dict | None) -> bool:
+    """09:25 竞价复核**翻案票**的唯一判据（冻结件 / 决策行通用）。
+
+    只有「状态类观察票 + 竞价现场判为 participate」才解锁入场；身份仍是
+    `observe_only`、`buyable=False`，⛔ 不改候选、不改身份字段，只让下游三处
+    （验证记录 / AI 口径 / 账户账本）不再拿盘后身份把已翻案的票二次否决。
+    ⛔ hard / restricted / 复核后仍 watch 的票一律返回 False。
+    """
+    if not recheck_unlock_enabled() or not isinstance(row, dict):
+        return False
+    return (row.get("rechecked_from_observe") is True
+            and str(row.get("recheck_class") or "") == "state"
+            and str(row.get("view") or "") == "participate")
+
+
 def watch_kind(row):
     from core.seal_gate import seal_profile, THICK_SEAL_EXEMPT_PCT
     code = str(row.get("code") or "")
@@ -127,6 +226,10 @@ def finalize(relay, watch, *, stage):
             excluded.append({"code": row.get("code"), "name": row.get("name"), "stage": stage,
                              "reason": "不符合两类观察资格且未获有效接力资格", "high_win_gate": row.get("high_win_gate"),
                              "dragon_gate": row.get("dragon_gate"), "watch_reason": row.get("watch_reason")})
+    # 🔁 09:25 复核类别随候选一次定稿（⛔ 只标注，不改身份：
+    #    observe_only / buyable=False 原样保留，是否放行由竞价现场判）。
+    for r in anchors:
+        r["recheck_class"] = recheck_class(r)
     for bucket, rows in (("relay", kept), ("watch", anchors)):
         for i, r in enumerate(rows, 1):
             r[bucket + "_rank"] = i

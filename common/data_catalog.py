@@ -379,6 +379,13 @@ ROUTES: dict[str, dict[str, Any]] = {
         "owner": "全量过筛", "producer": "scripts/daily_screen.py(inferred)", "source": ["东财"],
         "schema": "decision.screen", "validation": "strict", "degrade": "需鉴权·空壳降级",
     },
+    "/api/decision/sector-gap-trace": {
+        "file": "cache/sector_gap_trace/daily_trace.json", "cadence": "daily",
+        "owner": "竞价三环影子", "producer": "scripts/sector_gap_daily_trace.py",
+        "source": ["09:25竞价快照", "选股宝题材快照", "前复权日K"],
+        "schema": "sector_gap_daily_trace_v1", "validation": "loose", "degrade": "需鉴权·空壳降级",
+        "note": "只读研究留痕：linked_would_cut 恒不改裁决；两套收益分列，不并入账户战绩",
+    },
     # 十四、AI / 账户（私有）
     "/api/ai/view": {
         "dir": "cache", "pattern": r"^ai_view_\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "limit": 20, "cadence": "daily",

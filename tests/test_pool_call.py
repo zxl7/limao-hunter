@@ -19,6 +19,13 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
+# 本文件锁 2026-11-04 及之前的旧口径（名额按 stance 截断 / 量能 0.7 单线）。
+# 11-05 新规则（量能分档 / 不限只数 / 均分仓位）见 test_volume_bands_even_allocation.py；
+# 这里显式跑在回退口径，同时验证新开关可逆。
+pytestmark = pytest.mark.usefixtures("legacy_pool_call_rules")
+
 WC = Path(__file__).resolve().parents[1] / "wealth_code"
 if str(WC) not in sys.path:
     sys.path.insert(0, str(WC))
@@ -60,6 +67,29 @@ def _core(code, name, boards, sector="电力"):
     归并后同属「绿电」——这正是 09-21 用户抓包的修复点。
     """
     return {"code": code, "name": name, "boards": boards, "sector": sector}
+
+
+def test_conditional_repair_can_participate_without_bypassing_quote_gates():
+    cand = _cand("600001", "修复样本")
+    cand.update(participation_eligibility="conditional", historical_repair={
+        "eligibility": "conditional", "blocked_by": [],
+        "evidence": {"quality": "ok", "asof": "2026-11-04"}})
+    payload = {"date": "2026-11-04", "relay": [], "watch": [cand]}
+    for gap, amount, expected in ((3, 2, "participate"), (3, 0.01, "watch"), (6, 2, "skip")):
+        res = pool_call.call_pool(payload, {"600001": _q(10, gap, amount)},
+                                 plan=_plan({"600001": "normal"}), line_cores={},
+                                 sector_flow={}, zt_series={}, zt_days=[])
+        assert res["views"]["600001"]["view"] == expected
+
+
+def test_conditional_repair_missing_evidence_stays_watch():
+    cand = _cand("600001", "修复样本")
+    cand["participation_eligibility"] = "conditional"
+    res = pool_call.call_pool({"date": "2026-11-04", "relay": [], "watch": [cand]},
+                             {"600001": _q(10, 3, 2)}, line_cores={}, sector_flow={},
+                             zt_series={}, zt_days=[])
+    assert res["views"]["600001"]["view"] == "watch"
+    assert "资格缺失" in res["views"]["600001"]["reason"]
 
 
 # ── 1) 裁决链七级 ─────────────────────────────────────────────────────

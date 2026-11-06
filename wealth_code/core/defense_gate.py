@@ -58,6 +58,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import date as _date
 from pathlib import Path
@@ -113,18 +114,53 @@ DIST_HIGH_POSITION_DEV10 = 40.0   # ⚠️ 旧口径：只认近 10 日相对指
 #   传艺科技 +10.92% 等大赢家 → 一并收紧会砍掉真龙头（新增 41 条拦截，已被数据否证）。
 
 # ── ① 环境名额降档 ───────────────────────────────────────────────────────────
+# ⚠️ 2026-11-06 用户「阈值可以降低门槛」→ 按样本重新校准（下表的证据见
+#    `scripts/research_defense_env.py` + `cache/research/defense_env_bt.json`）：
+#    · 1295 个「昨涨停·当日在册」票次 × 33 个交易日（09-14~11-05）；
+#    · 21 个带 defense 冻结件（10-09~11-06）逐日 env.level 对照当日池收益。
+#    结论一（条数门槛画错了）：命中 0 条 −2.58%/胜 35.5%（**最差**）、1 条 +0.22%、
+#      2 条 +0.20%/胜 58.3%、3 条 −0.19%、4 条 +0.70%/胜 60.0%（**最好**）、
+#      5 条 −0.77%、6 条 −2.15%、7 条 −0.38% —— 完全不单调。
+#      当前「≥3 条就 block」正好砍掉 3/4 这两组（即最好的一组）⇒ `ENV_BLOCK_HITS` 3→5。
+#    结论二（2 条不该压名额）：2 条组 +0.20%/胜 58.3% 是次好的一组
+#      ⇒ `ENV_DEFENSIVE_HITS` 2→3。
+#    结论三（连板红开阈值偏高）：阈值扫描「保留 − 剔除」＝ 0.20→+3.09pct、
+#      0.25→+2.06、0.30→+1.54、0.35→+1.49、0.40→+0.92
+#      ⇒ `ENV_LEADER_RED_OPEN_MIN` 0.35→0.25（同为方向正确的两条之一）。
+#    ⛔ **未动的四类**（样本仅 21 天，不足以下结论，只记录证据）：
+#      「做多气氛 ≤2」命中反而 +0.44pct、「晋级率 <25」+0.53pct、「核按钮 >8」+0.79pct、
+#      「真破位 ≥2」**+1.36pct（最强反向）** —— 四条方向都是反的（滞后指标 + 次日均值回归），
+#      但删判据的风险大于收益，留待更长样本再议。方向唯一正确的是「炸板率 ≥40」(−0.65pct)
+#      与「连板红开 ≤35%」(−0.81pct)，这次动的正是后者。
 ENV_SENTIMENT_MIN = 2.0           # 昨收情绪分 ≤ 该值算弱
 ENV_PROMOTE_MIN = 25.0            # 昨收晋级率（%）< 该值算弱
 ENV_NUKE_MAX = 8                  # 昨收核按钮（家）> 该值算弱
 ENV_BREAK_MIN = 2                 # 昨收真破位（家）≥ 该值算弱
 ENV_BROKEN_RATE_MAX = 40.0        # 昨收炸板率（%）≥ 该值算弱
 ENV_RED_OPEN_MIN = 0.40           # 今日开盘：昨涨停整体红开比例 ≤ 该值算弱
-ENV_LEADER_RED_OPEN_MIN = 0.35    # 今日开盘：昨连板红开比例 ≤ 该值算弱
+ENV_LEADER_RED_OPEN_MIN = 0.25    # 今日开盘：昨连板红开比例 ≤ 该值算弱（0.35→0.25·11-06）
 ENV_MIN_COVERAGE = 0.70           # 今日开盘读数样本覆盖 < 该值 → 不参与判定
-ENV_DEFENSIVE_HITS = 2            # 命中 ≥2 条 → 名额压到 1 只
-ENV_BLOCK_HITS = 3                # 命中 ≥3 条 → 当日不主动买（全置观察）
+ENV_DEFENSIVE_HITS = 3            # 命中 ≥3 条 → 名额压到 1 只（2→3·11-06）
+ENV_BLOCK_HITS = 5                # 命中 ≥5 条 → 当日不主动买（全置观察·3→5·11-06）
 DEFENSIVE_QUOTA_CAP = 1
 POST_HOLIDAY_GAP_DAYS = 4         # 上一交易日距今 ≥4 个自然日 → 长假后首日（只提示）
+
+
+def _env_num(name: str, default: float) -> float:
+    """环境变量覆盖单条阈值（回放 A/B 用·⛔ 缺省值＝上面的常量，不给就逐字不变）。"""
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+# 阈值级开关：只在显式设了环境变量时才覆盖，便于逐条回放对比（不改变默认行为）
+ENV_PROMOTE_MIN = _env_num("ENV_PROMOTE_MIN", ENV_PROMOTE_MIN)
+ENV_RED_OPEN_MIN = _env_num("ENV_RED_OPEN_MIN", ENV_RED_OPEN_MIN)
+ENV_LEADER_RED_OPEN_MIN = _env_num("ENV_LEADER_RED_OPEN_MIN", ENV_LEADER_RED_OPEN_MIN)
+ENV_BROKEN_RATE_MAX = _env_num("ENV_BROKEN_RATE_MAX", ENV_BROKEN_RATE_MAX)
+ENV_BLOCK_HITS = int(_env_num("ENV_BLOCK_HITS", ENV_BLOCK_HITS))
+ENV_DEFENSIVE_HITS = int(_env_num("ENV_DEFENSIVE_HITS", ENV_DEFENSIVE_HITS))
 
 # ── ④ 位置（高位二波）────────────────────────────────────────────────────────
 # 数据源 = `cache/zt_history/zt_<交易日>.json`（日频归档·盘后写·09:25 时点可得）。

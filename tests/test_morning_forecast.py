@@ -97,13 +97,51 @@ def _row(boards, **kw):
     return d
 
 
-def test_forecast_backrow_always_give_up():
-    """身位差 ≥2 板 → 一律放弃（与封板质量无关，⛔ 质量救不了后排）。"""
+def test_forecast_market_gap_alone_does_not_drop():
+    """⚠️ 2026-11-06 用户拍板：**跨题材身位差没有传导关系**（「你传媒板块你已经涨了五板
+    龙头了，但是光伏板块才一个板，这种身位差其实是没有影响的呀」）→ 缺题材时只观察，
+    ⛔ 不许再拿「全市场差 ≥2」一票否决。"""
     m = mf.build_model()
     for boards in (2, 3, 4):
         r = mf.forecast_one(_row(boards), 6, m)
-        assert r["gap_to_top"] >= 2
+        assert r["gap_to_top"] >= 2                       # 市场差仍然是事实
+        assert r["position_basis"] == "market"            # 但口径是「未裁决」
+        assert r["line_gap"] is None
+        assert r["verdict"] != "放弃", (boards, r["verdict"])
+
+
+def test_forecast_legacy_market_gap_still_drops_when_switch_off():
+    """`RELAY_FORECAST_LINE_POS=0` → 逐字回退旧行为（市场差 ≥2 就放弃）。"""
+    m = mf.build_model()
+    for boards in (2, 3, 4):
+        r = mf.forecast_one(_row(boards), 6, m, line_pos=False)
+        assert r["position_basis"] == "market"
         assert r["verdict"] == "放弃", (boards, r["verdict"])
+
+
+def test_forecast_theme_backrow_drops():
+    """同题材身位差 ≥2 ＝ 这条线真后排 → 放弃（35 日 −1.62%/胜 37.3%）。"""
+    m = mf.build_model()
+    r = mf.forecast_one(_row(2), 6, m, theme_max_boards=5)
+    assert r["line_gap"] == 3 and r["position_basis"] == "line"
+    assert r["verdict"] == "放弃", r["verdict"]
+    assert any("同题材" in x or "本题材" in x for x in r["reasons"])
+
+
+def test_forecast_theme_gap_one_is_wait():
+    """同题材只差 1 板 ＝ 最快的一档（35 日 +0.52%/胜 53.4%）→ 可等。"""
+    m = mf.build_model()
+    r = mf.forecast_one(_row(3), 6, m, theme_max_boards=4)
+    assert r["line_gap"] == 1
+    assert r["verdict"] == "可等", r["verdict"]
+
+
+def test_forecast_theme_top_is_watch():
+    """自己就是本题材最高板（line_gap=0）→ 只观察，不判可等（该档 −1.10%/40.1%）。"""
+    m = mf.build_model()
+    r = mf.forecast_one(_row(2), 6, m, theme_max_boards=2)
+    assert r["line_gap"] == 0
+    assert r["verdict"] == "只观察", r["verdict"]
 
 
 def test_forecast_top_board_cliff_is_watch_only():
@@ -156,8 +194,22 @@ def test_annotate_attaches_forecast_and_keeps_order():
             {"code": "000002", "name": "乙", "boards": 6}]
     mf.annotate(rows, 6, model=m)
     assert [r["code"] for r in rows] == ["000001", "000002"], "annotate 不许改顺序"
-    assert rows[0]["forecast"]["verdict"] == "放弃"          # 2 板在 6 板市场=后排
+    # 没给题材 → 身位不裁决（只观察），⛔ 不再因「全市场 6 板」把 2 板判死
+    assert rows[0]["forecast"]["verdict"] == "只观察"
+    assert rows[0]["forecast"]["position_basis"] == "market"
     assert rows[1]["forecast"]["verdict"] == "只观察"        # 6 板崖位
+
+
+def test_annotate_uses_theme_of_and_theme_max():
+    """显式传 `theme_of` + `theme_max_boards` → 按同题材判身位。"""
+    m = mf.build_model()
+    rows = [{"code": "000001", "name": "甲", "boards": 2, "theme": "东财题材(不同源)"}]
+    mf.annotate(rows, 6, model=m, theme_max_boards={"机器人": 4},
+                theme_of={"000001": "机器人"})
+    f = rows[0]["forecast"]
+    assert f["line_gap"] == 2 and f["theme_max_boards"] == 4
+    assert f["position_basis"] == "line"
+    assert f["verdict"] == "放弃"
 
 
 def test_annotate_without_model_skips_silently():
@@ -173,7 +225,9 @@ def test_line_for_and_summary_line():
     mf.annotate(rows, 6, model=m)
     v, txt = mf.line_for(rows[0])
     assert v == "只观察"
-    assert "明早大概率开在" in txt and "买不到" in txt
+    # ⛔ 11-05 删线后 5% 不再等于买不到：文案只能说「高开过 5%」这个分布事实
+    assert "明早大概率开在" in txt and "高开过 5%" in txt
+    assert "买不到" not in txt
     s = mf.summary_line(rows)
     assert "可等 0 只" in s and "只观察 1 只" in s
 

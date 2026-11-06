@@ -205,7 +205,8 @@ def _sector_flow(nm: str, latest: dict = None) -> dict:
     if not nm:
         return None
     latest = latest if latest is not None else _load_latest()
-    sr = latest.get("sector_risk") or {}
+    from common.em_flow import sector_risk_for_decision
+    sr = sector_risk_for_decision(latest.get("sector_risk"))
     for f in sr.get("inflow_top") or []:
         if str(f.get("name") or "") == nm:
             return {"dir": "in", "flow_yi": float(f.get("flow_yi") or 0)}

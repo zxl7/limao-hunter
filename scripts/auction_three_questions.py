@@ -39,9 +39,10 @@ WC_CACHE = ROOT / "wealth_code" / "cache"
 ZT_DIR = ROOT / "cache" / "zt_history"
 TRACK_DIR = ROOT / "cache" / "board_track"
 
-GAP_MAX = 5.0             # 用户硬线：>5% 买不到
+GAP_MAX = 5.0             # ⛔ 11-05 已废：5% **不是**买不到线，只作「高开」展示档
+GAP_BUYABLE_NOTE = "买不到＝竞价封死（≥涨停−0.2pct），不是高开过 5%"
 VOL_RATIO_MIN = 0.7       # ai_caliber 量能门
-POS_MAX_GAP = 2           # 身位差上限（POOL_CALL_LEADER_ONLY_MAX_GAP）
+POS_MAX_GAP = 2           # 身位差上限（⛔ 11-06 起按**同题材**算，跨题材无传导）
 TOP_DRAGON_KILL = -3.0    # 总龙头跌破该开幅 → 全池降级（诊断提示，不裁决）
 SECTOR_ALIVE_RED = 0.5
 SECTOR_DEAD_RED = 0.3
@@ -217,8 +218,15 @@ def q3_stocks(prev: dict, zt_rows: list[dict], quotes: dict[str, dict],
             q = quotes.get(code) or {}
             g = _gap(q)
             boards = int(c.get("boards") or 0)
-            pos_gap = (mm - boards) if mm and boards else None
             fc = c.get("forecast") or {}
+            # ⛔ 11-06：身位分母优先用**同题材**（候选文件里 `forecast.position_basis=line` 时
+            #    `line_gap` 就是同题材身位差）；缺题材才退回全市场差，且只作参照不判放弃。
+            _fc_lg = fc.get("line_gap")
+            _pos_basis = fc.get("position_basis")
+            if _pos_basis == "line" and _fc_lg is not None:
+                pos_gap, pos_basis = int(_fc_lg), "line"
+            else:
+                pos_gap, pos_basis = ((mm - boards) if mm and boards else None), "market"
             pv_it = pv.get(code) or {}
             amt = pv_it.get("amount_yi", q.get("auction_amount_yi"))
             need = pv_it.get("need_yi")
@@ -227,12 +235,12 @@ def q3_stocks(prev: dict, zt_rows: list[dict], quotes: dict[str, dict],
                 vol_ok = float(amt) >= float(need) * VOL_RATIO_MIN
             if g is None:
                 verdict, why = "无报价", "竞价缺失"
+            elif g >= (20.0 if c.get("is_20cm") else 10.0) - 0.2:
+                verdict, why = "买不到", f"竞价封死 {g:+.2f}%（涨停 {(20.0 if c.get('is_20cm') else 10.0):g}%）"
             elif g <= 0:
-                verdict, why = "观察", f"绿开/平开 {g:+.2f}%"
-            elif g > GAP_MAX:
-                verdict, why = "买不到", f"高开 {g:+.2f}% > {GAP_MAX}%"
-            elif pos_gap is not None and pos_gap > POS_MAX_GAP:
-                verdict, why = "放弃", f"身位差 {pos_gap} 板（后排）"
+                verdict, why = "观察", f"绿开/平开 {g:+.2f}%（按 DEV 判，不自动否决）"
+            elif pos_basis == "line" and pos_gap is not None and pos_gap > POS_MAX_GAP:
+                verdict, why = "放弃", f"同题材身位差 {pos_gap} 板（本线后排）"
             elif vol_ok is False:
                 verdict, why = "观察", f"竞价 {float(amt):.2f}亿 < 目标 {float(need):.2f}亿×{VOL_RATIO_MIN:g}"
             else:
@@ -242,7 +250,8 @@ def q3_stocks(prev: dict, zt_rows: list[dict], quotes: dict[str, dict],
             rows.append({
                 "pool": pool, "code": code, "name": c.get("name"), "boards": boards,
                 "theme": c.get("core_theme") or c.get("theme"), "gap": g,
-                "pos_gap": pos_gap, "amount_yi": amt, "need_yi": need, "vol_ok": vol_ok,
+                "pos_gap": pos_gap, "pos_basis": pos_basis,
+                "amount_yi": amt, "need_yi": need, "vol_ok": vol_ok,
                 "forecast": fc.get("verdict"), "verdict": verdict, "why": why,
                 "pool_view": pv_it.get("view"),
                 "dragon_rank": c.get("dragon_rank"),

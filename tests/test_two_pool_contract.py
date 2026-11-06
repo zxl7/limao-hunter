@@ -105,6 +105,24 @@ def test_eod_renders_one_word_anchor_without_trade_promises():
     assert "竞价转强才解冻" not in text
 
 
+@pytest.mark.parametrize("group", list(build_cards._WATCH_GROUP_PLAIN))
+def test_eod_renders_every_registered_watch_group(group):
+    anchor = row(watch_group=group, participation_eligibility="observe_only", buyable=False)
+    card = build_cards.build_eod_card({"date": "2026-11-04", "relay": [], "watch": [anchor],
+                                      "diagnostics": {}, "ai_plan": {}})
+    assert "测试核心" in str(card)
+
+
+def test_eod_conditional_repair_not_labelled_unbuyable():
+    anchor = row(watch_group="历史连板修复", participation_eligibility="conditional", buyable=True)
+    card = build_cards.build_eod_card({"date": "2026-11-04", "relay": [], "watch": [anchor],
+                                      "diagnostics": {}, "ai_plan": {}})
+    text = str(card)
+    assert "测试核心" in text
+    assert "条件资格：竞价核验全部风控后方可参与，非买入确认" in text
+    assert "观察池 TOP1（仅作板块参照·不可买）" not in text
+
+
 def test_hist_gene_not_conditional_prediction():
     assert two_pool.promotion_rate(row(history_relay_prob=99)) == -1
     assert two_pool.promotion_rate(row(conditional_promotion={"rate": 99, "quality": "weak"})) == -1

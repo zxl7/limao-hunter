@@ -14,12 +14,22 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE / "wealth_code"))
 sys.path.insert(0, str(BASE / "wealth_code" / "pipelines"))
 
 from core import ai_caliber  # noqa: E402
 from build_cards import _ai_dyn_verdict  # noqa: E402
+
+
+# ⛔ 本文件锁 2026-09-17「A2 绝对 5% 线」旧口径。11-05 用户删除 5% 与红开两条线后，
+#    显式跑在回退模式，同时验证 `AI_EXPECTED_GAP_MODE=absolute` 逐字保留旧判据；
+#    新默认口径的回归锁见 `tests/test_expected_gap_zone.py`。
+@pytest.fixture(autouse=True)
+def _absolute_gap_mode(monkeypatch):
+    monkeypatch.setenv("AI_EXPECTED_GAP_MODE", "absolute")
 
 
 # ── 1) above ＝ 绝对 5% 线（A2 核心）───────────────────────────────
@@ -86,7 +96,8 @@ def test_volume_gate():
     # 红开 + 无量（<0.7×目标）→ 观察
     can, note, meta = ai_caliber.decide(led, 2.0, expected_range=[1.0, 3.0],
                                         auction_amount_yi=1.0, need_yi=5.0)
-    assert can is False and meta.get("volume_weak") is True and "无量的高开" in note
+    # 11-05 量能改「分档区间」后，只有 dry（<35% 真没量）才否决，文案同步更新。
+    assert can is False and meta.get("volume_weak") is True and "真没量" in note
     # 无量能数据 → 不判（宽容）
     assert ai_caliber.decide(led, 2.0, expected_range=[1.0, 3.0])[0] is True
     # 低开 + 无量 → 由 zone 判（below），非量能门

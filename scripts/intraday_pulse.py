@@ -661,22 +661,46 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from flow_noise import SECTOR_FLOW_NOISE, is_flow_noise
 
-def _em_board_get(host, fs, po=0, pz=100, fid="f3", tries=3):
+def _em_board_get(host, fs, po=0, pz=100, fid="f3", tries=1):
     url = f"https://{host}/api/qt/clist/get?" + urllib.parse.urlencode({
         "pn": 1, "pz": pz, "po": str(po), "np": "1", "fltt": "2", "invt": "2",
         "fid": fid, "fs": fs, "fields": "f12,f14,f3,f62",
     })
     hdr = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
            "Referer": "https://quote.eastmoney.com/center/boardlist.html"}
-    last = None
-    for _ in range(tries):
+    import logging
+    import math
+    import socket
+    diagnostics = os.getenv("SECTOR_RISK_DIAGNOSTICS", "0").lower() in {"1", "true", "on"}
+    for attempt in range(1, max(1, tries) + 1):
+        started = time.monotonic()
+        reason, rows, dropped = "empty", [], 0
         try:
             req = urllib.request.Request(url, headers=hdr)
             with urllib.request.urlopen(req, timeout=15) as r:
                 d = json.loads(r.read().decode("utf-8"))
-                return (d.get("data") or {}).get("diff") or []
+            rows = (d.get("data") or {}).get("diff") or []
+            if rows:
+                required = ("f3",) if fid == "f3" else ("f3", "f62")
+                valid = [it for it in rows if isinstance(it, dict) and it.get("f14")
+                         and all(isinstance(it.get(k), (int, float))
+                                 and not isinstance(it[k], bool) and math.isfinite(it[k]) for k in required)]
+                dropped = len(rows) - len(valid)
+                reason = "fields" if not valid else ("filtered_fields" if dropped else "ok")
+                # 个别停牌或缺字段行不应抹掉同页有效板块。
+                rows = valid
         except Exception as e:
-            last = e
+            reason = "timeout" if isinstance(e, (TimeoutError, socket.timeout)) or isinstance(getattr(e, "reason", None), (TimeoutError, socket.timeout)) else type(e).__name__
+        if diagnostics:
+            # 仅记录固定参数与错误类别；不记录 URL、响应体、异常文本或环境变量。
+            logging.getLogger("sector_risk").warning(
+                "board host=%s category=%s fid=%s po=%s attempt=%s reason=%s rows=%s dropped=%s elapsed=%.3f",
+                host, fs, fid, po, attempt, reason, len(rows), dropped, time.monotonic() - started)
+        if rows:
+            return rows
+        if reason in {"empty", "fields"}:
+            break
+        if attempt < tries:
             time.sleep(0.3)
     return []
 
@@ -686,6 +710,10 @@ def build_sector_risk(threshold=SECTOR_RISK_THRESHOLD):
     跌幅榜按 f3 排序抓前 100 足够；但资金流榜若也按 f3 排序，涨得好/大额流入的板块会落在 100 名外而被漏掉。
     因此资金流榜**独立按 f62(主力净额)排序抓取**（po=1 取净流入最大、po=0 取净流出最大），保证大额资金直接落第 1 页。
     """
+    # 独立保存子路，完整快照仍保留，便于关闭开关后回退。
+    split_cache = os.getenv("SECTOR_RISK_SPLIT_CACHE", "1").lower() not in {"0", "false", "off", "no"}
+    reference_enabled = os.getenv("SECTOR_RISK_REFERENCE_ENABLED", "1").lower() not in {"0", "false", "off", "no"}
+    cb = {}
     # 60s 缓存仅复用完整快照；不完整抓取不能覆盖最后一次可信数据。
     cache_path = CACHE_DIR / "sector_risk_cache.json"
     cached_data, cached_age = None, None
@@ -694,16 +722,62 @@ def build_sector_risk(threshold=SECTOR_RISK_THRESHOLD):
         age = (now() - datetime.fromtimestamp(cb.get("ts", 0), BJ_TZ)).total_seconds()
         if 0 <= age and isinstance(cb.get("data"), dict) and cb["data"].get("complete") is True:
             cached_data, cached_age = cb["data"], age
-            if age < 60:
-                return cached_data
+            if not split_cache and age < 60 and str(cached_data.get("asof", ""))[:10] == now().strftime("%Y-%m-%d"):
+                return {**cached_data, "age_seconds": age, "reference_only": False}
     except Exception:
         pass
 
+    part_fields = {"breadth": ("declining", "focus_declining", "count"),
+                   "flow": ("inflow_top", "outflow_top")}
+    parts = cb.get("parts") or {}
+    if not parts and cached_data:
+        parts = {key: {"ts": cb["ts"], "asof": cached_data.get("asof"),
+                       "data": {f: cached_data.get(f) for f in fields}}
+                 for key, fields in part_fields.items()}
+
+    def compose(saved, reason):
+        result = {"threshold": threshold, "declining": [], "focus_declining": [],
+                  "count": None, "inflow_top": [], "outflow_top": []}
+        states = {}
+        for key, fields in part_fields.items():
+            part = saved.get(key) or {}
+            age = now().timestamp() - part.get("ts", 0)
+            same_day = str(part.get("asof", ""))[:10] == now().strftime("%Y-%m-%d")
+            usable = bool(part) and same_day and age >= 0 and (age <= 600 or reference_enabled)
+            reference = usable and age > 600
+            stale = usable and (age >= 60 or bool(part.get("error")))
+            state = {"ok": usable and not stale, "complete": usable, "stale": stale,
+                     "reference_only": bool(reference), "status": "reference" if reference else
+                     ("stale" if stale else ("fresh" if usable else "unavailable")),
+                     "asof": part.get("asof") if usable else None,
+                     "age_seconds": age if usable else None,
+                     "error": reason if stale or not usable else None}
+            if usable:
+                result.update({f: part["data"].get(f) for f in fields})
+            states[key] = state
+        result["sources"] = states
+        result["complete"] = all(s["complete"] for s in states.values())
+        result["ok"] = all(s["ok"] for s in states.values())
+        result["stale"] = any(s["stale"] for s in states.values())
+        result["reference_only"] = any(s["reference_only"] for s in states.values())
+        stamps = [s["asof"] for s in states.values() if s["asof"]]
+        ages = [s["age_seconds"] for s in states.values() if s["age_seconds"] is not None]
+        result.update(asof=min(stamps) if stamps else None, age_seconds=max(ages) if ages else None,
+                      status="fresh" if result["ok"] else ("reference" if result["reference_only"] else
+                             ("stale" if result["stale"] else
+                              ("partial" if any(s["complete"] for s in states.values()) else "unavailable"))), error=reason or None)
+        return result
+
+    if split_cache and (parts or cb.get("attempt_ts")) and 0 <= now().timestamp() - cb.get("attempt_ts", cb.get("ts", 0)) < 60:
+        return compose(parts, cb.get("error", ""))
+
     def unavailable(reason, partial=None):
-        # 只允许同交易日、10 分钟内的完整快照回退，并明确标为旧数据。
-        if cached_data and cached_age is not None and cached_age <= 600 and \
+        # 只允许同交易日的完整快照回退，超过 10 分钟须明确只作参考。
+        if cached_data and cached_age is not None and (cached_age <= 600 or reference_enabled) and \
                 str(cached_data.get("asof", ""))[:10] == now().strftime("%Y-%m-%d"):
-            return {**cached_data, "ok": False, "stale": True, "error": reason}
+            return {**cached_data, "ok": False, "stale": True, "error": reason,
+                    "reference_only": cached_age > 600, "age_seconds": cached_age,
+                    "status": "reference" if cached_age > 600 else "stale"}
         return {**(partial or {}), "ok": False, "complete": False, "error": reason,
                 "declining": (partial or {}).get("declining", []),
                 "focus_declining": (partial or {}).get("focus_declining", []),
@@ -821,9 +895,21 @@ def build_sector_risk(threshold=SECTOR_RISK_THRESHOLD):
                   "inflow_top": inflow_top, "outflow_top": outflow_top,
                   "ok": complete, "complete": complete, "stale": False,
                   "asof": now().isoformat()}
-        if not complete:
-            # 东财一侧超时也可能只返回流出榜；部分结果不能写进可信缓存或资金池。
-            return unavailable("板块涨跌幅或资金流接口返回不完整", result)
+        reason = "" if complete else "板块涨跌幅或资金流接口返回不完整"
+        if split_cache:
+            for key, valid in (("breadth", breadth_complete), ("flow", flow_complete)):
+                if valid:
+                    parts[key] = {"ts": now().timestamp(), "asof": result["asof"],
+                                  "data": {f: result[f] for f in part_fields[key]}}
+                elif key in parts:
+                    parts[key] = {**parts[key], "error": reason}
+            envelope = {**cb, "parts": parts, "attempt_ts": now().timestamp(), "error": reason}
+            if complete:
+                envelope.update(ts=now().timestamp(), data=result)
+            _save_json(cache_path, envelope)
+            result = compose(parts, reason)
+        elif not complete:
+            return unavailable(reason, result)
         # ── 盘中全量板块资金池（2026-09-08 用户「板块流入流出数据本地数据池积累」）──
         # 短线精灵资金行原只查 sector_risk top10 → 强势板块涨停多但资金排不进前10时
         # 一律「💤资金未入榜」（实证 09-08 大消费 zt=6 但资金榜全被通信/有色占满）。
@@ -834,17 +920,21 @@ def build_sector_risk(threshold=SECTOR_RISK_THRESHOLD):
             _pool = {"ts": now().timestamp(), "date": now().strftime("%Y-%m-%d"),
                      "boards": {v["name"]: {"pct": v["pct"], "flow_yi": _yi(v)}
                                 for v in flow_clean}}
-            (CACHE_DIR / "sector_fund_pool.json").write_text(
-                json.dumps(_pool, ensure_ascii=False))
+            if flow_complete:
+                _save_json(CACHE_DIR / "sector_fund_pool.json", _pool)
         except Exception:
             pass
         try:
-            _save_json(cache_path, {"ts": now().timestamp(), "data": result})
+            if not split_cache:
+                _save_json(cache_path, {"ts": now().timestamp(), "data": result})
         except Exception:
             pass
         return result
     except Exception as e:
-        return unavailable(str(e))
+        if split_cache:
+            failed = {k: {**v, "error": type(e).__name__} for k, v in parts.items()}
+            return compose(failed, type(e).__name__)
+        return unavailable(type(e).__name__)
 
 def build_sector_flow_snapshot(threshold=SECTOR_RISK_THRESHOLD):
     """板块主力资金流全量快照（日级沉淀用）。
@@ -1836,6 +1926,35 @@ def build_top5_card(sectors, plates, diagnoses, total_zt, risks, positives):
 
 # ── Ebb Tide Detection ─────────────────────────────────
 
+# 🌊 大盘赚钱效应（2026-11-05 用户「留意整体大盘的赚钱效应，别只看打板！！」）。
+# ⛔ 原 `detect_ebb` 的 6 个信号**全是打板指标**（晋级率/核按钮/炸板/涨停数/板高/板块热点），
+#    广度、指数、成交额一个都没进 → 结果两边都错：
+#      · 普涨日打板冷清（资金做趋势不做连板）→ 照样报「情绪转弱」
+#        实证 11-05：全市场 4843 涨 / 632 跌 = **88.5% 上涨**、指数 +1.6%、成交 1.5 万亿，
+#        只有 68 只涨停、最高 4 板 → ebb 判「⚡情绪转弱」，与用户盘感完全相反。
+#      · 真暴跌日广度极差 → 也补不了分（反而可能因为涨停数还凑合而不报）。
+# ✅ 现口径：**双向**纳入。赚钱效应强 → 扣分（对冲打板冷清）；
+#    亏钱效应明显 → 加分（打板指标滞后时提前预警）。
+# ⛔ 扣分上限 2 分（`EBB_BREADTH_MAX_RELIEF`）：赚钱效应可以否决「转弱」，
+#    但不能把真正的打板风险（核按钮 10+ 只）也一起抹平 —— 那是两件事。
+# ⛔ **可抵消性分级**（2026-11-05 二修）：大盘赚钱效应只该抵消**结构性/滞后性**弱项
+#    （涨停数少、板高低、板块散、晋级率低 —— 这些在「资金做趋势不做连板」的普涨日必然难看），
+#    **不得抵消个股层面的真实亏钱效应**（核按钮、炸板率高）。
+#    实证：核按钮 12 只 + 全市场 88% 上涨 —— 大盘好不代表你去接高位票不亏，
+#    这类信号必须独立计分，否则等于用指数掩盖亏钱。
+EBB_BREADTH_ENABLED = (os.environ.get("ENABLE_EBB_BREADTH") or "1").strip().lower() not in {
+    "0", "false", "off", "no", ""}
+# 强赚钱效应门槛：上涨占比 ≥72% 且 指数均涨 ≥0.8% → -2 分
+EBB_STRONG_UP_RATIO = 0.72
+EBB_STRONG_IDX_PCT = 0.8
+# 中等赚钱效应：上涨占比 ≥65% 且 指数为正 → -1 分
+EBB_MILD_UP_RATIO = 0.65
+# 明显亏钱效应：上涨占比 ≤35% 或 指数 ≤-1.0% → +2 分
+EBB_WEAK_UP_RATIO = 0.35
+EBB_WEAK_IDX_PCT = -1.0
+EBB_BREADTH_MAX_RELIEF = 2
+
+
 def detect_ebb(sectors, stocks, total_zt) -> Optional[Dict]:
     """检测退潮信号，返回退潮描述或None。
 
@@ -1862,25 +1981,36 @@ def detect_ebb(sectors, stocks, total_zt) -> Optional[Dict]:
     # 晋级率仍 23.8% 却是亢奋）——情绪分终审：≥7（偏强/亢奋）时晋级率信号直接跳过，
     # 避免 ebb 与情绪分矛盾（今日实证：feedback 9.0 亢奋 vs ebb 退潮预警）。
     fb_sentiment = None
+    fm_valid = {}
+    market_effect = "unknown"
     try:
         fm = json.loads((CACHE_DIR.parent / "feedback_matrix.json").read_text(encoding="utf-8"))
         if fm.get("error") or fm.get("date") != now().strftime("%Y-%m-%d"):
             raise ValueError("feedback 缺失或非当日")
+        fm_valid = fm
         nuke = int(fm.get("nuke_count") or 0)
         prom = fm.get("promote_rate")
         brk = fm.get("broken_rate")
         fs = fm.get("sentiment_score")
         if isinstance(fs, (int, float)):
             fb_sentiment = float(fs)
+        # 🎯 晋级率门槛：优先用反馈矩阵自算的 **10 日去极值截尾均值**
+        #    （`trend.promotion_gate_10d`，与 `live_signal` / `build_cards` 同一口径）。
+        # ⛔ 原实现写死 25% —— 而 11-05 晋级率 22.9% 高于系统自己的 10 日门槛 21.9%
+        #    （即「正常水平」），仍被判「接力成功率低」扣 2 分，直接把 ebb 顶到报警线。
+        # ⛔ 取不到门槛才回落 25（诚实降级，不编造动态值）。
+        _pgate = (fm.get("trend") or {}).get("promotion_gate_10d")
+        if not isinstance(_pgate, (int, float)) or not (5 <= _pgate <= 60):
+            _pgate = 25.0
         if nuke >= 10:
             signals.append((2, f"核按钮{nuke}只，高位接力亏钱效应显著"))
         elif nuke >= 6:
             signals.append((1, f"核按钮{nuke}只，亏钱效应抬头"))
         # 晋级率：情绪分终审（≥7 时不判退潮——v2 语义：涨停翻倍+广谱红盘=亢奋，晋级率只作接力质量）
         if fb_sentiment is None or fb_sentiment < 7:
-            if isinstance(prom, (int, float)) and prom < 25:
-                signals.append((2, f"昨日涨停晋级率{prom}%，接力成功率低"))
-            elif isinstance(prom, (int, float)) and prom < 32:
+            if isinstance(prom, (int, float)) and prom < _pgate:
+                signals.append((2, f"昨日涨停晋级率{prom}%，低于近10日门槛{_pgate}%，接力成功率低"))
+            elif isinstance(prom, (int, float)) and prom < _pgate * 1.28:
                 signals.append((1, f"昨日涨停晋级率{prom}%，接力偏弱"))
         if isinstance(brk, (int, float)) and brk > 30:
             signals.append((2, f"炸板率{brk}%，封板质量差"))
@@ -1925,22 +2055,81 @@ def detect_ebb(sectors, stocks, total_zt) -> Optional[Dict]:
     if cold_sectors >= 3:
         signals.append((1, f"{cold_sectors}个活跃板块缺乏热点支撑"))
 
+    # 4.5 🌊 大盘赚钱效应（双向·2026-11-05 用户「别只看打板」）
+    #  ⛔ 上面 1~4 条全是**打板视角**，缺了大盘这一维。补上之后才能区分两种日子的本质差异：
+    #     「打板冷清但普涨」（资金做趋势，赚钱效应其实很好）vs「打板冷清且普跌」（真退潮）。
+    #  ⛔ 广度/指数**缺失时不猜**（unknown ≠ 0）：拿不到就不加不减，绝不默认成「0 家上涨」。
+    breadth_relief = 0
+    if EBB_BREADTH_ENABLED:
+        # 与接力指标使用同一份、已验当日的矩阵，旧快照不能抵消当前风险。
+        _br = fm_valid.get("breadth") or {}
+        _up, _dn = _br.get("up"), _br.get("down")
+        _idx = fm_valid.get("idx_avg")
+        if (isinstance(_up, (int, float)) and isinstance(_dn, (int, float))
+                and _up >= 0 and _dn >= 0 and (_up + _dn) >= 500):
+            market_effect = "neutral"
+            up_ratio = _up / (_up + _dn)
+            idx_ok = isinstance(_idx, (int, float))
+            if up_ratio <= EBB_WEAK_UP_RATIO or (idx_ok and _idx <= EBB_WEAK_IDX_PCT):
+                market_effect = "weak"
+                # 明显亏钱效应：打板指标滞后时提前预警
+                signals.append((2, f"全市场仅{up_ratio:.0%}上涨"
+                                   + (f"、指数{_idx:+.1f}%" if idx_ok else "")
+                                   + "，亏钱效应明显"))
+            elif up_ratio >= EBB_STRONG_UP_RATIO and idx_ok and _idx >= EBB_STRONG_IDX_PCT:
+                market_effect = "strong"
+                breadth_relief = -2
+                signals.append((-2, f"全市场{up_ratio:.0%}上涨、指数{_idx:+.1f}%，"
+                                    "赚钱效应好于打板读数（普涨·资金未退）"))
+            elif up_ratio >= EBB_MILD_UP_RATIO and idx_ok and _idx > 0:
+                market_effect = "positive"
+                breadth_relief = -1
+                signals.append((-1, f"全市场{up_ratio:.0%}上涨、指数{_idx:+.1f}%，赚钱效应尚可"))
+
     # 5. 情绪周期先行加成：当日周期已判退潮 → +1（指标滞后时也提前报退潮）
     # ⚠️ 2026-08-17 v2 适配：情绪分终审否决——≥7（偏强/亢奋）时周期加成不生效
     #（今日实证：周期文件含「退潮冰点→亢奋反转日」混合表述，关键词误触发）
     if cycle_ebb and (fb_sentiment is None or fb_sentiment < 7):
         signals.append((1, "短期情绪周期已判退潮"))
 
-    score = sum(w for w, _ in signals)
-    if score >= 5:
-        severity = "⚠ 退潮预警"
-    elif score >= 3:
-        severity = "⚡ 情绪转弱"
-    else:
+    # ── 总分：可抵消项 + 不可抵消项 ────────────────────────────────────
+    # 不可抵消 = 个股层面真实亏钱（核按钮 / 炸板率）——大盘普涨救不了你接高位票的亏损。
+    # 可抵消   = 结构性弱项（涨停少 / 板高低 / 板块散 / 晋级率低 / 周期退潮）
+    #            ——普涨日「资金做趋势不做连板」，这些必然难看，属正常现象。
+    # ⛔ 抵消额度封顶 `EBB_BREADTH_MAX_RELIEF`，且只作用于可抵消项。
+    def _uncancelable(text: str) -> bool:
+        return text.startswith("核按钮") or text.startswith("炸板率")
+
+    _pos_hard = sum(w for w, t in signals if w > 0 and _uncancelable(t))
+    _pos_soft = sum(w for w, t in signals if w > 0 and not _uncancelable(t))
+    _neg = sum(w for w, t in signals if w < 0)
+    _neg_kept = max(_neg, -EBB_BREADTH_MAX_RELIEF)          # 例：-3 → -2
+    _soft_after = max(0, _pos_soft + _neg_kept)              # 结构性项被抵消后
+    score = _pos_hard + _soft_after
+
+    # 被完全抵消掉的结构性信号不再展示（原因与分数必须一致，卡面不能自相矛盾）
+    if _neg_kept < 0 and _pos_soft > 0 and _soft_after <= 0:
+        signals = [(w, t) for (w, t) in signals if w < 0 or _uncancelable(t)]
+
+    if score < 3:
         return None
+    risk_level = "warning" if score >= 5 else "weak"
+    market_risk = market_effect == "weak"
+    relay_score = _pos_hard + sum(w for w, t in signals if w > 0 and not t.startswith("全市场" ) and not _uncancelable(t))
+    risk_scope = ("mixed" if relay_score > 0 else "market") if market_risk else "relay"
+    if market_risk:
+        severity = "⚠ 大盘风险预警" if risk_level == "warning" else "⚡ 大盘承压"
+    else:
+        severity = "⚠ 接力风险预警" if risk_level == "warning" else "⚡ 接力转弱"
     return {
         "severity": severity,
+        "risk_scope": risk_scope,
+        "risk_level": risk_level,
+        "market_effect": market_effect,
         "signals": [t for _, t in signals],
+        # 分数留痕（卡面不展示）：复盘时能回答「为什么报/为什么不报」，
+        # ⛔ 只加字段不改既有结构，下游按 key 读取不受影响。
+        "score": score,
         "max_board": max_board,
         "total_zt": total_zt,
         # P0 情绪印证（2026-08-17）：ebb 与情绪分对照——避免「ebb 退潮 vs 情绪亢奋」矛盾
@@ -1956,9 +2145,12 @@ def _ebb_escalated(curr, prev):
         return False
     if not prev:
         return True  # 新出现退潮，首告警
-    sev = {"情绪转弱": 1, "退潮预警": 2}
-    cs = sev.get(curr.get("severity", ""), 0)
-    ps = sev.get(prev.get("severity", ""), 0)
+    def level(item):
+        if item.get("risk_level") in {"weak", "warning"}:
+            return {"weak": 1, "warning": 2}[item["risk_level"]]
+        text = item.get("severity", "")
+        return 2 if "预警" in text else (1 if any(t in text for t in ("转弱", "承压")) else 0)
+    cs, ps = level(curr), level(prev)
     if cs > ps:
         return True  # 级别升级
     if cs == ps and len(curr.get("signals", [])) > len(prev.get("signals", [])):

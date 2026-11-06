@@ -403,7 +403,8 @@ def detect_events(latest, prev=None, mem=None) -> list:
 
     # 4) 重挫板块出现（东财跌幅榜新增关注板块领跌）
     weak = latest.get("weak_sectors") or {}
-    fd = (latest.get("sector_risk") or {}).get("focus_declining") or []
+    from common.em_flow import sector_risk_for_decision
+    fd = sector_risk_for_decision(latest.get("sector_risk")).get("focus_declining") or []
     if fd:
         names = "、".join(s.get("name", "") for s in fd[:6])
         events.append({

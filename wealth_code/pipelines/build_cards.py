@@ -777,6 +777,7 @@ _WATCH_GROUP_PLAIN = {
     # ⛔ 2026-11-04 用户「2 进 3 以上全部进观察池」：过筛 reject 的多板票也会进观察池，
     #    新分组不登记 → 该票从卡面消失（数据在、人看不到），与本轮改动初衷相反。
     "过筛未过·只观察": "接力资格没过·只看",
+    "历史连板修复": "历史连板修复·资格逐票核验",
 }
 
 
@@ -843,17 +844,25 @@ def _exp_verdict(r: dict, oc: dict) -> tuple[str, str]:
     gap = oc.get("gap_pct")
     super_min = exp.get("super_gap_min")
     if isinstance(gap, (int, float)):
-        # 三档判定 = `ai_caliber.gap_zone`（2026-09-17「A 计划」·与账本成交同源同容差，
+        # 三档判定 = `ai_caliber.gap_zone`（唯一判据源，与账本成交同源，
         #   防「标题行说高于预期 / AI 判断行说符合预期 / 账本却在买」三方脱节）
-        _zone = _ai_caliber.gap_zone(gap, erng)
-        if super_min is not None and gap >= float(super_min):
+        _zone = _ai_caliber.gap_zone(
+            gap, erng, expected_gap_pct=r.get("expected_gap_pct"),
+            is_20cm=r.get("is_20cm"))
+        # ⛔ 11-05 删 5%/红开：旧 `super_gap_min` 是盘后主观绝对线，relative 模式下
+        #    不再抢在 zone 前把高开票标成「超预期」——强票高开本就是符合它自己的预期。
+        if (not _ai_caliber.relative_mode() and super_min is not None
+                and gap >= float(super_min)):
             verdict = "🔺超预期"
         elif _zone == "above":
-            verdict = "🔺高于预期"
+            verdict = "⛔竞价封死买不进" if _ai_caliber.relative_mode() else "🔺高于预期"
         elif _zone == "ok":
             verdict = "✅符合预期"
+        elif _zone == "unknown":
+            verdict = ""
         else:
-            verdict = "⚠️低于预期"
+            verdict = ("⚠️明显低于预期" if _ai_caliber.relative_mode()
+                       else "⚠️低于预期")
         # 炸板类（炸板回封/放量烂板/任何炸板）次日红开：超预期信号，但需辨真假高开。
         # 2026-08-18 修：仅当判为非「低于预期」才追加——微红近平开（如 +0.3%）根本谈不上
         # "高开"，不能辨真假（曾把 苏州天脉/贵研铂业 的"低于预期"错配成"·辨真假高开"）。
@@ -1923,14 +1932,20 @@ def _ai_dyn_verdict(it: dict) -> tuple[str, str] | None:
         return None
     # 判据唯一源 = ai_caliber.gap_zone（2026-09-17「A 计划」·与账本成交同源·⛔ 禁另写一套）
     _exp = (it.get("expectation") or {}).get("expected_range")
-    _zone = _ai_caliber.gap_zone(gap, _exp)
+    _zone = _ai_caliber.gap_zone(
+        gap, _exp, expected_gap_pct=it.get("expected_gap_pct"),
+        is_20cm=it.get("is_20cm"))
     if _zone == "unknown":
         return None
     g = f"{gap:+.2f}%"
     if _zone == "below":
-        return (f"→ 今日竞价{g}·不及预期 → 放弃", "green")
+        if _ai_caliber.relative_mode():
+            return (f"→ 今日竞价{g}·明显低于这只票的预期 → 放弃", "green")
+        return (f"→ 今日竞价{g}·不及预期 → 放弃", "green")   # absolute 回退逐字保留旧文案
     if _zone == "above":
-        # 2026-09-17 A2：above ＝ **绝对高开太多**（gap > 5% 用户硬线），非「超模型区间」。
+        if _ai_caliber.relative_mode():
+            # 11-05 删 5% 线：above 只剩「竞价封死买不进」这一物理事实。
+            return (f"→ 今日竞价{g}·封在涨停附近买不进 → 只观察", "yellow")
         return (f"→ 今日竞价{g}·高开太多（超5%上限）→ 继续观察", "yellow")
     return (f"→ 今日竞价{g}·符合预期", "red")
 
@@ -2433,9 +2448,18 @@ def _ai_plan_block(raw: dict, records: list[dict],
         if note and not _two_line_rows():
             blocks.append(_div(f"<font color='grey'>{_shift_day_words(note)}</font>"))
         if isinstance(_n, (int, float)):
-            blocks.append(_div(
-                f"　　<font color='grey'>今天池内 {int(_n)} 只，按开盘竞价实况定下买 "
-                f"{0 if _q is None else int(_q)} 只以内</font>"))
+            _slot_h = (pool_summary or {}).get("slot_policy") or {}
+            _even_n_h = _slot_h.get("allocation_count")
+            _even_cap_h = _slot_h.get("even_cap")
+            if (_slot_h.get("unlimited_slots") and isinstance(_even_n_h, int)
+                    and isinstance(_even_cap_h, (int, float)) and _even_cap_h > 0):
+                blocks.append(_div(
+                    f"　　<font color='grey'>今天池内 {int(_n)} 只，竞价定下买 "
+                    f"{_even_n_h} 只 · 每只 {float(_even_cap_h) * 100:.0f}%</font>"))
+            else:
+                blocks.append(_div(
+                    f"　　<font color='grey'>今天池内 {int(_n)} 只，按开盘竞价实况定下买 "
+                    f"{0 if _q is None else int(_q)} 只以内</font>"))
         # 买入名单 = 9:25 实判 participate（= 账本口径）
         buys = [r for r in records if str(_oc_of(r).get("ai_view") or "") == "participate"]
         others = [str(r.get("name") or r.get("code") or "") for r in records
@@ -2488,8 +2512,17 @@ def _ai_plan_block(raw: dict, records: list[dict],
         oc = _oc_of(r)
         gap = oc.get("gap_pct")
         _valve = bool(oc.get("hibernate_valve"))
-        # ⛔ 生效上限 = 用户 5% 硬线（2026-09-14）——⛔ 不再读 AI 自定 entry_max_gap
-        limit = USER_ENTRY_MAX_GAP_PCT
+        # ⛔ 11-05 用户删 5% 线：relative 模式下 limit 改指「物理封死线」（涨停−0.2pct），
+        #    文案不再说「高开5%以内/超5%」；absolute 回退时逐字保留旧文案。
+        _rel = _ai_caliber.relative_mode()
+        limit = (_ai_caliber.limit_up_pct(r.get("is_20cm")) - _ai_caliber.PHYSICAL_LIMIT_TOL
+                 if _rel else USER_ENTRY_MAX_GAP_PCT)
+        _no_tag = ("<text_tag color='{C_HINT}'>没买到</text_tag>（竞价封死买不进）"
+                   if _rel else
+                   f"<text_tag color='{C_HINT}'>没买到</text_tag>（高开超{limit:g}%）")
+        _ok_tag = ("<text_tag color='{C_BUY}'>AI 买入</text_tag>（符合逐票预期）"
+                   if _rel else
+                   f"<text_tag color='{C_BUY}'>AI 买入</text_tag>（高开{limit:g}%以内）")
         v = views.get(code) or {}
         # 🎨 2026-10-21 用户「主要把要买的这个推得花哨一点，指标打满」：
         #    买入票是全卡唯一用**红底**的票名（`C_BUY`），其余一律降权。
@@ -2501,15 +2534,12 @@ def _ai_plan_block(raw: dict, records: list[dict],
                 # ⛔ 同上：破例小仓也是 AI 的决定，标签必须带 AI
                 tag = (f"<text_tag color='{C_BUY}'>AI 小仓试错</text_tag>"
                        f"<font color='grey'>（空仓日破例·只买 {_pc} 成）</font>"
-                       if gap <= limit else
-                       f"<text_tag color='{C_HINT}'>没买到</text_tag>（高开超{limit:g}%）")
+                       if gap <= limit else _no_tag)
             else:
                 # ⛔ 2026-10-21 22:29 用户「买入的这个票要写 AI 买入吧？我们现在是 AI 买入」：
                 #    必须点明**是谁买的**——这是 AI 口径决定的，不是系统机械信号。
                 #    与卡头「AI 买入信号 N」、段标题「🤖 今日买入」同一口径，⛔ 不写裸「买入」。
-                tag = (f"<text_tag color='{C_BUY}'>AI 买入</text_tag>（高开{limit:g}%以内）"
-                       if gap <= limit else
-                       f"<text_tag color='{C_HINT}'>没买到</text_tag>（高开超{limit:g}%）")
+                tag = _ok_tag if gap <= limit else _no_tag
         else:
             gap_txt, tag = "竞价数据未到", "<font color='grey'>待竞价</font>"
         _core_tag = ""
@@ -2900,7 +2930,8 @@ def _board_track_block(date: str) -> list[dict]:
     blocks.append(_div(_head))
 
     # ② 封板质量四项全中（早封 ∧ 封厚 ∧ 低换手 ∧ 零炸板）——唯一「值得接力」的档
-    #    ⚠️ 只报事实，不写「大概率晋级」：30 日实测四项全中的票多数次日高开>5% 买不到。
+    #    ⚠️ 只报事实，不写「大概率晋级」：30 日实测四项全中的票多数次日高开过 5%，
+    #       开盘溢价被吃掉（⚠️ 11-05 起「5%＝买不到」的说法已废，买不到只剩竞价封死）。
     _ready = [x for x in tracked if (x.get("factors") or {}).get("count") == 4]
     if _ready:
         _ready.sort(key=lambda x: (-int(x.get("boards") or 0), str(x.get("name") or "")))
@@ -3140,10 +3171,13 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
     # 观察池（按 watch_group 分区展示：容量核心 / 高标题材核心 / 补充观察）
     watch_narr: list[str] = []
     if watch:
-        blocks.append(_div(f"**👀 观察池 TOP{len(watch)}（仅作板块参照·不可买）**"))
+        watch_note = "条件资格须竞价核验·其余只观察" if any(
+            it.get("participation_eligibility") == "conditional" for it in watch
+        ) else "仅作板块参照·不可买"
+        blocks.append(_div(f"**👀 观察池 TOP{len(watch)}（{watch_note}）**"))
         # 分组兜底：无 watch_group 字段（旧数据）按板数归入合理组
         groups: list[tuple[str, list[dict]]] = []
-        for grp in ("容量核心", "一字核心", "高标/题材核心", "最高板封单过薄", "补充观察"):
+        for grp in _WATCH_GROUP_PLAIN:
             items = [
                 it for it in watch
                 if (it.get("watch_group") or ("高标/题材核心" if it.get("boards", 1) >= 3 else "补充观察")) == grp
@@ -3181,6 +3215,8 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
                     ))
                 # 不读取历史基因档案。
                 # 2026-10-27：降级原因必须写出来（否则读者只看到"它掉进观察池"，不知道为啥）
+                if it.get("participation_eligibility") == "conditional":
+                    blocks.append(_div("　　条件资格：竞价核验全部风控后方可参与，非买入确认"))
                 if it.get("watch_reason"):
                     blocks.append(_div(f"　　<font color='grey'>{it['watch_reason']}</font>"))
                 # 🐉 龙一闸降级原因（非龙一 / 龙一买不进）—— 同样是"为什么它不能买"
@@ -3463,6 +3499,21 @@ def _relay_position_block(plan: dict | None, *, day_word: str = "今天",
     if not isinstance(shown_quota, int):
         shown_quota = quota
 
+    # 🎯 2026-11-05「不限制只数 · 单票最多50% · 平均分配仓位」：
+    #   名额不再按档位截断 → 卡面读**真实参与只数**；仓位读均分上限 even_cap，
+    #   ⛔ 不再显示弱档 30% / 中档 40% 的档位数字（那是旧口径，会与账本打架）。
+    _even = bool(_slot.get("even_allocation"))
+    _even_cap = _slot.get("even_cap")
+    _even_n = _slot.get("allocation_count")
+    try:
+        from core.risk_limits import MAX_POSITION_PER_STOCK as _HARD_CAP_LOCAL
+    except ImportError:  # pragma: no cover
+        from wealth_code.core.risk_limits import MAX_POSITION_PER_STOCK as _HARD_CAP_LOCAL  # type: ignore[no-redef]
+    if _even and isinstance(_even_cap, (int, float)) and _even_cap > 0 \
+            and isinstance(_even_n, int) and _even_n >= 1:
+        shown_quota = _even_n
+        single_cap = float(_even_cap)
+
     lines: list[str] = []
 
     def _pct(v) -> str:
@@ -3500,6 +3551,12 @@ def _relay_position_block(plan: dict | None, *, day_word: str = "今天",
                 f"（因为前面亏了 {dd:.1f}%，按比例收着做）")
         else:
             lines.append(f"{day_word}只买 1 只 · 单票上限 {_pct(float(single_cap))}")
+    elif (_even and isinstance(_even_cap, (int, float)) and _even_cap > 0
+          and isinstance(_even_n, int) and _even_n >= 2):
+        # 🎯 均分口径：只报「买几只 / 每只多少」，⛔ 不写机制解释、不写旧档位。
+        lines.append(f"行情强弱：{tier}")
+        lines.append(f"{day_word}买 {_even_n} 只 · 每只 {_pct(float(_even_cap))} · "
+                     f"单票上限 {_pct(_HARD_CAP_LOCAL)}")
     elif isinstance(per, (int, float)) and isinstance(total, (int, float)) and isinstance(shown_quota, int):
         # ⛔ 「行情强弱」是仓位块的**结论档位**，⛔ 任何档位都必须留——
         #    删了它就只剩一个数字，读者不知道这个数字是「中·正常」压出来的还是「强」压出来的。
@@ -3529,6 +3586,17 @@ def _relay_position_block(plan: dict | None, *, day_word: str = "今天",
         else:
             lines.append(f"{day_word}最多同时持有 {shown_quota} 只 · 每只不超过 {_pct(per)} · "
                          f"总仓位不超过 {_pct(total)}")
+    # 🎯 11-05 21:45 高开降权：上面的「每只 X%」是**均分标准上限**，而接近涨停的票
+    #    逐票 position_cap 会更低（冻结件/账本同值）。⛔ 不写这一行就会出现
+    #    「卡面说 50%、账本记 10%」——违反卡面/验证/账本同源。
+    #    只报事实与最低那档，⛔ 不解释机制、不露「降权系数」。
+    if can_buy and _slot.get("gap_weight_enabled"):
+        _gw_caps = _slot.get("gap_weight_caps") or {}
+        _gw_vals = [v for v in _gw_caps.values() if isinstance(v, (int, float)) and v > 0] \
+            if isinstance(_gw_caps, dict) else []
+        if _gw_vals:
+            lines.append(f"其中 {len(_gw_vals)} 只开得接近涨停，"
+                         f"上限收紧到最低 {_pct(min(_gw_vals))}")
     # 题材库沉淀 = 客观事实（判断交给 hints，避免同一件事说两遍）
     if isinstance(day_count, int) and isinstance(theme_count, int) and day_count:
         # 只 20 字，且是「题材库成熟度」这条唯一口径 —— ⛔ 不值得为省它破坏契约
@@ -4628,7 +4696,8 @@ def _live_confirm(theme: str, live: dict | None) -> tuple[str, str]:
     names_out: set[str] = set()
     names_ongoing: set[str] = set()
     names_hot: set[str] = set()
-    sr = (live or {}).get("sector_risk") or {}
+    from common.em_flow import sector_risk_for_decision
+    sr = sector_risk_for_decision((live or {}).get("sector_risk"))
     for s in (sr.get("inflow_top") or []):
         names_in.add(str(s.get("name") or ""))
     for s in (sr.get("outflow_top") or []):

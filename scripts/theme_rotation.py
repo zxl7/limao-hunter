@@ -136,6 +136,7 @@ def _market_context():
     latest = _load(CACHE / "pulse_snapshots" / "latest.json") or {}
     sr = latest.get("sector_risk") or {}
     return {
+        **{k: sr.get(k) for k in ("status", "asof", "error", "reference_only", "age_seconds", "sources")},
         "sentiment_score": fb.get("sentiment_score"),
         "nuke_count": fb.get("nuke_count"),
         "promote_rate": fb.get("promote_rate"),
@@ -837,6 +838,8 @@ def _flow_trend(theme_name, flow_series):
 
 def _capital_state(theme_name, mctx):
     """资金是否撤离：该题材是否出现在净流出榜（模糊包含匹配）。"""
+    from common.em_flow import sector_risk_for_decision
+    mctx = sector_risk_for_decision(mctx)
     name = (theme_name or "").strip()
     for o in mctx.get("outflow_top", []):
         on = (o.get("name") or "")

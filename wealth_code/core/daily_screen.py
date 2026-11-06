@@ -140,6 +140,10 @@ def enabled() -> bool:
     return os.environ.get(ENABLED_ENV, "1") not in ("0", "false", "False", "")
 
 
+# 📏 2026-11-06 用户 A：身位从「过筛硬伤」降级为「09:25 降权」。
+#   默认 1（只写事实、不 reject）；`=0` 逐字回退到旧硬拒（全市场最高板口径）。
+POS_SCREEN_FACT_ONLY = os.environ.get("ENABLE_SCREEN_POSITION_GAP", "1") != "0"
+
 def _num(v: Any) -> float | None:
     try:
         if v is None or isinstance(v, bool):
@@ -164,7 +168,8 @@ def _theme(row: dict) -> str:
 
 def screen_one(row: dict[str, Any], *, market_max_boards: int | None,
                theme_members: dict[str, int], gene_cache: Path | None = None,
-               trade_date: str = "", root: Path | None = None) -> dict[str, Any]:
+               trade_date: str = "", root: Path | None = None,
+               theme_max_boards: dict[str, int] | None = None) -> dict[str, Any]:
     """单票过筛 → verdict + 理由链。
 
     ⛔ 顺序有意义：先硬伤（reject），再「只能看」（watch_only），最后才是 pass。
@@ -248,7 +253,7 @@ def screen_one(row: dict[str, Any], *, market_max_boards: int | None,
             #      · 独苗 3 板   n=52  可成交 8  开收 +1.31%  胜率 62.5%
             #      · 成线 ≥3 家  n=58  可成交 12 开收 +1.26%  胜率 **75.0%**
             #    ⇒ 同题材一家都没有的 ≥4 板，是「没有板块支撑的高位孤军」，
-            #      次日高开>5% 占 50%（买不到），能买到的多半是砸盘位。
+            #      次日高开过 5% 的占 50%（开盘溢价被吃掉），能买到的多半是砸盘位。
             #      ⛔ 但也不删：3 板独苗胜率 62.5%，是「高」而不是「独苗」不行。
             #      ⇒ 只把 ≥4 板卡在「只能看」，让它不占名额、进不了 relay。
             watch.append(f"独苗高标（{boards} 板·同题材 {mates} 家）"
@@ -260,20 +265,60 @@ def screen_one(row: dict[str, Any], *, market_max_boards: int | None,
     else:
         supports.append(f"同题材 {mates} 家，成线")
 
-    # ── 4) 身位（与全市场最高板的关系）────────────────────────────────────
-    # ⛔ 只对 **≥2 板** 生效。用户「首板也能过」——市场最高 4 板时所有 1 板都差 3，
-    #    那是板数差的必然结果，拿它杀首板等于把首板整层删掉（实测 11-03：33 只 1 板
-    #    全被判「身位差 3 板」，过筛退化成「只留高板」）。首板另有 ⑥ 的带动+成线判据。
-    if boards >= 2:
+    # ── 4) 身位（2026-11-06 用户 A 重构：分母改同题材 + 不再当硬伤）──────────────
+    # 用户原话：「身位差我好像没有强制要求百分之百限制吧……你传媒板块你已经涨了五板龙头了，
+    #   但是光伏板块才一个板，这种身位差其实是没有影响的呀，它是走一个新的逻辑，
+    #   甚至说可以做一个资金的承接方向，你这种身位差估计只能在同一个板块里面适用，
+    #   不同板块之间它是没有关系的」
+    #
+    # ⛔ 旧口径（全市场最高板 − 本票板数 ≥2 → reject）有三个问题：
+    #    ① 分母错：跨题材没有板数传导关系；
+    #    ② 依据过期：拒因写「次日高开>5% 买不到」，而 11-05 用户已删掉 5% 那条线，
+    #       且该依据的样本本身就是按 `0<gap≤5%` 划出来的（用已废的线定义样本）；
+    #    ③ **职责错位**：身位回答的是「该买多重」，不是「值不值得看」。放进过筛
+    #       就会把票在盘后就判死，09:25 的降权逻辑永远没机会生效 → 双轨。
+    #    35 日 717 真题材可买票次实测：旧闸保留批 −1.05%/胜42.4%，
+    #    剔除批 −0.93%/胜41.8%（**剔除的反而更好**），零区分度。
+    #
+    # ⇒ 现在只写**事实**（basis / line_gap / market_gap），由 09:25
+    #    `ai_caliber.position_weight` 统一降权。`ENABLE_SCREEN_POSITION_GAP=0`
+    #    回退旧硬拒（逐字恢复 11-06 之前行为）。
+    _p_facts: dict[str, Any] = {}
+    if POS_SCREEN_FACT_ONLY:
+        _p_tmax = (theme_max_boards or {}).get(theme) if theme else None
+        _p_facts = {
+            "market_max_boards": market_max_boards,
+            "theme_max_boards": _p_tmax,
+            "line_gap": (int(_p_tmax) - boards) if _p_tmax and boards else None,
+            "market_gap": (int(market_max_boards) - boards)
+                          if market_max_boards and boards else None,
+        }
+        if _p_facts["line_gap"] is not None:
+            _p_facts["basis"] = "line"
+            _lg = _p_facts["line_gap"]
+            if _lg == 0:
+                supports.append(f"同题材里它就是最高板（{boards} 板）——自己当锚，"
+                                f"该档可成交 T+1 反而偏弱，买则轻仓")
+            elif _lg == 1:
+                supports.append(f"同题材身位差 1 板（最快的一档：T+1 +0.52%/胜 53.4%）")
+            else:
+                unknown.append(f"同题材身位差 {_lg} 板（该档 T+1 −1.19%~−1.89%、"
+                               f"胜率 35~40%）—— 不据此否决，09:25 只降仓")
+        else:
+            _p_facts["basis"] = "unknown"
+            unknown.append("题材最高板缺失（不判身位，不据此否决）")
+    elif boards >= 2:
         if market_max_boards and boards:
             gap = int(market_max_boards) - boards
             if gap >= 2:
                 # ⚠️ 措辞修正（2026-11-04）：实测这一档**晋级率 50.0%（n=52）**，
-                #    是全组最高，不能说它「弱」。真正的问题是**买不到**：
+                #    是全组最高，不能说它「弱」。真正的问题是**开盘溢价被吃掉**：
                 #    可成交仅 6 只、高开>5% 占 53.8%、能成交的开收 −3.19%。
-                #    ⇒ 拒的依据是「次日大概率买不到」，不是「它涨不动」。
+                # ⚠️ 2026-11-06 再修：「买不到」这个归因**是错的**——5% 线 11-05 已废，
+                #    买不到只剩竞价封死。而且这条拒因本身已经整体停用
+                #    （`POS_SCREEN_FACT_ONLY=1` 走上面的事实层），这里只保留回退路径。
                 rejects.append(f"身位差 {gap} 板（全市场最高 {market_max_boards} 板）"
-                               f"—— 晋级率不低但次日高开>5% 占一半以上，买不到")
+                               f"—— 晋级率不低，但次日高开过 5% 的占一半以上、开盘溢价被吃掉")
             else:
                 supports.append(f"身位在前排（差 {gap} 板）")
         else:
@@ -335,6 +380,8 @@ def screen_one(row: dict[str, Any], *, market_max_boards: int | None,
             "carry_cnt": carry, "gene_grade": g_grade or None,
             "promo_rate_hist": gf.get("promo_rate_hist"),
             "zt_250": gf.get("zt_250"),
+            # 📏 身位事实（09:25 `ai_caliber.position_weight` 消费；⛔ 不是裁决）
+            "position_gap": (_p_facts if POS_SCREEN_FACT_ONLY else None),
         },
     }
 
@@ -361,12 +408,21 @@ def screen_pool(zt_rows: Iterable[dict[str, Any]], *,
         t = _theme(r)
         if t:
             theme_members[t] = theme_members.get(t, 0) + 1
+    # 📏 同题材最高板（身位的新分母·11-06 用户 A）：只认炒作题材，行业兜底也照算但
+    #    `position_weight` 在 pool_call 层会用同一口径复核；此处只提供事实。
+    theme_max_boards: dict[str, int] = {}
+    for r in rows:
+        t = _theme(r)
+        b = int(_num(r.get("boards")) or 0)
+        if t and b > theme_max_boards.get(t, 0):
+            theme_max_boards[t] = b
     boards_all = [int(_num(r.get("boards")) or 0) for r in rows]
     max_boards = max(boards_all) if boards_all else None
 
     screened = [screen_one(r, market_max_boards=max_boards,
                            theme_members=theme_members, gene_cache=gene_cache,
-                           trade_date=trade_date, root=root)
+                           trade_date=trade_date, root=root,
+                           theme_max_boards=theme_max_boards)
                 for r in rows]
     # 排序：先按 verdict（reject 沉底），再按板数，再按代码（稳定）
     order = {"pass": 0, "watch_only": 1, "reject": 2}

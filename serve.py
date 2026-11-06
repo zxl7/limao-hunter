@@ -448,6 +448,8 @@ PUBLIC_ROUTES = {
     "/api/decision/pool-call": {"dir": "wealth_code/cache", "pattern": r"^pool_call-\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "limit": 3, "cadence": "daily", "desc": "09:25 池内裁决终态"},
     # 「今天 48 只涨停为什么只剩这几只」—— 全量过筛逐票结论（pass/watch_only/reject + 理由链）
     "/api/decision/screen": {"dir": "cache/daily_screen", "pattern": r"^screen_\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "limit": 5, "cadence": "daily", "desc": "全量涨停逐票过筛结论"},
+    # 竞价三环影子逐日留痕（scripts/sector_gap_daily_trace.py 产出 · 只读、不裁决）
+    "/api/decision/sector-gap-trace": {"file": "cache/sector_gap_trace/daily_trace.json", "cadence": "daily", "desc": "竞价三环影子逐日留痕（影子标记 × T+1 结算对账 · 恒不改裁决）"},
     # 15.3 AI 判断 / 净值
     "/api/ai/view": {"dir": "cache", "pattern": r"^ai_view_\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "limit": 20, "cadence": "daily", "desc": "AI 判断（参与/放弃/观察 + 理由）"},
     "/api/ai/decisions": {"file": "wealth_code/cache/ai_decisions.jsonl", "format": "jsonl", "cadence": "daily", "desc": "AI 判断台账"},

@@ -16,6 +16,10 @@
   ⑥ 三处同值：竞价理由 / 卡面 / 账本 position 的仓位口径一致；观察票不占名额。
 
 全隔离：tmp_path + monkeypatch，不触真实 cache / 台账 / 网络，不推群。
+
+⚠️ 本文件锁 2026-11-04 旧口径（名额下限 2 / 单票 50%）。11-05 新规则
+   （量能分档 / 不限制只数 / 平均分配仓位）见 test_volume_bands_even_allocation.py；
+   这里显式跑在回退口径，同时验证新开关可逆。
 """
 import importlib.util
 import json
@@ -23,6 +27,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("legacy_pool_call_rules")
 
 BASE = Path(__file__).resolve().parent.parent
 WC = BASE / "wealth_code"
@@ -267,7 +273,14 @@ def test_card_single_pick_shows_50_not_30():
     assert "30%" not in content, "单票场景不得再出现弱档 30%"
 
 
-def test_card_single_pick_pressed_by_drawdown():
+def test_card_single_pick_pressed_by_drawdown(monkeypatch):
+    """⛔ 旧口径回归锁（11-05 用户「回撤不需要压仓」后显式跑回退）。
+
+    新默认下回撤不再压仓、单票回到 50%，由
+    tests/test_drawdown_narrative_freeze.py 单独锁；本用例只验证
+    ENABLE_DRAWDOWN_SCALING=1 时旧文案与压仓行为逐字可复现。
+    """
+    monkeypatch.setattr(rp, "ENABLE_DRAWDOWN_SCALING", True)
     plan = _plan_for_card(dd=19.64)             # ×0.2751 → 13.8%
     cap = rp.single_pick_cap(plan)
     meta = {"slot_policy": {"single_pick": True, "single_pick_cap": cap,

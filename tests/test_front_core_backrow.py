@@ -116,11 +116,15 @@ def test_backrow_does_not_block_when_core_broken():
 
 
 def test_backrow_does_not_block_when_core_unbuyable():
-    """核心一字/高开超 5%（买不到）→ 后排是唯一入口，不拦。"""
+    """核心竞价封死买不进 → 后排是唯一入口，不拦。
+
+    ⛔ 11-05 删 5% 线后，「核心买不到」只剩物理封死这一事实；
+       +7% 高开对强票属于符合预期，不能再拿它当「买不到」。
+    """
     cores = {"同一线": {"code": "600001", "name": "核心票", "boards": 5, "broken": False}}
     res = pool_call.call_pool(
         {"relay": [_cand("600002", "后排票", 2)], "watch": []},
-        {"600002": _q(1.0), "600001": _q(7.0)},          # 核心高开 +7% > 5% 硬线
+        {"600002": _q(1.0), "600001": _q(9.9)},          # 核心 09:25 已封在涨停附近
         plan={"stance": "defend", "views": {}}, line_cores=cores)
     assert res["views"]["600002"]["view"] == "participate"
     assert res["views"]["600002"].get("backrow_note") == "core_unbuyable"

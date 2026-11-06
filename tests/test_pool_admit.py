@@ -51,6 +51,41 @@ def _clean_env(monkeypatch):
         monkeypatch.delenv(k, raising=False)
 
 
+@pytest.mark.parametrize("interim", [False, True])
+def test_multiday_repair_requires_complete_history(tmp_path, interim):
+    from pipelines.pipeline_eod import _build_second_leg_map
+    dates = ["2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-11-02", "2026-11-03"]
+    for i, day in enumerate(dates):
+        boards = i + 1 if i < 3 else (1 if interim and i == 4 else 0)
+        rows = [{"code": "600001", "boards": boards}] if boards else []
+        (tmp_path / f"zt_{day}.json").write_text(json.dumps({
+            "date": day, "generated_ts": day + "T17:00:00+08:00",
+            "zt_count": len(rows), "zt_list": rows}))
+    rows = [{"code": "600001", "boards": 1}, {"code": "600002", "boards": 1}]
+    result = _build_second_leg_map(tmp_path, "2026-11-04", rows)
+    assert set(result) == {"600001"}
+    assert result["600001"]["adjustment_sessions"] == 4
+    assert result["600001"]["restart_dates"] == ["2026-11-04"]
+    assert result["600001"]["interim_limitup_dates"] == (["2026-10-30"] if interim else [])
+    (tmp_path / "zt_2026-10-30.json").write_text("{}")
+    assert not _build_second_leg_map(tmp_path, "2026-11-04", rows)
+
+
+def test_historical_repair_retained_without_promoting_plain_first_board(monkeypatch):
+    row = _row("600001", "修复样本", 1, 0)
+    assert not pa.first_board_worthy(row)
+    row["n_plus_n"] = {"quality": "ok", "prior_boards": 3,
+                       "prior_dates": ["2026-10-29", "2026-10-30", "2026-11-02"],
+                       "restart_dates": ["2026-11-04"]}
+    assert pa.first_board_worthy(row)
+    assert not pa.relay_worth(row)
+    monkeypatch.setenv("ENABLE_HISTORICAL_REPAIR", "0")
+    assert not pa.first_board_worthy(row)
+    row["n_plus_n"]["quality"] = "missing"
+    monkeypatch.setenv("ENABLE_HISTORICAL_REPAIR", "1")
+    assert not pa.first_board_worthy(row)
+
+
 # ── ① 默认值 ───────────────────────────────────────────────────────────
 def test_default_per_line_is_unlimited():
     """2026-11-04 用户「解除每一个题材保留两只的限制」→ 默认 0 = 不限。

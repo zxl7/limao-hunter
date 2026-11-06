@@ -49,12 +49,18 @@ def test_wait_on_defense_and_risk_off():
 
 
 def test_selective_on_repair():
-    """修复档(4.5-6.9) → selective（可做·≤50%·高开≤5%参与/＞5%放弃）。"""
+    """修复档(4.5-6.9) → selective（可做·≤50%）。
+
+    ⚠️ 2026-11-05 用户删掉「5% 高开」这条绝对线（「有些票今天很强势明天它就可以高开，
+    有些票今天会弱势那么它低开一样能拉起来」）→ entry 文案**不许**再写
+    「≤5% 参与 / ＞5% 放弃」，改为「高开越多仓位越轻」。
+    """
     d = do.build_decision(regime="neutral", sentiment=5.5, promote_rate=32.0,
                           nuke_count=3, avg_pct=2.1)
     assert d["verdict"] == "selective"
-    # 用户 5% 硬线（2026-09-14 起）：≤5% 参与、＞5% 放弃，entry 文案须含「≤5%」与「5%」
-    assert "≤5%" in d["rules"]["entry"] and "5%" in d["rules"]["entry"]
+    _entry = d["rules"]["entry"]
+    assert "≤5%" not in _entry and "5% 放弃" not in _entry, _entry
+    assert "仓位越轻" in _entry, _entry
     assert d["rules"]["position"] == "≤50% 单票·≤1-2 只"
 
 

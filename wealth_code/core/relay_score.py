@@ -379,7 +379,8 @@ def _load_sector_flow_map(cache_dir: Path | str | None = None) -> dict[str, floa
         tr = json.loads((base / "theme_rotation.json").read_text(encoding="utf-8"))
     except Exception:
         return {}
-    mc = tr.get("market_context") or {}
+    from common.em_flow import sector_risk_for_decision
+    mc = sector_risk_for_decision(tr.get("market_context"))
     flow_map: dict[str, float] = {}
     for it in mc.get("inflow_top") or []:
         flow_map[str(it.get("name") or "")] = float(it.get("flow_yi") or 0.0)
@@ -405,7 +406,8 @@ def build_sector_agg_from_theme_rotation(
     """
     agg: dict[str, dict[str, Any]] = {}
     tr = theme_rotation or {}
-    mc = tr.get("market_context") or {}
+    from common.em_flow import sector_risk_for_decision
+    mc = sector_risk_for_decision(tr.get("market_context"))
     # 板块资金映射：优先全量 sector_flow_history，兜底 market_context Top5
     flow_map = _load_sector_flow_map(cache_dir)
     if not flow_map:

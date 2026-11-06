@@ -152,5 +152,7 @@ def test_other_conditions_unaffected_by_volume_style():
     assert "题材龙" in pe.high_win_missing(
         _row(cje_yi=0.34, is_one_word=True, dragon_rank=3), _ENV, 4)
     assert "梯队" in pe.high_win_missing(
-        _row(cje_yi=0.34, is_one_word=True,
+        # ⚠️ 2026-11-06：1~2 板已免判梯队（见 ENABLE_HIGH_WIN_LADDER_BY_BOARDS），
+        #    本用例要验「梯队照判」，故取 3 板（该档仍守 6.0）。
+        _row(cje_yi=0.34, is_one_word=True, boards=3,
              ladder_has_complete=False, ladder_health=2.0), _ENV, 4)

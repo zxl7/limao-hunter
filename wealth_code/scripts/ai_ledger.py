@@ -125,11 +125,15 @@ def _effective_view(row: dict, pool_views: dict) -> str:
     保证结算/账本时序不被改写。真·旧数据（既无 9:25 也无 bias，只有 legacy view）
     仍走 `row.get("view") or "participate"` 兜底（缺 view 视为 participate）。
     """
-    from core.two_pool import observation_only
+    from core.two_pool import observation_only, rechecked_entry
+    code = str(row.get("code") or "").strip()
+    m = pool_views.get(code) if isinstance(pool_views, dict) else None
+    # 🔁 11-05：冻结件里被竞价复核翻案的观察票，账本必须记 participate。
+    #    ⛔ 否则「卡面说买、账本记 watch」——盘后身份把 09:25 的实判二次否决。
+    if rechecked_entry(m):
+        return "participate"
     if observation_only(row):
         return "watch"
-    code = str(row.get("code") or "").strip()
-    m = pool_views.get(code)
     if isinstance(m, dict) and str(m.get("view") or "").strip():
         return str(m["view"])
     _bias = str(row.get("bias") or "").strip()
@@ -140,6 +144,31 @@ def _effective_view(row: dict, pool_views: dict) -> str:
     if _bias == "normal":
         return "watch"
     return str(row.get("view") or "participate")
+
+
+def _settle_decision(row: dict, effective_view: str,
+                     pool_mark: dict | None) -> dict:
+    """结算用决策行 = 原始行 + 生效判断 + 竞价复核翻案标记。
+
+    ⛔ 翻案标记必须一并带上：否则 `ai_caliber.decide` 会拿盘后 observe_only
+    身份把冻结件已判 participate 的票判回不买（11-05「判了买、结算不买」）。
+    """
+    d = dict(row)
+    d["view"] = effective_view
+    from core.two_pool import rechecked_entry
+    if rechecked_entry(pool_mark):
+        d["rechecked_from_observe"] = True
+        d["recheck_class"] = (pool_mark or {}).get("recheck_class") or "state"
+    # 🎯 11-05 竞价三态：人工二次机会的标记一并灌入结算行，
+    #    让 AI 轨与账户账本同走 ai_caliber.decide 的「不记录」闸。
+    if (pool_mark or {}).get("manual_only") is True:
+        d["manual_only"] = True
+        d["auction_state"] = pool_mark.get("auction_state")
+    # 🎯 11-05：冻结件的逐票质量预期优先于盘后候选，确保结算与 09:25 终裁同源。
+    for _k in ("expected_gap_pct", "gap_vs_expected", "is_20cm"):
+        if (pool_mark or {}).get(_k) is not None:
+            d[_k] = pool_mark[_k]
+    return d
 
 
 def _cand_fields_of(decision_date: str, code: str) -> dict:
@@ -167,6 +196,17 @@ def _cand_fields_of(decision_date: str, code: str) -> dict:
                 need = exp.get("auction_amount_min_yi")
                 if isinstance(need, (int, float)) and need > 0:
                     out["amount_need_yi"] = float(need)
+                # 🎯 11-05 用户删 5%/红开：决策行自带逐票质量预期 E 与 20cm 标志，
+                #    settle → ai_caliber.decide 才能与 09:25 池内裁决同源判「是否符合预期」。
+                #    ⛔ 缺 E 时 decide 走「不裁决」，不猜、不否决。
+                try:
+                    from core import expected_gap as _eg
+                    _e = _eg.expected_gap_pct(it)
+                    if _e is not None:
+                        out["expected_gap_pct"] = _e
+                except Exception:
+                    pass
+                out["is_20cm"] = bool(it.get("is_20cm"))
                 return out
     return {}
 
@@ -771,7 +811,10 @@ def cmd_settle(args) -> int:
     # 两票及以上完全不进这个分支（沿用 record 时的 per_pick/total 裁剪）。
     for r in todo:
         _fz = pool_views.get(str(r.get("code") or "")) or {}
-        _cap = _fz.get("position_cap") if _fz.get("single_pick") else None
+        # 🎯 2026-11-05：平均分配后每只 participate 票都带 position_cap，
+        #    不再只有单票场景重裁（多票沿用 record 档位会与卡面/裁决打架）。
+        _cap = (_fz.get("position_cap")
+                if (_fz.get("single_pick") or _fz.get("even_allocation")) else None)
         if not isinstance(_cap, (int, float)) or float(_cap) <= 0:
             continue
         _base = r.get("position_requested")
@@ -805,13 +848,14 @@ def cmd_settle(args) -> int:
             skipped.append((code, "无竞价数据（auction_quotes 缺失该票）"))
             continue
         gap = ((float(ap) - float(prev_close)) / float(prev_close) * 100) if prev_close else None
-        # ⛔ 统一裁决（2026-09-17「A 计划」）：与**账户账本同一个函数** `ai_caliber.decide`——
-        #    参与 ∧ ≤5% 硬线 ∧ 落预期区间 → 成交；否则跳过（不及预期/高开太多/超线均不买）。
-        #    此前此处手写 `gap > 5%`，与账户账本新增的区间门脱节 → 两轨会同票不同结论。
+        # ⛔ 统一裁决：与**账户账本同一个函数** `ai_caliber.decide`。
+        #    11-05 用户删 5%/红开后 = 参与 ∧ 竞价未封死 ∧ 不明显低于逐票质量预期 ∧ 量能达标。
+        #    ⛔ 此处禁再手写任何 gap 幅度线（两轨同票不同结论的老坑）。
         if _ai_caliber is not None:
             # 🎯 生效判断 = 9:25 池内裁决（缺失才回退行内 view）——与账户账本同一个 decide
-            _dec = dict(r)
-            _dec["view"] = effective_views.get(code, "watch")
+            #    🔁 11-05：翻案标记由 `_settle_decision` 一并灌入，结算不再二次否决。
+            _dec = _settle_decision(r, effective_views.get(code, "watch"),
+                                    (pool_views or {}).get(code))
             _can, _note, _ = _ai_caliber.decide(
                 _dec, gap, expected_range=r.get("expected_range"),
                 auction_amount_yi=q.get("auction_amount_yi"),

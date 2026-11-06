@@ -14,12 +14,22 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 WC = Path(__file__).resolve().parents[1] / "wealth_code"
 if str(WC) not in sys.path:
     sys.path.insert(0, str(WC))
 
 from core import ai_caliber, nav_ledger, strategy_metrics  # noqa: E402
 from pipelines import pipeline_verify as pv  # noqa: E402
+
+
+# ⛔ 本文件锁 2026-09-14~09-17 的 AI 口径旧契约（5% 硬线 / 预期区间下沿）。
+#    11-05 用户删除 5% 与红开两条线后，显式跑在回退模式验证开关可逆；
+#    新默认口径的回归锁见 `tests/test_expected_gap_zone.py`。
+@pytest.fixture(autouse=True)
+def _absolute_gap_mode(monkeypatch):
+    monkeypatch.setenv("AI_EXPECTED_GAP_MODE", "absolute")
 
 
 # ── 夹具 ────────────────────────────────────────────────────────────
@@ -261,8 +271,14 @@ def test_record_switch_off_restores_mechanical(monkeypatch):
 
 # ── 4) run_verify + 净值账本：只记 AI 实际买到的票 ─────────────────────
 def test_ledger_only_counts_ai_filled(monkeypatch, tmp_path):
-    """账户账本 = AI 口径：机械达标但 AI 放弃的票不进账本，行内含 caliber 留痕。"""
+    """账户账本 = AI 口径：机械达标但 AI 放弃的票不进账本，行内含 caliber 留痕。
+
+    ⛔ 本用例锁的是 2026-09-14 的「AI 决策唯一口径」；09-21 起 `_inject_pool_views`
+    会用 9:25 池内裁决覆写决策行，11-05 起又「不限只数」，会把 000002/000004
+    算成买入。这里显式回退那一层注入，保持旧口径语义（生产链路由其它专项测试锁）。
+    """
     _isolate_ledgers(monkeypatch, tmp_path)
+    monkeypatch.setattr(pv, "_inject_pool_views", lambda a, b, c=None: a)
     cand = {"date": "2026-09-11",
             "relay": [_cand("000001", "甲票"), _cand("000002", "乙票")],
             "watch": [_cand("000003", "丙票"), _cand("000004", "丁票")],

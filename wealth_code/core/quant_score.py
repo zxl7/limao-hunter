@@ -327,7 +327,8 @@ def compute_raw_score(cand: dict[str, Any], env: dict[str, Any], pulse: dict[str
     # —— 2) sector_sentiment_score（真实：pulse 板块风险 + 强势板块 + daily_verdict）——
     sector_s = 65.0
     if pulse:
-        sr = pulse.get("sector_risk") or {}
+        from common.em_flow import sector_risk_for_decision
+        sr = sector_risk_for_decision(pulse.get("sector_risk"))
         declining = sr.get("declining") or []
         inflow = sr.get("inflow_top") or []
         sector_s += min(len(inflow) * 2.0, 10.0)          # 强势板块净流入 → 加分

@@ -26,8 +26,8 @@ REPAIR_MIN = 4.5          # 情绪分 ≥4.5 = 修复档（可选择性参与）
 RISKON_MIN = 7.0          # 情绪分 ≥7 = 亢奋档（正常接力评估）
 NUKE_CONVERGE = 5         # 核按钮 ≤5 = 亏钱效应收敛（待命触发之一）
 PROMO_OK = 30.0           # 晋级率 ≥30%（待命触发之一·心法纪律）
-GAP_PARTICIPATE = 5.0     # 竞价高开 ≤5% 才可参与（2026-09-14 用户「低于5%直接买」硬线·原 3.0 已废）
-GAP_ABANDON = 5.0         # 竞价高开 >5% 一律放弃
+GAP_PARTICIPATE = 5.0     # ⛔ 2026-11-05 起**不参与裁决**（用户删掉「5% 高开」这条线）。
+GAP_ABANDON = 5.0         # ⛔ 同上：仅保留常量兼容旧引用，卡面已改为「高开越高仓位越轻」。
 STOP_LOSS_PCT = 3.0       # 止损 -3% 或破当日均价线（五日线=生命线）
 # 单票仓位上限 50%（2026-09-14 用户「买入仓位不超过 50%」·原 30%）
 # ⛔ 单一源 = core/risk_limits.MAX_POSITION_PER_STOCK（此处仅转出，禁再写数字）
@@ -141,7 +141,7 @@ def build_decision(
                 "并且出现板块级的真实利好消息",
                 "（三条满足两条就可以重新评估，否则继续空着）"],
             "rules": {"position": 0,
-                      "entry": f"如果重新评估：只做开盘涨幅 ≤{GAP_PARTICIPATE:.0f}% 的，涨超 {GAP_ABANDON:.0f}% 就放弃",
+                      "entry": "如果重新评估：高开越多仓位越轻（6% 以上逐档压），只有竞价封死才买不进",
                       "stop": f"跌 {STOP_LOSS_PCT:.0f}% 或跌破当天均价就走", "note": "不要越跌越买摊低成本"},
             "risks": ["市场转好第一天会踏空：转好不会一天完成，等 10:00 后确认昨天涨停票今天的表现再动",
                       "突发利空扩大：昨天涨停今天被砸的票不减少，就全天不动"],
@@ -163,7 +163,7 @@ def build_decision(
             "triggers": [f"做多气氛 ≥{REPAIR_MIN:.1f} 分，昨天涨停今天被砸的少于 {NUKE_CONVERGE} 只，"
                          f"且昨天涨停今天继续涨停的比例 ≥{PROMO_OK:.0f}%"],
             "rules": {"position": f"≤{POSITION_MAX * 100:.0f}% 单票", "count": "最多 1 只·只做成交活跃的龙头",
-                      "entry": f"开盘涨幅 ≤{GAP_PARTICIPATE:.0f}% 才参与，超 {GAP_ABANDON:.0f}% 放弃",
+                      "entry": "高开越多仓位越轻（6% 以上逐档压）；封死买不进的不追",
                       "stop": f"跌 {STOP_LOSS_PCT:.0f}% 或跌破当天均价就走", "note": "一次买够·不要越跌越买"},
             "risks": ["市场只转好一天就会错过：等昨天涨停今天继续涨停的比例回到 30% 以上，第二天再评估",
                       "出现政策级真实利好的例外：盘前有板块级的硬消息（不是跟着美股涨），"
@@ -180,9 +180,9 @@ def build_decision(
                       "nuke_count": nuke_count, "regime": regime},
             "triggers": [],
             "rules": {"position": f"单票 ≤{POSITION_MAX * 100:.0f}%·可以分散多只",
-                      "entry": "按开盘涨幅和成交量对照预期：明显强于预期就买，开盘涨超 5% 先看着不追",
+                      "entry": "按开盘涨幅和成交量对照预期：明显强于预期就买，高开越多仓位越轻",
                       "stop": f"跌 {STOP_LOSS_PCT:.0f}% 或跌破 5 日线就走"},
-            "risks": ["市场转冷很快：开盘涨超 5% 也只观察不追"],
+            "risks": ["市场转冷很快：高开的更要压仓位，别打满"],
         }
 
     # ── ⑤ 修复（4.5-6.9）──
@@ -195,7 +195,7 @@ def build_decision(
                   "nuke_count": nuke_count, "regime": regime},
         "triggers": [],
         "rules": {"position": f"≤{POSITION_MAX * 100:.0f}% 单票·≤1-2 只",
-                  "entry": f"开盘涨幅 ≤{GAP_PARTICIPATE:.0f}% 才参与，超 {GAP_ABANDON:.0f}% 放弃",
+                  "entry": "高开越多仓位越轻（6% 以上逐档压）；封死买不进的不追",
                   "stop": f"跌 {STOP_LOSS_PCT:.0f}% 或跌破当天均价、5 日线就走",
                   "note": "只做当天最强方向里的龙头"},
         "risks": ["转好可能不真实（缩量反弹）：要看昨天涨停今天继续涨停的比例能否回到 30%，回不去就降为观望"],

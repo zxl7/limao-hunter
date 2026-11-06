@@ -213,6 +213,11 @@ def first_board_worthy(row: dict[str, Any], *, was_relay: bool = False,
         return True                                   # 四档已判过「1进2」，不推翻
     if _num((row or {}).get("boards")) >= 2:
         return True
+    evidence = (row or {}).get("n_plus_n") or {}
+    if (os.environ.get("ENABLE_HISTORICAL_REPAIR", "1") != "0"
+            and evidence.get("quality") == "ok" and evidence.get("prior_boards", 0) >= 2
+            and evidence.get("prior_dates") and evidence.get("restart_dates")):
+        return True  # 历史修复保留观察，不代表接力准入。
     need = first_board_min_carry() if min_carry is None else min_carry
     if need <= 0:
         return True                                   # 闸关

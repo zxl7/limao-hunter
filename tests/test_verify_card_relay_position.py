@@ -64,8 +64,13 @@ def test_block_neutral_renders_plain_language():
     assert warns == [], f"出现未白话化行业术语: {warns}"
 
 
-def test_deep_drawdown_renders_shrunk_position_not_ban():
-    """2026-10-13 口径 B：回撤过警戒线 → 渲染「已压小」而非「禁买」，且仍给仓位数字。"""
+def test_deep_drawdown_renders_shrunk_position_not_ban(monkeypatch):
+    """⛔ 旧口径回归锁：10-13 口径 B「回撤过警戒线 → 压小而非禁买」。
+
+    11-05 用户「回撤不需要压仓」后，本用例显式开 ENABLE_DRAWDOWN_SCALING=1
+    跑回退；新默认（不压仓、单票 50%）由 test_drawdown_narrative_freeze.py 锁。
+    """
+    monkeypatch.setattr(rp, "ENABLE_DRAWDOWN_SCALING", True)
     plan = rp.build_plan(
         strength=0.5, tier="neutral", dd=12.0, theme_day_count=31,
         theme_info={"day_count": 31, "theme_count": 164, "confidence": 0.517},

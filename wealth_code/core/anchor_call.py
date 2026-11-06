@@ -315,15 +315,20 @@ def weak_to_strong(prev: dict[str, Any] | None, quote: dict[str, Any] | None, *,
 # ── ② 锚点态度（次日 09:25）—————————————————————————————————————
 
 ATT_YIZI = "yizi"            # 一字/竞价顶板 → 态度最强但买不到
-ATT_BIG_GAP = "big_gap"      # 高开超 5% 硬线 → 想买买不到
-ATT_STRONG = "strong"        # 强开 2%~5% → 唯一可执行窗口
+# ⚠️ 2026-11-06 口径修正：「高开超 5% ＝ 买不到」这条**已废**（用户 11-05：
+#    「有些票今天很强势明天它就可以高开，有些票今天会弱势那么它低开一样能拉起来」）。
+#    今天「买不到」的唯一事实是**竞价封死**（`gap ≥ 涨停幅度 − 0.2pct`，已由 ATT_YIZI 覆盖）。
+#    这档保留下来只表示「开得比 5% 高 → 按 `ai_caliber.gap_weight` 要压仓位」，
+#    ⛔ 不再作为「打不了核心、只能打隔壁」的依据。
+ATT_BIG_GAP = "big_gap"      # 高开超 5%（旧硬线已废）→ 仍可打，但按仓位权重下调
+ATT_STRONG = "strong"        # 强开 2%~5% → 可打窗口
 ATT_FLAT = "flat"            # 平开 0~2%
 ATT_WEAK = "weak"            # 低开 -1%~0
 ATT_BREAK = "break"          # 低开超 1% 或低于预期 → 破预期
 ATT_UNKNOWN = "unknown"
 
 ATT_LABEL = {
-    ATT_YIZI: "一字顶板", ATT_BIG_GAP: "大高开买不到", ATT_STRONG: "强开可打",
+    ATT_YIZI: "一字顶板", ATT_BIG_GAP: "大高开·压仓", ATT_STRONG: "强开可打",
     ATT_FLAT: "平开待确认", ATT_WEAK: "低开转弱", ATT_BREAK: "破预期",
     ATT_UNKNOWN: "未拿到报价",
 }
@@ -363,8 +368,10 @@ def anchor_read(quote: dict[str, Any] | None, *, code: Any = None,
         return {"attitude": ATT_YIZI, "label": ATT_LABEL[ATT_YIZI], "gap": round(gap, 2),
                 "note": "直接一字顶板：态度最强，但今天买不到 → 只能看隔壁"}
     if gap > BIG_GAP_PCT:
+        # ⛔ 不再写「买不到」：5% 线 11-05 已废，买不到＝竞价封死（上面 ATT_YIZI 已挡）。
         return {"attitude": ATT_BIG_GAP, "label": ATT_LABEL[ATT_BIG_GAP], "gap": round(gap, 2),
-                "note": f"高开 {gap:+.2f}%，超过 {BIG_GAP_PCT:g}% 硬线：买不到 → 只能看隔壁"}
+                "note": (f"高开 {gap:+.2f}%（超 {BIG_GAP_PCT:g}%）：这档仍可打，"
+                         f"只是按仓位权重下调 → 别打满")}
     if gap < BREAK_GAP_PCT:
         return {"attitude": ATT_BREAK, "label": ATT_LABEL[ATT_BREAK], "gap": round(gap, 2),
                 "note": f"低开 {gap:+.2f}%，破预期：这条线今天先别碰"}
@@ -406,17 +413,18 @@ def line_verdict(attitude: str, *, is_anchor: bool) -> str:
     """锚点态度 → 这条线今天怎么处理。**判断顺序固定**（先放弃、再看能不能买、最后才挑票）：
 
     ① 破预期 → 整条线放弃（最强否决，不再看第二个指标）
-    ② 一字 / 大高开 → 线强势但锚点买不到 → 只允许打隔壁
-    ③ 强开 → 唯一可执行窗口 → 打核心
+    ② 一字（竞价封死）→ 线强势但锚点真买不到 → 只允许打隔壁
+    ②b 大高开（>5%，旧硬线已废）→ **仍打核心**，只是按 `gap_weight` 压仓
+    ③ 强开 → 可打核心
     ④ 平开 → 只看，不给出手
     ⑤ 低开未破 → 只看
-    ⛔ 锚点本人（is_anchor）在 ③ 里可直接打；④⑤ 一律只看，不给自己开口子。
+    ⛔ 锚点本人（is_anchor）在 ② / ③ 里可直接打；④⑤ 一律只看，不给自己开口子。
     """
     if attitude == ATT_BREAK:
         return LINE_ABANDON
-    if attitude in (ATT_YIZI, ATT_BIG_GAP):
+    if attitude == ATT_YIZI:
         return LINE_WATCH if is_anchor else LINE_BUY_NEIGHBOR
-    if attitude == ATT_STRONG:
+    if attitude in (ATT_BIG_GAP, ATT_STRONG):
         return LINE_BUY_CORE
     return LINE_WATCH
 

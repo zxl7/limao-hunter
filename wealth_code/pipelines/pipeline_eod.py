@@ -1116,6 +1116,27 @@ HIGH_WIN_THEME_MATES_MIN = 2       # 题材内至少 2 家（独苗 = 没有题�
 HIGH_WIN_ALLOW_LONE_DRAGON_ENV = "HIGH_WIN_ALLOW_LONE_DRAGON"
 HIGH_WIN_CONDITIONS = ("题材龙", "情绪", "量能", "梯队")
 
+# ## 🪜 梯队门槛按连板数分级（2026-11-06 用户选 A「先验证再定口径」·验证后落地）
+#   起因：用户质疑「小题材龙一永远过不了梯队这条」（`calc_ladder_health` 对 2 家题材上限
+#         5.8 < 6，结构上不可能过）。把全窗口 relay 票拉出来分档验证后，**假设的形态被推翻**：
+#         `ladder_health` 是量化值，5.0 直接跳到 6.4，中间无取值 ⇒ `>=6` 实际等价于
+#         「该题材昨日不止 1 家涨停（有同伴/联动）」，不是「题材大小歧视」。
+#   真发现的交互（179 个 relay 票次 / 45 个交易日 / 09:25 买入→次日收盘，账本口径）：
+#     1~2 板 · 有梯队   n=56  T+1 −2.52%  胜 37.5%
+#     1~2 板 · 无梯队   n=51  T+1 −0.07%  胜 41.2%   ← 比「有梯队」更好
+#     3 板+  · 有梯队   n=29  T+1 +3.74%  胜 55.2%   ← 唯一稳健正期望格
+#     3 板+  · 无梯队   n=39  T+1 −1.82%  胜 46.2%
+#     置换检验：3 板+ Δ=+5.56pct p=0.017（显著，8~9 月/10~11 月两段同向）；
+#               1~2 板 Δ=−2.45pct p=0.908（不显著，但两段同向）
+#   ⇒ **梯队只在 3 板以上有区分力；1~2 板用它筛，反而选中更差的那一半。**
+#      与用户既定认知一致：「广度 ≠ 核心」，低板有梯队常是资金铺广度的一日游；
+#      而用户「必须在第 1~2 板发现它」的发现时点纪律，正落在这个被误伤的口子上。
+#   ⛔ 不是把 6.0 整体下调（那会同时放过 3 板+ 孤军，历史 −1.82%），
+#      只对 1~2 板**豁免这一条**，其余三条（题材龙/情绪/量能）照判，个股硬伤一条不放。
+#   ⛔ `ENABLE_HIGH_WIN_LADDER_BY_BOARDS=0` 一键回退旧口径（全板数统一 6.0）。
+HIGH_WIN_LADDER_BY_BOARDS_ENV = "ENABLE_HIGH_WIN_LADDER_BY_BOARDS"
+HIGH_WIN_LADDER_WAIVE_MAX_BOARDS = 2   # ≤2 板豁免梯队；3 板+ 仍守 HIGH_WIN_LADDER_MIN
+
 # ## 💧 量能判据按封板形态分档（2026-11-04 用户「必须补齐」）
 #   用户原话：「要考虑它是不是一字涨停。昨天龙版一字涨停，这个时候缩量是很正常的，
 #             除非你是换手，换手的话量能太低就肯定说不过去，比如说今天的紫竹。」
@@ -1148,6 +1169,23 @@ HIGH_WIN_MARKET_LEVEL = ("情绪",)
 def high_win_unfreeze_enabled() -> bool:
     """冰点解冻开关（默认开）。`ENABLE_ICE_UNFREEZE=0` → 回退「冰点一票不出」。"""
     return os.environ.get(HIGH_WIN_UNFREEZE_ENV, "1") not in ("0", "false", "False", "")
+
+
+def high_win_ladder_by_boards() -> bool:
+    """梯队门槛是否按连板数分级（默认开）。`ENABLE_HIGH_WIN_LADDER_BY_BOARDS=0` → 回退统一 6.0。"""
+    return os.environ.get(HIGH_WIN_LADDER_BY_BOARDS_ENV, "1") not in ("0", "false", "False", "")
+
+
+def high_win_ladder_waived(c: dict[str, Any]) -> bool:
+    """该票是否适用「1~2 板免判梯队」。**纯读**，不改入参。
+
+    ⛔ 只在连板数**明确可读且 ≤2** 时豁免；连板数缺失 → 不豁免（走原判据），
+      避免「读不到板数」被当成低板放行。
+    """
+    if not high_win_ladder_by_boards():
+        return False
+    b = _to_int(c.get("boards"), 0)
+    return 0 < b <= HIGH_WIN_LADDER_WAIVE_MAX_BOARDS
 
 
 def high_win_market_level_missing(miss: list[str] | None) -> bool:
@@ -1275,9 +1313,14 @@ def high_win_missing(c: dict[str, Any], env: dict[str, Any] | None,
             miss.append("量能")
 
     # ④ 梯队 --------------------------------------------------------------
+    #   🪜 1~2 板免判（2026-11-06）：见 HIGH_WIN_LADDER_BY_BOARDS_ENV 上方回测表——
+    #      该档「有梯队」比「无梯队」更差（−2.52% vs −0.07%），用它筛是反向选择。
+    #      ⛔ 只跳过这一条；3 板+ 仍守 HIGH_WIN_LADDER_MIN，缺板数也照旧判。
     _has_complete = c.get("ladder_has_complete")
     _lh = _to_float(c.get("ladder_health"), None)
-    if _has_complete is None and _lh is None:
+    if high_win_ladder_waived(c):
+        pass                                  # 1~2 板：梯队不作硬条件（留痕在 apply_high_win_gate）
+    elif _has_complete is None and _lh is None:
         pass                                  # 无梯队信息 → 不裁决
     elif not _has_complete and (_lh is None or float(_lh) < HIGH_WIN_LADDER_MIN):
         miss.append("梯队")
@@ -1312,6 +1355,7 @@ def apply_high_win_gate(
     _unfreeze_on = high_win_unfreeze_enabled()
     for r in (relay or []):
         miss = high_win_missing(r, env, market_max_boards)
+        _waived = high_win_ladder_waived(r)
         if miss:
             r["high_win_gate"] = miss
             r["watch_only"] = True
@@ -1328,6 +1372,11 @@ def apply_high_win_gate(
             r.pop("high_win_gate", None)
             r.pop("frozen", None)
             r.pop("unfreeze_on", None)
+            # 🪜 留痕：这只票是靠「1~2 板免判梯队」进池的，复盘能一眼看出原因。
+            if _waived:
+                r["ladder_waived"] = f"boards<={HIGH_WIN_LADDER_WAIVE_MAX_BOARDS}"
+            else:
+                r.pop("ladder_waived", None)
             keep.append(r)
 
     _frozen = [r for r in moved if r.get("frozen")]
@@ -1339,6 +1388,9 @@ def apply_high_win_gate(
         "regime": str((env or {}).get("regime") or ""),
         "ok_regimes": list(high_win_ok_regimes()),
         "unfreeze_enabled": _unfreeze_on,
+        "ladder_by_boards": high_win_ladder_by_boards(),
+        "ladder_waive_max_boards": HIGH_WIN_LADDER_WAIVE_MAX_BOARDS,
+        "ladder_waived": [str(r.get("code") or "") for r in keep if r.get("ladder_waived")],
         "frozen_count": len(_frozen),
         "frozen": [{"code": str(r.get("code") or ""), "name": str(r.get("name") or ""),
                     "unfreeze_on": str(r.get("unfreeze_on") or ""),
@@ -1456,7 +1508,7 @@ def _build_weak2strong_map(zt_history_dir: Path, today: str, yesterday: str,
 
 def _build_second_leg_map(zt_history_dir: Path, today: str,
                           scored: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """确认前段 N 连板、断板 1 日、当前第二段连续 M 板的 N+M 进度。"""
+    """完整收盘序列确认前段连板及调整后重启；零散首板不抹掉前段历史。"""
     days: list[tuple[str, dict[str, dict[str, Any]]]] = []
     history_files = [path for path in sorted(zt_history_dir.glob("zt_*.json")) if path.stem[3:] < today][-40:]
     for path in history_files:
@@ -1480,14 +1532,23 @@ def _build_second_leg_map(zt_history_dir: Path, today: str,
         boards = int(cand.get("boards") or 0)
         if not code or boards < 1 or len(days) < boards + 1:
             continue
-        break_index = len(days) - boards
-        prior_date, prior_rows = days[break_index - 1]
-        break_date, break_rows = days[break_index]
-        prior_boards = int((prior_rows.get(code) or {}).get("boards") or 0)
-        if (prior_boards < 2 or code in break_rows
-                or next_a_share_trading_day(prior_date) != break_date):
+        restart_index = len(days) - boards + 1
+        adjustment_end = restart_index - 1
+        if adjustment_end < 0 or code in days[adjustment_end][1]:
             continue
-        if break_index < prior_boards:
+        # 找最近一轮真实连板；调整期的零散首板仅留事实，不冒充连续连板。
+        prior_index = next((i for i in range(adjustment_end - 1, -1, -1)
+                            if int((days[i][1].get(code) or {}).get("boards") or 0) >= 2), None)
+        if prior_index is None:
+            continue
+        break_index = prior_index + 1
+        prior_date, prior_rows = days[prior_index]
+        break_date, break_rows = days[break_index]
+        prior_boards = int(prior_rows[code]["boards"])
+        if code in break_rows or break_index < prior_boards:
+            continue
+        window_dates = [d for d, _ in days[break_index - prior_boards:]] + [today]
+        if any(next_a_share_trading_day(a) != b for a, b in zip(window_dates, window_dates[1:])):
             continue
         # 前段 N 板也逐日核实；只凭断板前一日的板数会把缺日历史误认成 N+N。
         prior_valid = True
@@ -1502,11 +1563,11 @@ def _build_second_leg_map(zt_history_dir: Path, today: str,
                 break
         if not prior_valid:
             continue
-        previous = break_date
+        previous = days[adjustment_end][0]
         valid = True
         # 第二段必须从 1 板逐日递增到今日 M 板，缺完整交易日不推断连续性。
         for current_board in range(1, boards):
-            day_date, day_rows = days[break_index + current_board]
+            day_date, day_rows = days[restart_index + current_board - 1]
             if (next_a_share_trading_day(previous) != day_date
                     or int((day_rows.get(code) or {}).get("boards") or 0) != current_board):
                 valid = False
@@ -1515,7 +1576,16 @@ def _build_second_leg_map(zt_history_dir: Path, today: str,
         if not valid or next_a_share_trading_day(previous) != today:
             continue
         result[code] = {"prior_boards": prior_boards, "second_boards": boards,
-                        "break_date": break_date, "n_plus_n_confirmed": boards >= prior_boards}
+                        "break_date": break_date, "n_plus_n_confirmed": boards >= prior_boards,
+                        "quality": "ok", "asof": today,
+                        "source": "cache/zt_history 完整收盘池逐日核验",
+                        "prior_dates": [days[i][0] for i in range(break_index - prior_boards, break_index)],
+                        "adjustment_dates": [days[i][0] for i in range(break_index, restart_index)],
+                        "adjustment_sessions": restart_index - break_index,
+                        "interim_limitup_dates": [days[i][0] for i in range(break_index, restart_index)
+                                                  if code in days[i][1]],
+                        "restart_dates": [days[i][0] for i in range(restart_index, len(days))] + [today],
+                        "technical_status": "unknown"}
     return result
 
 
@@ -2037,7 +2107,7 @@ def run_eod(
             it["w2s_prev_zbc"] = w2s_map[it_code].get("prev_zbc", 0)
             w2s_hits += 1
 
-    second_legs = _build_second_leg_map(ZT_HIST_DIR, zt["date"], scored)
+    second_legs = _build_second_leg_map(ZT_HIST_DIR, zt["date"], _scored_all)
     stage_feedback = (env.get("relay_feedback") or {}).get("stages") or {}
     for it in scored:
         code = str(it.get("code") or "")
@@ -2349,6 +2419,45 @@ def run_eod(
         if _mr_added:
             print(f"[EOD] 👀 未进接力但仍入观察（2板以上·只看不买）：{'、'.join(_mr_added)}")
 
+        # 历史修复与交易准入分离：硬伤只收观察；通过既有个股门才给条件资格。
+        _repair_diag = []
+        if os.environ.get("ENABLE_HISTORICAL_REPAIR", "1") != "0":
+            _final_by_code = {str(r.get("code")): r for r in relay + watch}
+            for _src in _scored_all:
+                _code = str(_src.get("code") or "")
+                _ev = second_legs.get(_code)
+                if not _ev or _code.startswith("688") or "ST" in str(_src.get("name") or "").upper():
+                    continue
+                _existing = _final_by_code.get(_code)
+                _row = _existing if _existing is not None else dict(_src)
+                _row["n_plus_n"] = _ev
+                _miss = high_win_missing(_row, env, _hw_market_max)
+                _blocks = [x for x in _miss if x != "情绪"]
+                if _code not in _kept_codes or _row.get("screen_reject"):
+                    _blocks.append("前置准入")
+                if _row.get("dragon_rank") != 1 or not _row.get("is_sector_dragon"):
+                    _blocks.append("题材龙")
+                if (_row.get("is_one_word") or _row.get("watch_only")
+                        or two_pool.watch_kind(_row) or _row.get("dragon_gate")
+                        or _code in set(_outpool.get("back") or [])):
+                    _blocks.append("既有风控/观察身份")
+                _conditional = not _blocks
+                _row["historical_repair"] = {"evidence": _ev, "blocked_by": sorted(set(_blocks)),
+                                              "eligibility": "conditional" if _conditional else "observe_only"}
+                if _existing is None or _conditional:
+                    _row.update(bucket="watch", bucket_label="观察池", watch_group="历史连板修复",
+                                participation_eligibility="conditional" if _conditional else "observe_only",
+                                buyable=_conditional, watch_only=not _conditional,
+                                watch_reason="逐日历史连板后断板再涨停；非价量N形态确认")
+                    if _conditional:
+                        _row["high_win_gate"] = _miss
+                        if _miss == ["情绪"]:
+                            _row.update(frozen=True, unfreeze_on="market_open_ready")
+                    if _existing is None:
+                        watch.append(_row)
+                _repair_diag.append({"code": _code, "name": _row.get("name"),
+                                     **_row["historical_repair"]})
+        diagnostics["historical_repair"] = _repair_diag
         for _i, _r in enumerate(watch, 1):
             _r["watch_rank"] = _i
         diagnostics["two_pool_final"] = _two_diag
@@ -2680,7 +2789,33 @@ def run_eod(
         try:
             from core.relay_forecast import annotate as annotate_relay_forecast
             _fc_rows = payload["relay"] + payload["watch"]
-            annotate_relay_forecast(_fc_rows, _market_max_boards)
+            # 📐 同题材身位（11-06 用户：「身位差只能在同一个板块里面适用，不同板块之间它是
+            #    没有关系的」）→ 先按**选股宝 plates**归出 {代码: 题材} 与 {题材: 昨日最高板}。
+            #    ⛔ 题材源与 09:25 的 `code_theme` 必须同源（plates > theme > ⛔ sector 不用）：
+            #       拿申万行业当归线，一个行业里板数天然一致 → 身位差恒 0 → 口径静默失效。
+            #    ⛔ 显式传 `theme_of`，不读候选行自带的 `theme`（那是东财题材，可能不同源）。
+            _fc_theme_of: dict[str, str] = {}
+            _fc_theme_max: dict[str, int] = {}
+            try:
+                from core import sector_gap_context as _sgc_fc
+                _fc_day = str(zt.get("date") or "")[:10]
+                _fc_plates = _sgc_fc.load_plates_map(_fc_day) or {}
+                for _z in (zt.get("ztgc") or []):
+                    _zcd = str(_z.get("dm") or "").strip()
+                    if not _zcd:
+                        continue
+                    _zth, _zsrc = _sgc_fc.main_theme(_zcd, _z, _fc_plates)
+                    if not _zth or _zth in ("其他", "未分类", "—", "-") or _zsrc not in ("plates", "theme"):
+                        continue
+                    _fc_theme_of[_zcd] = _zth
+                    _zb = _to_int(_z.get("lbc"), 1)
+                    if _zb > _fc_theme_max.get(_zth, 0):
+                        _fc_theme_max[_zth] = _zb
+            except Exception:  # noqa: BLE001
+                _fc_theme_of, _fc_theme_max = {}, {}
+            annotate_relay_forecast(_fc_rows, _market_max_boards,
+                                    theme_max_boards=_fc_theme_max,
+                                    theme_of=_fc_theme_of)
             _fc = [r.get("forecast") or {} for r in _fc_rows]
             diagnostics["relay_forecast"] = {
                 "total": len(_fc_rows),
@@ -2688,6 +2823,10 @@ def run_eod(
                 "wait": sum(1 for f in _fc if f.get("verdict") == "可等"),
                 "watch": sum(1 for f in _fc if f.get("verdict") == "只观察"),
                 "drop": sum(1 for f in _fc if f.get("verdict") == "放弃"),
+                # 身位口径留痕：line=按同题材判、market=缺题材未裁决
+                "pos_line": sum(1 for f in _fc if f.get("position_basis") == "line"),
+                "pos_unknown": sum(1 for f in _fc if f.get("position_basis") != "line"),
+                "themes": len(_fc_theme_max),
             }
         except Exception as exc:  # noqa: BLE001
             diagnostics["relay_forecast_error"] = type(exc).__name__

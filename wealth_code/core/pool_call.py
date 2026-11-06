@@ -82,6 +82,13 @@ from core import cycle_phase as _cp                     # noqa: E402
 from core import relay_position as _rp                   # noqa: E402
 # 单票仓位硬顶/百分比文案的唯一源（2026-11-04 单票场景：本模块 ⛔ 不写 0.5 字面量）
 from core import risk_limits as _rl                     # noqa: E402
+# 🎯 9:25 竞价三态（2026-11-05 用户「系统只吃竞价、直接买；其余人工不记录」）：
+#    只用竞价开幅 + 竞价额 + 昨全天成交额 + 逐票质量预期，纯计算、⛔ 不读分时。
+from core import auction_state as _ast                  # noqa: E402
+# 🎯 逐票「昨日涨停质量 → 今天该开多少」（2026-11-05 用户纠偏：禁固定涨幅区间）
+from core import expected_gap as _eg                    # noqa: E402
+# 🎯 9:25 三环联动影子上下文（2026-11-05 用户拍板 A 档）：只留痕，⛔ 不裁决。
+from core import sector_gap_context as _sgc             # noqa: E402
 
 # ── 开关（架构改动必留可逆开关）─────────────────────────────────────────────
 # True  = 9:25 池内裁决（本模块接管「买哪只」）
@@ -122,6 +129,80 @@ DEFAULT_QUOTA = 2
 # 开关可逆：`POOL_CALL_MIN_TWO_SLOTS=False` → 逐字回退旧名额（被压到 1 就只买 1 只）。
 POOL_CALL_MIN_TWO_SLOTS = True
 POOL_CALL_MIN_TWO_SLOTS_TARGET = 2
+# 2026-11-05 用户「轻大盘重个股·买入限制别卡那么死·尽量推 2 个」：
+#   defend 档原名额 1 会恒定压死「双票优先」开关（min(2,1)=1）。开启后名额目标
+#   不再受 stance 上限压制，但仍要求 effective_quota>=1（冰点/环境 block=0 绝不放宽），
+#   且**只放宽名额**——5% / 量能 / 身位 / 龙一 / 薄封 / 观察禁买等个股闸一律不动。
+#   凑不出第二只合格票就如实只有 1 只。回退：POOL_CALL_STOCK_FIRST_SLOTS=False。
+POOL_CALL_STOCK_FIRST_SLOTS = os.environ.get("POOL_CALL_STOCK_FIRST_SLOTS", "1") != "0"
+
+# ── 🎯 不限制只数 · 平均分配仓位（2026-11-05 用户明确授权）────────────────────
+# 用户原话：「能买几个股，我们是不限制的，只要达标了，我们就按照单票最多50%，
+#   平均分配仓位买入」。
+#   · 名额：`effective_quota >= 1` 时**不再按数字截断**，所有过完个股闸的票都参与；
+#     ⛔ `effective_quota == 0`（冰点 / 环境 block 无回暖 / 方案禁买）仍全池观察。
+#   · 仓位：N 只均分，每票 `min(单票硬顶 50%, 100%/N)`——N=1 → 50%（不打满 100%），
+#     N≥2 → 均分 100% 总仓，单票自动 ≤50%。⛔ 硬顶走 risk_limits 单一源。
+#   · 「平均分配」覆盖账户档位 per_pick_cap/total_cap（用户「轻大盘重个股」），
+#     但**不放宽任何个股闸**：5% 硬线 / 量能 / 身位 / 龙一 / 薄封 / 四条件照旧。
+# 三个开关各自可逆，任一置 0 逐字回退对应旧行为。
+POOL_CALL_UNLIMITED_SLOTS = os.environ.get("POOL_CALL_UNLIMITED_SLOTS", "1") != "0"
+POOL_CALL_EVEN_ALLOCATION = os.environ.get("POOL_CALL_EVEN_ALLOCATION", "1") != "0"
+# =1 时平均分配后仍叠加账户回撤压仓（保守档，默认关）
+POOL_CALL_EVEN_RESPECT_DRAWDOWN = os.environ.get("POOL_CALL_EVEN_RESPECT_DRAWDOWN", "0") == "1"
+# =1 时量能 soft 档在平均分配基础上再按档降仓（默认关：用户「只要达标了就平均分配」）
+POOL_CALL_VOLUME_SCALE_POSITION = os.environ.get("POOL_CALL_VOLUME_SCALE_POSITION", "0") == "1"
+# ── 🎯 高开接近涨停降权（11-05 21:45 用户「大于 6、7 个点要非常小心，降低买入权重」）──
+#   ⚠️ 与上面量能档**默认关**不同，本项默认开：这是用户 21:45 的新指令，
+#      「直接上最新的策略」。量能档仍按旧约定默认关，两者互不覆盖。
+#   ⛔ 只降 `position_cap`（买多重），不改 zone/view/participate/quota —— 不是硬闸，
+#      不会把扬子新材那类票变成「不买」，只是从满仓降到试错仓。
+#   与量能档**取小**不相乘（同一笔风险不折两次）；唯一实现 `ai_caliber.gap_weight`。
+#   回退：`POOL_CALL_GAP_WEIGHT_POSITION=0`（或 `AI_GAP_WEIGHT=0`）→ 逐字回到旧均分。
+POOL_CALL_GAP_WEIGHT_POSITION = os.environ.get("POOL_CALL_GAP_WEIGHT_POSITION", "1") != "0"
+
+# ── 🔁 观察票竞价复核（11-05 用户拍板 A：「观察肯定也要再通过竞价这里再判一遍，
+#    而不是直接 pass 掉」；起因＝盘后 20 只 observe_only 在 09:25 一步 continue，
+#    「0 买入」连竞价都不看就定了）──────────────────────────────────────────
+#   · 全部 observe_only 票都先读今早真实开盘/竞价额/量能档，逐票留 `auction_recheck`；
+#   · `state`（盘后状态类）才进入完整竞价裁决链，且必须量能 full 档才算「拿真金白银
+#     推翻了盘后状态」；其余闸（5%/预期/预案/身位/龙一/薄封/四条件）一律原样；
+#   · `hard`/`restricted` 复核后仍观察，理由写今早实测，⛔ 不再用一句固定话术跳过；
+#   · 身份不变：`participation_eligibility` 仍是 observe_only、buyable=False。
+# 两个开关各自可逆：POOL_CALL_RECHECK_OBSERVE=0 逐字回到旧一步短路。
+POOL_CALL_RECHECK_OBSERVE = os.environ.get("POOL_CALL_RECHECK_OBSERVE", "1") != "0"
+POOL_CALL_RECHECK_STATE_FULL = os.environ.get("POOL_CALL_RECHECK_STATE_FULL", "1") != "0"
+
+# ── 🚫 顶部空间硬闸（2026-11-06 14:45 用户「一定要避开这种开的特别高又没有资格和
+#    行情秒板的票呀（扬子新材 +8.93%）」）──────────────────────────────────────
+# 用户要的不是「高开降权」（已有 `ai_caliber.gap_weight`，只降到 0.2 仓），是**不买**。
+#
+# 数据（`scripts/research_open_gap_band.py`，270 票次 / 28 交易日 09-21~11-05，
+# 全为可成交票、当日 close/open−1）：
+#   · 开盘幅度单调恶化：0~2% +0.25%/胜55% → 2~5% −1.65% → 5~8% −2.30% → ≥8% −5.38%/胜23%
+#   · 归一到涨停幅度 gap/limit：≤20% +0.06%、20~50% −1.48%、50~80% −2.62%、≥80% −7.19%
+#   · 事后真相：开盘≥5% 的 33 只里，T日真封板 8 只 +3.42%/胜100%，
+#     没封板 25 只 **−5.73%/胜 8%** —— 「开得高又封不住」就是用户点名的那一类。
+#     而这 8 只事前**没有任何指标能筛出来**（题材家数 / 封单比 / 量能档 / 环境 level /
+#     板数 / 昨日首封时间 / DEV / line_is_core 全试过，每一档都是负期望）；
+#     ⚠️ 反直觉：昨日首封 ≤10min（秒板）次日高开更差（n=20 −4.01%/胜20%），
+#     ≥60min 才勉强不亏（n=9 −1.16%/胜55.6%）——「强票开得高」是共识过热，不是优势。
+# ⇒ 既然档内不可分辨，只能**整档砍**，不做「有资格就放行」的例外。
+#
+# 判据（赔率口径，不是绝对百分比，20cm 自动等价）：
+#   剩余到涨停的空间 `room = 涨停幅度 − 今开幅度`，要求 `room ≥ 涨停幅度 × 阈值`。
+#   默认阈值 0.5 → 10cm 需 ≥5 个点、20cm 需 ≥10 个点。即「半路上车」。
+#   回测：砍掉 29 只 −3.88%/胜27.6%（T+1 −4.43%），留下 241 只 −0.32%/胜43.6%。
+#   阈值放宽到 0.4 会多砍 14 只（43 只合计 −3.76%），留下 227 只 −0.12%——方向同。
+# ⛔ 可逆：`POOL_CALL_HIGH_GAP_REJECT=0` → 逐字回到「只降权不否决」的 11-05 行为；
+#   `POOL_CALL_HIGH_GAP_ROOM` 调阈值（0.4 / 0.6 可现场改，不用改代码）。
+# ⛔ 不覆盖：竞价封死（zone=above，买不进是物理事实，走 ② 的文案）、
+#   `_lo_top` 低开例外（低开 room 恒 > 涨停一半，天然不触发）。
+POOL_CALL_HIGH_GAP_REJECT = os.environ.get("POOL_CALL_HIGH_GAP_REJECT", "1") != "0"
+try:
+    HIGH_GAP_ROOM_MIN = float(os.environ.get("POOL_CALL_HIGH_GAP_ROOM", "0.5"))
+except ValueError:
+    HIGH_GAP_ROOM_MIN = 0.5
 
 # 回看天数（找「同一条线的核心」——含已断板的核心）
 LINE_CORE_LOOKBACK_DAYS = 4
@@ -243,6 +324,19 @@ POOL_CALL_HIGH_WIN_GATE = True
 POOL_CALL_LEADER_ONLY = True
 LEADER_ONLY_MAX_GAP = 2        # 身位差 ≥ 此值判后排（0/1 板内仍可买）
 
+# 🔄 2026-11-06 用户拍板 A：**分母改同题材 + 由硬闸改降权**
+#   用户原话：「身位差我好像没有强制要求百分之百限制吧……你传媒板块你已经涨了五板龙头了，
+#   但是光伏板块才一个板，这种身位差其实是没有影响的呀，它是走一个新的逻辑，
+#   甚至说可以做一个资金的承接方向，你这种身位差估计只能在同一个板块里面适用，
+#   不同板块之间它是没有关系的」
+#   依据（35 日 / 717 真题材可买票次 / T+1）：旧闸零区分度且方向反（剔除批 −0.93%
+#   反而优于保留批 −1.05%）；换同题材分母后前排 −0.68% vs 后排 −1.62%。
+#   详见 `core.ai_caliber.position_weight` 顶部证据表与 `scripts/research_position_gap.py`。
+#   ⛔ 默认只降 `position_cap`，不再把票剔出裁决（旧行为 = `POOL_CALL_POSITION_GAP_HARD=1`）。
+POOL_CALL_POSITION_GAP_HARD = os.environ.get("POOL_CALL_POSITION_GAP_HARD", "0") == "1"
+POOL_CALL_POSITION_WEIGHT_POSITION = (
+    os.environ.get("POOL_CALL_POSITION_WEIGHT_POSITION", "1") != "0")
+
 # ⑪c 🔮 预测档闸（2026-11-02 与选股卡共用同一模型 `core.relay_forecast`·默认关）
 #   盘后选股卡算好 `forecast` 落进候选文件，本层只透传并在买入理由里带上「这档历史胜率」。
 #   本闸只额外拦一类**历史崖位**：boards ≥ 6 且该档晋级率 < 25%（6进7 实测 12.5%、n=8）。
@@ -327,6 +421,13 @@ LOW_OPEN_TOP_POSITION = 0.5        # 该场景仓位上限（半仓试错）
 POOL_CALL_VOLUME_SOFT = False
 VOLUME_HARD_RATIO = 0.35           # 地板：低于计划需求的 35% 才算真没量
 VOLUME_SOFT_POSITION = 0.5         # 量能不足时的仓位上限
+
+# 🎯 11-05 用户删除「必须红开」闸后的**可选**低开收紧（默认关，不违背删除指令）。
+#   反证：26 日 / 1001 票次里，删线后新放进的 gap≤0 票仅 6/130＝4.6% 晋级。
+#   默认只留 `low_open_expected` 影子标记，不否决；逐日复核后若要收紧再置 1。
+#   ⛔ 与 `POOL_CALL_LOW_OPEN_TOP_EXCEPTION`（最高板低开半仓试错）互不依赖。
+POOL_CALL_LOW_OPEN_GUARD = os.environ.get("POOL_CALL_LOW_OPEN_GUARD", "0") == "1"
+LOW_OPEN_GUARD_MAX_GAP = 0.0
 
 MISSING = "—"
 
@@ -674,6 +775,10 @@ def call_pool(candidates: dict[str, Any] | None,
              relay_plan: dict | None = None,
              market_max_boards: int | None = None,
              theme_open_rows: list[dict[str, Any]] | None = None,
+             prev_amounts: dict[str, float] | None = None,
+             expected_gaps: dict[str, float] | None = None,
+             sector_gap: dict[str, dict[str, Any]] | None = None,
+             code_theme: dict[str, str] | None = None,
              enabled: bool | None = None) -> dict[str, Any]:
     """9:25 池内裁决 → 今天买哪只（**唯一判据源**）。
 
@@ -693,6 +798,18 @@ def call_pool(candidates: dict[str, Any] | None,
                     缺省 → 读 `candidates.environment.max_boards`，再缺 → 用 `zt_rows` 现算；
                     ⛔ 不从磁盘兜底读（防测试吃生产文件）。三者都缺 → 中位闸不裁决。
       enabled    = 覆盖开关（测试用）；None → 读模块常量 `POOL_CALL_ENABLED`
+      prev_amounts = 昨日全天成交额 {6位代码: 亿元}（⛔ 09:25 前已存在的昨收归档，
+                    不是当日盘中数据）。显式传 None → 从 `theme_open_rows` 的 cje_yi 取；
+                    显式传 {} → 全部 unknown（测试隔离用）。竞价三态 A/B/C 的分母。
+      expected_gaps = 逐票质量预期开幅 {6位代码: %}。显式传 None → 由
+                    `core/expected_gap.expected_gap_pct(cand)` 从候选的昨日封板质量现算；
+                    显式传 {} / 缺该票 → unknown 不裁决（测试隔离用）。
+                    ⛔ 不是固定涨幅区间；`POOL_CALL_EXPECTED_GAP=0` 全部不裁决。
+      sector_gap  = 09:25 三环联动**影子上下文** {6位代码: fields}
+                    （`core/sector_gap_context.build_day_context` 由调用方注入，本函数保持纯函数）。
+                    ⛔ 2026-11-05 用户拍板 A 档：只写进 base + meta 留痕，**不参与任何裁决**——
+                       不改 zone / view / participate / quota / 仓位 / 账本 / 结算。
+                    ⛔ `POOL_CALL_SECTOR_GAP_CONTEXT=0` → base/meta 一个字段都不写（零感知回退）。
 
     返回：
       {"enabled": bool, "stance", "quota", "views": {code: {...}}, "meta": {...}}
@@ -709,6 +826,10 @@ def call_pool(candidates: dict[str, Any] | None,
         return {"enabled": False, "stance": stance, "quota": None,
                 "views": {}, "meta": {"reason": "POOL_CALL_DISABLED"}}
 
+    # 🎯 竞价三态分母：昨日全天成交额。⛔ 只从调用方注入的昨收归档取，不读当日行情。
+    #    显式 {} 视为「无数据」（测试隔离），只有 None 才从 theme_open_rows 兜底。
+    _prev_amounts = (_ast.prev_amounts_from_rows(theme_open_rows)
+                     if prev_amounts is None else dict(prev_amounts))
     plan = plan if isinstance(plan, dict) else {}
     _stance = str(stance or plan.get("stance") or "").strip() or None
     quota = quota_for(_stance)
@@ -764,7 +885,8 @@ def call_pool(candidates: dict[str, Any] | None,
     #    预期区间 / 跟风 / 身位 / 龙一 / 薄封 / 四条件，过不了就如实只有 1 只。
     # ⛔ effective_quota == 0 绝不放宽（冰点 / 环境 block 无回暖 / 方案禁买 = 空仓）。
     _requested_quota = quota                       # 原 stance 名额（attack 3 / defend 1 …）
-    _target_quota = min(POOL_CALL_MIN_TWO_SLOTS_TARGET, _requested_quota)
+    _target_quota = (POOL_CALL_MIN_TWO_SLOTS_TARGET if POOL_CALL_STOCK_FIRST_SLOTS
+                     else min(POOL_CALL_MIN_TWO_SLOTS_TARGET, _requested_quota))
     _min_two_applied = False
     if (POOL_CALL_MIN_TWO_SLOTS and effective_quota >= 1
             and _target_quota > effective_quota):
@@ -871,6 +993,51 @@ def call_pool(candidates: dict[str, Any] | None,
                 continue
         _market_max_boards = max(_bs) if _bs else None
 
+    # ── 📏 同题材最高板（身位差的**新分母**·2026-11-06 用户 A）──────────────────
+    # 用户：「你这种身位差估计只能在同一个板块里面适用，不同板块之间它是没有关系的」。
+    # ⛔ 数据源只认 `theme_open_rows`（昨日**完整涨停池**）：
+    #     · 用池内票算会被选股结果高估/低估（同 `sector_gap_context` 的既有告诫）；
+    #     · 题材键统一 core_theme → theme → sector，与 `daily_screen._theme` 同序，
+    #       保证盘后筛与 09:25 裁决用的是同一套分组；
+    #     · 落行业兜底（sector）的**不算题材**：行业口径实测方向相反且无信息量
+    #       （同一行业里板数天然一致 → 身位差恒 0），与「缺数据不裁决」一致。
+    # 缺失 / 为空 → 映射空 → `position_weight` 返回 basis=unknown、权重 1.0（不裁决）。
+    _theme_board_max: dict[str, int] = {}
+    _code_theme_pos: dict[str, str] = {}
+    # ⛔ 题材源优先级：显式 `code_theme`（调用方用选股宝 plates 算好的**炒作题材**）
+    #    > 行内 core_theme/theme > sector。**只要显式传入就严格只用它**：
+    #    `full_zt_rows` 只带 sector（行业），混用会让分母变成「同行业最高板」，
+    #    而行业口径实测无信息量（一个行业里板数天然一致 → 身位差恒 0）。
+    _ct_strict = isinstance(code_theme, dict) and bool(code_theme)
+    for _r in (theme_open_rows or []):
+        if not isinstance(_r, dict):
+            continue
+        _cd = str(_r.get("code") or "").strip()
+        if len(_cd) != 6:
+            continue
+        if _ct_strict:
+            _th = str(code_theme.get(_cd) or "").strip()
+            if not _th or _th in ("其他", "未分类", "—", "-", "未知"):
+                continue
+        else:
+            _th = ""
+            for _k in ("core_theme", "theme", "sector"):
+                _v = str(_r.get(_k) or "").strip()
+                if _v and _v not in ("其他", "未分类", "—", "-", "未知"):
+                    _th = _v
+                    break
+            if not _th:
+                continue
+        try:
+            _bd = int(_r.get("boards") or _r.get("lbc") or 0)
+        except (TypeError, ValueError):
+            continue
+        if _bd <= 0:
+            continue
+        _code_theme_pos[_cd] = _th
+        if _bd > _theme_board_max.get(_th, 0):
+            _theme_board_max[_th] = _bd
+
     # ── ⚓ 每条线的风向标（同线核心）今日态度 ──────────────────────────────
     # 只在「风向标今日仍在涨停池」时才算：已断板的核心今天不是涨停股，
     # 它今天怎么开说明不了这条线的强弱，硬当锚点会误杀（10-21 传媒线 新华传媒 已断板）。
@@ -963,13 +1130,21 @@ def call_pool(candidates: dict[str, Any] | None,
     # ── 逐票裁决 ──────────────────────────────────────────────────────────
     marks: dict[str, dict[str, Any]] = {}
     entries: list[dict[str, Any]] = []
+    # 竞价三态硬闸的影子对照：被「只买 A」挡下、但按旧链本来会参与的票。
+    _filtered_by_state: list[str] = []
+    # 🎯 11-05 用户拍板 A 档：三环联动**只留痕不裁决**。开关关或调用方没注入 → 零字段。
+    #    三条硬约束（缺 plates / 缺任一环 / 量能只证伪）已在 sector_gap_context 内实现，
+    #    这里只搬运字段，⛔ 不读盘、不重算、不改任何既有裁决变量。
+    _sgc_on = bool(_sgc.enabled() and isinstance(sector_gap, dict) and sector_gap)
+    _sgc_ctx: dict[str, dict[str, Any]] = sector_gap if _sgc_on else {}
     for c in pool:
         code = str(c.get("code") or "").strip()
         name = str(c.get("name") or "")
         q = qs.get(code)
         gap = _gap_of(q)
         exp = (c.get("expectation") or {}).get("expected_range")
-        zone = _ac.gap_zone(gap, exp) if gap is not None else "unknown"
+        # zone 在逐票质量预期算好后统一重算（见下方「竞价是否符合预期」段），此处占位。
+        zone = "unknown"
         bias = _bias_of(plan, code)
         need = (c.get("expectation") or {}).get("auction_amount_min_yi")
         amt = _amount_of(q)
@@ -989,6 +1164,8 @@ def call_pool(candidates: dict[str, Any] | None,
             "code": code, "name": name, "gap_pct": gap, "zone": zone, "bias": bias,
             "amount_yi": amt, "need_yi": need if isinstance(need, (int, float)) else None,
             "theme_name": fam, "boards": boards, "line_is_core": is_core,
+            # ⛔ 20cm 标志必须随冻结件透传：decide 的物理封死线靠它取 20% 而非 10%。
+            "is_20cm": bool(c.get("is_20cm")),
             # ⛔ 2026-10-21 22:45：补 `last_date`（核心最后涨停日）—— 卡面必须能说清
             #    「断了多久」。断 1 天（昨天刚断）和断 5 天（早就凉了）是两件事。
             "line_core": ({"code": lc.get("code"), "name": lc.get("name"),
@@ -1025,6 +1202,60 @@ def call_pool(candidates: dict[str, Any] | None,
             "linkage_facts": c.get("linkage_facts"),
             "linkage_discipline": c.get("linkage_discipline"),
         }
+        # 🎯 11-05 A 档影子留痕：三环联动字段在**所有短路之前**写入 base，
+        #    被任一闸拦下的票也留痕，便于逐日对照「高开凭什么」。
+        #    ⛔ 字段白名单不含任何裁决字段；缺上下文 / 开关关 → 一个字段都不写。
+        if _sgc_on:
+            _lnk = _sgc_ctx.get(code)
+            if isinstance(_lnk, dict):
+                for _k in _sgc.FIELDS:
+                    if _k in _lnk:
+                        base[_k] = _lnk[_k]
+        # 🎯 2026-11-05 用户「把 5% 和红开这两条线删掉」→ **竞价是否符合预期的唯一判据**：
+        #    DEV = 实际开幅 − 逐票质量预期（昨日封板时间/封单/量能/炸板/板位算出），
+        #    由 `ai_caliber.gap_zone` 单点裁决，账本/卡面/池内共用。
+        #    ⛔ 不再看「开在百分之几」；强票可高开、弱票可低开，只要不明显低于它自己的预期。
+        #    ⛔ 逐票预期独立于三态标注开关：POOL_CALL_AUCTION_STATE=0 时判据仍生效；
+        #       `POOL_CALL_EXPECTED_GAP=0` 或 `AI_EXPECTED_GAP_MODE=absolute` 才回退。
+        _exp = None
+        if _eg.enabled():
+            _exp = (expected_gaps.get(code) if isinstance(expected_gaps, dict)
+                    else _eg.expected_gap_pct(c))
+        zone = (_ac.gap_zone(gap, exp, expected_gap_pct=_exp,
+                             is_20cm=bool(c.get("is_20cm")))
+                if gap is not None else "unknown")
+        base["zone"] = zone
+        # ⛔ `AI_EXPECTED_GAP_MODE=absolute` 一键回退：逐字回到 11-05 之前的字段结构，
+        #    ⛔ 不写逐票预期字段、不留低开标记（旧测试/旧消费方零感知）。
+        if _ac.relative_mode():
+            base["expected_gap_pct"] = _exp
+            if isinstance(gap, (int, float)) and _exp is not None:
+                base["gap_vs_expected"] = round(float(gap) - float(_exp), 2)
+            # ⚠️ 低开反证留痕：用户判断「弱票低开一样能拉起来」，历史样本仅 6/130=4.6%。
+            #    默认 ⛔ 不否决，只打标供逐日观察；要收紧须显式开 POOL_CALL_LOW_OPEN_GUARD。
+            if isinstance(gap, (int, float)) and float(gap) <= 0:
+                base["low_open_expected"] = True
+            # 🎯 11-05 21:45 用户「高开 8.9% 无限接近涨停，大于 6、7 个点要非常小心，
+            #    降低它的买入权重」。**连续降权、不是硬闸**：`gap_zone(DEV)` 仍是唯一准入
+            #    判据，这里只决定「真买的话买多重」，⛔ 不改 zone / view / participate / quota。
+            #    与影子字段同样放在**所有短路之前**，被别的闸拦下的票也留痕。
+            #    ⛔ 唯一实现在 ai_caliber.gap_weight；`AI_GAP_WEIGHT=0` 时连字段都不写。
+            if _ac.AI_GAP_WEIGHT:
+                _gw = _ac.gap_weight(gap, expected_gap_pct=_exp,
+                                     is_20cm=bool(c.get("is_20cm")))
+                base["gap_weight"] = _gw["weight"]
+                base["gap_weight_active"] = _gw["active"]
+                if _gw["active"]:
+                    base["gap_weight_note"] = _gw["label"]
+        # 🎯 竞价三态（A 系统直买 / B 人工二次 / C 排除 / unknown 不裁决）：只作标注与
+        #    名额排序，⛔ 不决定 zone。max_gap_pct 已改传**涨停幅度**（物理买不进线），
+        #    ⛔ 不再是 5% 硬线。
+        if _ast.enabled():
+            base.update(_ast.classify(
+                gap_pct=gap, amount_yi=amt,
+                prev_amount_yi=_prev_amounts.get(code),
+                expected_gap_pct=_exp,
+                max_gap_pct=_ac.limit_up_pct(bool(c.get("is_20cm")))))
         # 封板质量读数（只读·审计/卡面用）：**在短路链之前**算出，被前几道闸拦下的票也留痕
         if POOL_CALL_DEFENSE_GATE:
             try:
@@ -1048,22 +1279,96 @@ def call_pool(candidates: dict[str, Any] | None,
             except Exception:                                # noqa: BLE001
                 base["forecast_band"] = None
 
-        from core.two_pool import observation_only
+        from core.two_pool import observation_only, recheck_class
         if observation_only(c):
-            marks[code] = {**base, "view": "watch", "participation_eligibility": "observe_only",
-                           "reason": c.get("watch_reason") or "板块观察参照，不参与交易"}
-            continue
+            # 🔁 11-05 用户拍板 A：观察票一律先用 09:25 实测「判一遍」并留痕，
+            #    ⛔ 不再开局一句「板块观察参照，不参与交易」直接短路。
+            _cls = str(c.get("recheck_class") or recheck_class(c))
+            _rb = _ac.volume_band(amt, need)
+            # 🔁 11-06 契约缺口修复：量能档原先只写进 `auction_recheck`，没写进决策行，
+            #    导致 `pipeline_verify` 的透传白名单（期待 `volume_band`）拿不到值，
+            #    卡面/账本只能靠 reason 文案反推。此处与 ⑥ 量能段同源同函数，值一致。
+            base["volume_band"] = _rb["band"]
+            base["volume_scale"] = _rb["scale"]
+            base["volume_ratio"] = _rb.get("ratio")
+            _recheck = {
+                "class": _cls,
+                "gap_pct": gap,
+                "amount_yi": amt if isinstance(amt, (int, float)) else None,
+                "need_yi": need if isinstance(need, (int, float)) else None,
+                "volume_band": _rb.get("band"),
+            }
+            if not POOL_CALL_RECHECK_OBSERVE:
+                marks[code] = {**base, "view": "watch",
+                               "participation_eligibility": "observe_only",
+                               "reason": c.get("watch_reason") or "板块观察参照，不参与交易"}
+                continue
+            if _cls != "state":
+                _gap_txt = "竞价没拿到" if gap is None else f"今早开 {gap:+.2f}%"
+                _amt_txt = (f"、竞价 {float(amt):.2f} 亿"
+                            if isinstance(amt, (int, float)) else "")
+                _band_txt = "、" + {"full": "量足", "soft": "量偏弱",
+                                    "dry": "真没量"}.get(_rb.get("band"), "量能无数据")
+                if _cls == "restricted":
+                    _why = "盘后没过接力准入"
+                elif c.get("is_one_word") is True:
+                    _why = "一字封死，买不进"
+                elif "封单只占流通" in str(c.get("watch_reason") or ""):
+                    _why = "最高板封单太薄"
+                else:
+                    _why = "不在可买范围"
+                _recheck["verdict"] = "复核不通过·盘后硬闸保留"
+                marks[code] = {**base, "view": "watch",
+                               "participation_eligibility": "observe_only",
+                               "recheck_class": _cls, "auction_recheck": _recheck,
+                               "reason": f"{_gap_txt}{_amt_txt}{_band_txt} → {_why}，今天只看不买"}
+                continue
+            # 状态类：不短路，带复核标记走完整裁决链；买不买由后面每道闸现场判。
+            # ⛔ 身份仍为 observe_only，本函数不改候选行、不写 buyable。
+            _recheck["verdict"] = "状态类·进入完整竞价裁决"
+            base["recheck_class"] = "state"
+            base["auction_recheck"] = _recheck
+            base["rechecked_from_observe"] = True
+
+        if c.get("participation_eligibility") == "conditional":
+            _repair = c.get("historical_repair") or {}
+            _evidence = _repair.get("evidence") or {}
+            if (_repair.get("eligibility") != "conditional" or _repair.get("blocked_by")
+                    or _evidence.get("quality") != "ok"
+                    or _evidence.get("asof") != candidates.get("date")):
+                marks[code] = {**base, "view": "watch", "reason": "历史修复条件资格缺失或过期，不参与"}
+                continue
 
         # ① 无竞价数据
         if gap is None:
             marks[code] = {**base, "view": "watch",
                            "reason": "开盘竞价数据没拿到 → 今天先看，不买"}
             continue
-        # ② 超 5% 硬线
+        # ② 竞价封死（物理买不进）/ absolute 回退模式的高开超 5% 线。
+        #    ⛔ 用户 11-05 删除「高开超过 5% 不买」这条幅度线：强票按质量预期本就该高开，
+        #       现在只拦「已封在涨停、根本买不进」这一物理事实（一字板不参与）。
         if zone == "above":
-            marks[code] = {**base, "view": "skip",
-                           "reason": f"今天开在 {gap:+.2f}%，高开超过 5% 上限 → 没买到，不追"}
+            _why = ("今天开在涨停附近，竞价就封死了 → 买不进，不追"
+                    if _ac.relative_mode() else
+                    f"今天开在 {gap:+.2f}%，高开超过 5% 上限 → 没买到，不追")
+            marks[code] = {**base, "view": "skip", "reason": _why}
             continue
+        # ②′ 顶部空间硬闸（2026-11-06 用户「避开开的特别高又没有资格和行情秒板的票」）
+        #     `room = 涨停幅度 − 今开幅度`，不足涨停幅度的一半 → 上方没肉、下方敞开，不追。
+        #     ⛔ 与 `gap_weight` 的区别：那是「买多重（降到 0.2 仓）」，这是「不买」。
+        #     ⚠️ 放在 ③ 预案回避之前：这是**幅度事实**，先于盘后预案例外判断留痕，
+        #        与 ② 竞价封死同级（都属于「买不进/不该买」的物理与赔率事实）。
+        if POOL_CALL_HIGH_GAP_REJECT and isinstance(gap, (int, float)):
+            _lim = float(_ac.limit_up_pct(bool(c.get("is_20cm"))))
+            _room = _lim - float(gap)
+            base["gap_room_pct"] = round(_room, 2)
+            base["gap_room_ratio"] = round(_room / _lim, 3) if _lim else None
+            if _room < _lim * HIGH_GAP_ROOM_MIN:
+                marks[code] = {**base, "view": "skip",
+                               "high_gap_reject": True,
+                               "reason": (f"今开 {gap:+.2f}%，离涨停只剩 {_room:.2f} 个点"
+                                          f"（上限 {_lim:.0f}%）→ 上方空间不够，不追")}
+                continue
         # ③ 盘后预案＝回避
         if bias == BIAS_AVOID:
             marks[code] = {**base, "view": "skip",
@@ -1079,25 +1384,45 @@ def call_pool(candidates: dict[str, Any] | None,
             and float(gap) <= LOW_OPEN_TOP_GAP_MAX
             and base.get("gap_to_top") == 0
         )
-        # ④ 低于预期
+        # ④ 明显低于**这只票自己的质量预期**（relative）/ 低于 AI 区间下沿（absolute 回退）
         if zone == "below" and not _lo_top:
-            marks[code] = {**base, "view": "skip",
-                           "reason": f"今天开在 {gap:+.2f}%，低于昨天的预期 → 放弃不接"}
+            _e_show = base.get("expected_gap_pct")
+            if _ac.relative_mode() and isinstance(_e_show, (int, float)):
+                _why = (f"今天开 {gap:+.2f}%，按昨日质量该开 {float(_e_show):+.2f}% "
+                        "→ 明显低于预期，放弃")
+            else:
+                _why = f"今天开在 {gap:+.2f}%，低于昨天的预期 → 放弃不接"
+            marks[code] = {**base, "view": "skip", "reason": _why}
             continue
-        # ⑤ 没红开
-        if gap <= 0 and not _lo_top:
+        # ⑤ ⛔ 2026-11-05 用户删除「必须红开」闸：弱票低开同样可以符合它自己的预期。
+        #    仅 `AI_EXPECTED_GAP_MODE=absolute` 回退时逐字保留旧行为。
+        if not _ac.relative_mode() and gap <= 0 and not _lo_top:
             marks[code] = {**base, "view": "watch",
                            "reason": f"开在 {gap:+.2f}%，没红开 → 今天先看，不买"}
+            continue
+        # ⚠️ 可选低开收紧闸（**默认关**，尊重用户删除指令）。历史 26 日样本里
+        #    gap≤0 新放进票仅 6/130＝4.6% 晋级，留此开关供逐日复核后决定是否收紧。
+        if (_ac.relative_mode() and POOL_CALL_LOW_OPEN_GUARD
+                and gap <= LOW_OPEN_GUARD_MAX_GAP and not _lo_top):
+            marks[code] = {**base, "view": "watch", "low_open_guard": True,
+                           "reason": f"开在 {gap:+.2f}%，低开观察闸生效 → 今天先看，不买"}
             continue
         if _lo_top:
             base["low_open_top"] = True
             base["position_cap"] = LOW_OPEN_TOP_POSITION
-        # ⑥ 红开但没量（诱多典型）——与 `ai_caliber.decide` 同一量能门
-        if (isinstance(amt, (int, float)) and isinstance(need, (int, float)) and need > 0
-                and amt < float(need) * _ac.VOLUME_WEAK_RATIO):
-            _floor = float(need) * VOLUME_HARD_RATIO
-            if POOL_CALL_VOLUME_SOFT and float(amt) >= _floor:
-                # 量偏弱但没到「真没量」的地板 → 不否决，压半仓试错（2026-11-02 用户「高胜率优先」）
+        # ⑥ 量能分档区间（2026-11-05 用户「量能这一块的区间优化一下」）
+        #    唯一判据源 = `ai_caliber.volume_band`（与账本 decide / hibernate 阀门同源）：
+        #      full ≥0.70 量足 / soft 0.35~0.70 量偏弱但**达标可买** / dry <0.35 真没量才观察。
+        #    ⛔ 0.35 地板不拆（31 日真实链路回放：放进真没量的票，日均 2.79%→1.30%）。
+        #    ⛔ 只留事实标记，不写「只买半仓」——仓位统一由末尾「平均分配」决定。
+        _vb = _ac.volume_band(amt, need)
+        base["volume_band"] = _vb["band"]
+        base["volume_scale"] = _vb["scale"]
+        if _vb["block"]:
+            _floor = float(need) * VOLUME_HARD_RATIO if isinstance(need, (int, float)) else 0.0
+            if (not _ac.AI_VOLUME_BANDS and POOL_CALL_VOLUME_SOFT
+                    and isinstance(amt, (int, float)) and float(amt) >= _floor):
+                # 回退路径：AI_VOLUME_BANDS=0 且旧软化开关打开时，恢复旧「半仓试错」。
                 base["volume_soft"] = True
                 base["position_cap"] = min(float(base.get("position_cap") or 1.0),
                                             VOLUME_SOFT_POSITION)
@@ -1105,16 +1430,31 @@ def call_pool(candidates: dict[str, Any] | None,
                     f"竞价 {float(amt):.2f} 亿只到计划 {float(need):.2f} 亿的"
                     f"{float(amt) / float(need) * 100:.0f}%，量偏弱 → 只半仓试错")
             else:
-                marks[code] = {**base, "view": "watch",
-                               "reason": (f"开在 {gap:+.2f}% 是红的，但竞价只有 {float(amt):.2f} 亿、"
-                                          f"量不够（要 {float(need):.2f} 亿）→ 像诱多，先看")}
+                # 回退路径（AI_VOLUME_BANDS=0）逐字保留旧文案「量不够（要 X 亿）」，
+                # 新区间路径只把「真没量」的判定事实说清，⛔ 不写机制解释。
+                if _ac.AI_VOLUME_BANDS:
+                    _txt = (f"开在 {gap:+.2f}% 是红的，但竞价只有 {float(amt):.2f} 亿、"
+                            f"只到计划 {float(need):.2f} 亿的 "
+                            f"{(_vb['ratio'] or 0) * 100:.0f}% → 真没量，先看")
+                else:
+                    _txt = (f"开在 {gap:+.2f}% 是红的，但竞价只有 {float(amt):.2f} 亿、"
+                            f"量不够（要 {float(need):.2f} 亿）→ 像诱多，先看")
+                marks[code] = {**base, "view": "watch", "reason": _txt}
                 continue
-        # 昨日同路径晋级、溢价与失败核按钮都偏弱时，须用足计划量能确认；缺量不放行。
-        if c.get("relay_mood") == "pressured" and (
-                not isinstance(amt, (int, float)) or not isinstance(need, (int, float))
-                or need <= 0 or amt < need):
+        # 昨日同路径晋级、溢价与失败核按钮都偏弱时仍加严：须量足（full 档）才放行。
+        #    ⛔ 旧口径要求 amt ≥ need（100% 计划量）过苛，改走同一区间判据，但只认 full。
+        if c.get("relay_mood") == "pressured" and _vb["band"] != "full":
             marks[code] = {**base, "view": "watch",
-                           "reason": "这一路接力昨天反馈偏弱，今天竞价量没达到计划要求 → 先看，不买"}
+                           "reason": "这一路接力昨天反馈偏弱，今天竞价量没到足额 → 先看，不买"}
+            continue
+        # 🔁 状态类复核票：竞价要推翻盘后状态判断，须拿足额量能来推翻。
+        #    soft / dry / 缺目标额都不算新证据（dry 已在⑥拦，这里收口 soft 与 unknown）。
+        #    ⛔ 这不是新门槛，是「竞价会变」的举证责任；开关关掉则只按常规量能门走。
+        if (base.get("rechecked_from_observe") and POOL_CALL_RECHECK_STATE_FULL
+                and _vb["band"] != "full"):
+            marks[code] = {**base, "view": "watch", "recheck_gate": True,
+                           "reason": (f"今早开 {gap:+.2f}%、竞价只到计划 "
+                                      f"{(_vb['ratio'] or 0) * 100:.0f}% → 量没给足，今天先看")}
             continue
         # ⑥a 🧲 板块联动纪律（2026-10-22）：低板独苗不能因本票量价达标就直接买。
         #    只在完整涨停池已确认“昨日独苗”时生效；今早同题材成员没报价是 unknown，
@@ -1358,8 +1698,10 @@ def call_pool(candidates: dict[str, Any] | None,
             _lc_code = str((lc or {}).get("code") or "")
             _lc_gap = _gap_of(qs.get(_lc_code)) if _lc_code else None
             _lc_name = str((lc or {}).get("name") or "") or None
+            # ⛔ 11-05 删 5% 线后：龙头「买不到」只剩物理封死这一事实，
+            #    ⛔ 不能再拿「高开超过 5%」当买不到（强票本就该高开）。
             _core_gap_out = (isinstance(_lc_gap, (int, float))
-                             and _lc_gap > _ac.USER_ENTRY_MAX_GAP_PCT)
+                             and _ac.unbuyable_gap(_lc_gap, (lc or {}).get("is_20cm")))
             _core_broken = bool((lc or {}).get("broken"))
             base["line_tier"] = _tier
             base["line_core_gap"] = _lc_gap
@@ -1388,26 +1730,41 @@ def call_pool(candidates: dict[str, Any] | None,
             if _tier in (_fc.TIER_SECOND, _fc.TIER_BACK) and lc:
                 # 买隔壁场景：不拦，但把「它只是隔壁」这件事留在盘面上（卡面用）
                 base["backrow_note"] = ("core_broken" if _core_broken else "core_unbuyable")
-        # ⑪b 🥇 身位闸（2026-11-02「高胜率优先」待回放验收·默认关）
-        #   依据：红开可买口径（0<gap≤5%）下按身位分组，**后排是唯一稳定为负的档**——
-        #     最高板   n=9  胜率 66.7% / 均 +1.83%
-        #     差1板    n=10 胜率 60.0% / 均 +0.14%
-        #     差≥2板   n=58 胜率 39.7% / 均 −1.37%
-        #   且**封板质量救不了后排**：差≥2板里封板强(≥3因子)的那批，红开可买胜率只有
-        #   28.6% / 均 −2.69%（n=7）——质量换来的高开被市场砍掉，剩下能成交的本身就是弱样本。
-        #   ⛔ 与前排闸（⑪）分工不同：⑪管「有前排可买却买小弟」，本闸管「这条线根本没前排，
-        #      连它自己都是后排」——后者是纯身位判断，不看前排是否还在板。
-        #   ⛔ 空池是**合法结果**（用户「没有就空」）；⛔ 缺 market_max_boards → 不裁决。
-        #   `POOL_CALL_LEADER_ONLY=False` 回退（后排照常参与名额竞争）。
-        if POOL_CALL_LEADER_ONLY and _market_max_boards and boards_i:
-            _gt_i = int(_market_max_boards) - boards_i
-            if _gt_i >= LEADER_ONLY_MAX_GAP:
-                marks[code] = {**base, "view": "watch", "leader_only_gate": True,
-                               "reason": (f"开在 {gap:+.2f}% 达标，但它是 {boards_i} 板、"
-                                          f"全市场最高 {int(_market_max_boards)} 板，"
-                                          f"身位差 {_gt_i} 板 —— 后排不做"
-                                          f"（这一档能买到时胜率只有 39.7%、平均亏 1.37%）")}
-                continue
+        # ⑪b 📏 身位（2026-11-06 用户 A 重构：分母改同题材 + 硬闸改降权）
+        #   ⛔ 旧口径（2026-11-02）用「全市场最高板」做分母，35 日 717 票次实测**零区分度
+        #      且方向反**：保留批 −1.05%/胜42.4% vs 剔除批 −0.93%/胜41.8%。
+        #      旧闸真正在做的，是把「光伏 1 板」拿去和「传媒 5 板龙头」比身位，
+        #      而这两条线根本没传导关系（用户 11-06 原话）。
+        #   新口径：分母 = **同题材**最高板（昨日完整涨停池口径）。
+        #      同题材差 ≤1 前排 392 只 −0.68%/43.6%；差 ≥2 后排 153 只 −1.62%/37.3%。
+        #      旧闸的「错杀批」（市场差≥2 但题材差≤1）n=359 是 −0.64%/43.7%，
+        #      比旧闸保留批还好 → 旧闸在系统性扔好票。
+        #   ⛔ 默认**只降仓不剔除**（用户「没有强制要求百分之百限制」）；下限 0.20 > 0。
+        #   ⛔ `POOL_CALL_POSITION_GAP_HARD=1` → 回到硬闸语义（分母仍是新口径）。
+        #   ⛔ 题材缺失/落行业兜底 → basis=unknown、权重 1.0，本块不裁决（不猜）。
+        if POOL_CALL_LEADER_ONLY and boards_i:
+            _tm_b = _theme_board_max.get(_code_theme_pos.get(code) or "")
+            _pos = _ac.position_weight(boards_i, theme_max_boards=_tm_b,
+                                      market_max_boards=_market_max_boards)
+            if _pos.get("basis") != "unknown":
+                base["position_gap"] = {
+                    "basis": _pos["basis"], "line_gap": _pos["line_gap"],
+                    "market_gap": _pos["market_gap"], "theme_max_boards": _tm_b,
+                    "weight": _pos["weight"], "label": _pos.get("label") or "",
+                }
+                base["position_weight"] = _pos["weight"]
+                base["position_weight_label"] = _pos.get("label") or ""
+            if POOL_CALL_POSITION_GAP_HARD and _pos.get("basis") != "unknown":
+                _gt_i = (_pos["line_gap"] if _pos["basis"] == "line"
+                         else _pos["market_gap"])
+                if isinstance(_gt_i, int) and _gt_i >= LEADER_ONLY_MAX_GAP:
+                    _where = "同题材" if _pos["basis"] == "line" else "全市场"
+                    marks[code] = {**base, "view": "watch", "leader_only_gate": True,
+                                   "reason": (f"开在 {gap:+.2f}% 达标，但它是 {boards_i} 板、"
+                                              f"{_where}最高 {boards_i + _gt_i} 板，"
+                                              f"身位差 {_gt_i} 板 —— 后排不做"
+                                              f"（同题材后排 T+1 均 −1.62%、胜率 37.3%）")}
+                    continue
         # ⑪d 🌊 独苗高开闸（2026-11-04 用户「独苗高开可以立马设，适合跑路」）
         #   用户原话：「独苗高开 + 同板块集体绿开」不是强势信号，是派发信号。」
         #
@@ -1479,6 +1836,15 @@ def call_pool(candidates: dict[str, Any] | None,
                                           f"历史上到这一档只有 {_fb_promo}% 能再晋级 → 只观察")}
                 continue
         # ⑫ 候选买入
+        # 🎯 2026-11-05 竞价三态额外硬闸（默认关＝只标注；=1 才只买 A）：
+        #    开启后只有 A 态能进系统买入；B/C 转为「人工二次机会」，⛔ 不写系统成交记录。
+        #    ⛔ 放在全部既有闸之后：不越权放行任何未过闸的票，也不改 5% 硬线。
+        #    ⛔ unknown 由 system_buy_eligible 放行（缺数据不裁决），不拿缺料当利空。
+        if _ast.a_state_only() and not _ast.system_buy_eligible(base):
+            _filtered_by_state.append(code)
+            marks[code] = {**base, "view": "watch",
+                           "reason": "竞价未达系统强势档 → 人工二次机会，系统不记录"}
+            continue
         entries.append({**base, "view": "participate"})
         marks[code] = {**base, "view": "participate"}
 
@@ -1516,6 +1882,15 @@ def call_pool(candidates: dict[str, Any] | None,
             1 if plan_or_mech_leader else 0,              # focus 或机械强龙优先
             bi,                                           # 板数
             -lr,                                          # 同线身位（靠前优先）
+            # 🎯 2026-11-05：A 态只作**末尾同分键**——名额受限时优先给竞价强势档，
+            #    ⛔ 不推翻上面身位/龙一/核心等已由历史样本验证过的排序证据。
+            1 if (_ast.a_state_priority()
+                  and x.get("auction_state") == "A") else 0,
+            # 🎯 11-05 21:45 高开降权：放在**末尾同分键**，只在身位/龙一/核心/板数
+            #    全部打平时才让「开得离涨停更近」的票排后，⛔ 不推翻上面已验证的排序证据。
+            #    ⚠️ POOL_CALL_UNLIMITED_SLOTS=1 时名额不截断 → 本项只影响 quota_rank/卡面顺序；
+            #       真正生效的降权是末尾的 position_cap（仓位），别把它当成「少推一只」。
+            x.get("gap_weight") if isinstance(x.get("gap_weight"), (int, float)) else 1.0,
         )
 
     from core import leader_cycle
@@ -1549,7 +1924,10 @@ def call_pool(candidates: dict[str, Any] | None,
             _half_note = "（它是今天最高板、但低开超 3%，只买半仓试）"
         elif e.get("volume_soft"):
             _half_note = "（今天量能偏弱，只买半仓试）"
-        if i < effective_quota:
+        # 🎯 2026-11-05：允许买时**不按名额数字截断**——达标几只买几只。
+        #    ⛔ effective_quota == 0 已在上面短路（全池观察），此处不改变空仓语义。
+        _unlimited = POOL_CALL_UNLIMITED_SLOTS and effective_quota >= 1
+        if _unlimited or i < effective_quota:
             _open_note = "（昨涨停今早整体转强，空仓日只试这一只）" if open_relief else ""
             # 🔮 2026-11-02：把「开在这个幅度、历史上赚不赚」直接写进买入理由——
             #   这是选股卡那张「明早大概率开在 X%」在竞价卡上的落点，两张卡共用一套数字。
@@ -1561,9 +1939,14 @@ def call_pool(candidates: dict[str, Any] | None,
                               f"{_band['win']:g}% 收涨、平均 {_band['avg']:+.2f}%"
                               + ("，是这票最赚的一档" if (_band.get("win") or 0) >= 60 else "")
                               + "）")
+            # ⛔ 11-05 17:00 用户删掉「高开 5%」这条线后，旧文案「没超 5% 上限」
+            #    在 +8.93% 的票上会变成**事实错误**（明明超了）。relative 模式改为
+            #    「符合这只票的预期」（与 ai_caliber.decide 同源）；absolute 回退逐字保留旧句。
+            _zone_reason = ("符合这只票的预期 → 买入" if _ac.relative_mode()
+                            else "没超 5% 上限、也没低于预期 → 买入")
             marks[code] = {**e, "view": "participate", "quota_rank": i + 1,
                            "reason": (f"今天开在 {e['gap_pct']:+.2f}%，"
-                                      f"没超 5% 上限、也没低于预期 → 买入"
+                                      f"{_zone_reason}"
                                       + _band_note
                                       + ("（这条线里板数最高的那只）"
                                          if e.get("line_is_core") else "")
@@ -1582,17 +1965,90 @@ def call_pool(candidates: dict[str, Any] | None,
     _participants = [c for c, v in marks.items() if v.get("view") == "participate"]
     _single_pick = len(_participants) == 1
     _single_cap = _rp.single_pick_cap(relay_plan)
-    if _single_pick and isinstance(_single_cap, (int, float)) and _single_cap > 0:
+    _n_pick = len(_participants)
+    _even_cap: float | None = None
+    if POOL_CALL_EVEN_ALLOCATION and _n_pick >= 1:
+        # 🎯 平均分配（2026-11-05 用户「不限制只数·单票最多50%·平均分配仓位买入」）：
+        #   每票上限 = min(单票硬顶 50%, 100%/N)。N=1 → 50%（不打满 100%），
+        #   N=2 → 各 50%，N=3 → 各 33%，N=4 → 各 25%。⛔ 只封顶，不强制打满。
+        #   个股已有的更严上限（低开半仓 / 隔壁半仓 / 量能档降仓）继续取小。
+        _even_cap = round(min(_rl.MAX_POSITION_PER_STOCK, 1.0 / _n_pick), 4)
+        if (POOL_CALL_EVEN_RESPECT_DRAWDOWN
+                and isinstance(_single_cap, (int, float)) and _single_cap > 0):
+            _even_cap = round(min(_even_cap, float(_single_cap)), 4)
+        for _code in _participants:
+            _v = marks[_code]
+            _scale = 1.0
+            if POOL_CALL_VOLUME_SCALE_POSITION:
+                _s = _v.get("volume_scale")
+                if isinstance(_s, (int, float)) and 0 < float(_s) < 1:
+                    _scale = float(_s)
+            # 🎯 高开接近涨停 → 降仓（11-05 21:45）。与量能档**取小**，⛔ 不相乘：
+            #    同一笔仓位被两个理由各打一次折会把试错仓压到没有意义。
+            if POOL_CALL_GAP_WEIGHT_POSITION and _ac.AI_GAP_WEIGHT:
+                _gw = _v.get("gap_weight")
+                if isinstance(_gw, (int, float)) and 0 < float(_gw) < 1:
+                    _scale = min(_scale, float(_gw))
+            # 📏 身位降权（11-06 用户 A）：同题材身位差越靠后买得越轻。
+            #    ⛔ 同样**取小不相乘**：身位 + 量能 + 高开三个理由叠加相乘会把
+            #       试错仓压到没有意义（与上面 gap_weight 同一条纪律）。
+            if POOL_CALL_POSITION_WEIGHT_POSITION and _ac.AI_POSITION_WEIGHT:
+                _pw = _v.get("position_weight")
+                if isinstance(_pw, (int, float)) and 0 < float(_pw) < 1:
+                    _scale = min(_scale, float(_pw))
+            _cap = round(_even_cap * _scale, 4)
+            _prev_cap = _v.get("position_cap")
+            if isinstance(_prev_cap, (int, float)) and _prev_cap > 0:
+                _cap = round(min(_cap, float(_prev_cap)), 4)
+            _v["position_cap"] = _cap
+            _v["even_allocation"] = True
+            _v["allocation_count"] = _n_pick
+            # ⛔ 账本 ai_ledger 靠逐票 single_pick 识别仓位重裁，双轨必须同值。
+            if _single_pick:
+                _v["single_pick"] = True
+            # 🎯 高开降权只讲**事实 + 真实仓位**，⛔ 不露「权重系数」这类内部口径。
+            #    ⛔ 同一事实上限只写一次：降权句已带上限，就不再叠「均分·每只上限」。
+            _gw_active = bool(POOL_CALL_GAP_WEIGHT_POSITION and _ac.AI_GAP_WEIGHT
+                              and _v.get("gap_weight_active") and _v.get("gap_weight_note"))
+            _gw_note = (f"（{_v['gap_weight_note']}，单票上限 {_rl.pct_of(_cap)}）"
+                        if _gw_active else "")
+            # 📏 身位降权同理：只讲事实（同题材里排第几）+ 真实上限，⛔ 不露权重系数。
+            _pw_active = bool(POOL_CALL_POSITION_WEIGHT_POSITION and _ac.AI_POSITION_WEIGHT
+                              and 0 < float(_v.get("position_weight") or 1) < 1
+                              and _v.get("position_weight_label"))
+            _pw_note = (f"（{_v['position_weight_label']}，单票上限 {_rl.pct_of(_cap)}）"
+                        if _pw_active else "")
+            _alloc_note = "" if (_gw_active or _pw_active) else (
+                f"（今日仅1只·单票上限 {_rl.pct_of(_cap)}）" if _single_pick
+                else f"（{_n_pick}只均分·每只上限 {_rl.pct_of(_cap)}）")
+            _v["reason"] = ((_v.get("reason") or "") + _alloc_note + _gw_note + _pw_note)
+    elif _single_pick and isinstance(_single_cap, (int, float)) and _single_cap > 0:
         _code = _participants[0]
         _v = marks[_code]
         _prev_cap = _v.get("position_cap")
         _cap = (float(_single_cap) if not isinstance(_prev_cap, (int, float))
                 else min(float(_prev_cap), float(_single_cap)))
+        # 📏 身位降权同样作用于单票分支（⛔ 两个分支必须同值，否则账本/卡面双轨）
+        if POOL_CALL_POSITION_WEIGHT_POSITION and _ac.AI_POSITION_WEIGHT:
+            _pw1 = _v.get("position_weight")
+            if isinstance(_pw1, (int, float)) and 0 < float(_pw1) < 1:
+                _cap = min(_cap, round(float(_single_cap) * float(_pw1), 4))
         _v["position_cap"] = round(_cap, 4)
         _v["single_pick"] = True
         # 交易纪律同步：竞价理由直说「今天只有这一只 + 单票上限」，与卡面/账本同值。
-        _v["reason"] = ((_v.get("reason") or "")
-                        + f"（今日仅1只·单票上限 {_rl.pct_of(_cap)}）")
+        _pw_only = (f"（{_v['position_weight_label']}，单票上限 {_rl.pct_of(_cap)}）"
+                    if (POOL_CALL_POSITION_WEIGHT_POSITION and _ac.AI_POSITION_WEIGHT
+                        and 0 < float(_v.get("position_weight") or 1) < 1
+                        and _v.get("position_weight_label"))
+                    else f"（今日仅1只·单票上限 {_rl.pct_of(_cap)}）")
+        _v["reason"] = ((_v.get("reason") or "") + _pw_only)
+
+    # 🎯 2026-11-05 用户「其他机会交给人工二次自己交易、不做记录」：
+    #    在**最终 view 确定之后**才落 manual_only，参与票恒为 False，
+    #    ⛔ 避免二次否决 11-05 刚打通的观察票竞价复核翻案链。
+    if _ast.enabled():
+        for _v in marks.values():
+            _v["manual_only"] = _ast.manual_only_of(_v)
 
     meta = {
         "caliber": "pool_call_925",
@@ -1603,6 +2059,59 @@ def call_pool(candidates: dict[str, Any] | None,
         "market_open": open_read or None,
         "pool_size": len(pool),
         "participate": _participants,
+        # 🔁 观察票竞价复核留痕（11-05 A 方案）：卡片/日志可直接答「今天复核了几只、
+        #    几只进了完整裁决、最终几只是靠竞价翻案买到的」，⛔ 不参与二次裁决。
+        "recheck": {
+            "enabled": bool(POOL_CALL_RECHECK_OBSERVE),
+            "state_full_required": bool(POOL_CALL_RECHECK_STATE_FULL),
+            "observed": sum(1 for v in marks.values() if v.get("auction_recheck")),
+            "state_entered": sum(1 for v in marks.values()
+                                 if v.get("rechecked_from_observe")),
+            "participated": [c for c, v in marks.items()
+                             if v.get("view") == "participate"
+                             and v.get("rechecked_from_observe")],
+        },
+        # 🎯 11-05 用户删除 5% 与红开两条绝对线后的主判据留痕（只读诊断）。
+        "expected_gap": {
+            "mode": "relative" if _ac.relative_mode() else "absolute",
+            "dev_min": _ac.EXPECTED_GAP_DEV_MIN,
+            "definition": ("DEV=gap-E, E=昨日封板质量算出的逐票预期开幅; "
+                           "DEV<dev_min→明显低于预期放弃; 其余(高开/低开均含)→符合; "
+                           "竞价封死(>=涨停-0.2pct)→买不进; 缺E→不裁决; "
+                           "⛔ 无5%高开线、无必须红开线"),
+            "low_open_guard": bool(POOL_CALL_LOW_OPEN_GUARD),
+            "low_open_expected": sum(1 for v in marks.values()
+                                     if v.get("low_open_expected")),
+            "zones": {k: sum(1 for v in marks.values() if v.get("zone") == k)
+                      for k in ("below", "ok", "above", "unknown")},
+            "covered": sum(1 for v in marks.values()
+                           if v.get("expected_gap_pct") is not None),
+            "missing": sum(1 for v in marks.values()
+                           if v.get("expected_gap_pct") is None),
+        },
+        # 🎯 9:25 竞价三态留痕（2026-11-05）：只读诊断，⛔ 不参与二次裁决。
+        #    默认影子：只标注分层、旧链照买，`filtered` 恒空；
+        #    置 `POOL_CALL_A_STATE_ONLY=1` 后，`filtered` 列出「旧链会买、A 闸不买」的票供逐日对照。
+        "auction_state": {
+            "enabled": bool(_ast.enabled()),
+            "a_state_only": bool(_ast.a_state_only()),
+            "quality_expected_gap": bool(_eg.enabled()),
+            "definition": ("R=竞价额/昨全天成交额×100; "
+                           "E=昨日封板质量算出的逐票预期开幅; DEV=gap-E; "
+                           "A=DEV>=0.5且R>=3; B=DEV>=-2且R>=3; "
+                           "竞价封死→C; ⛔ 无5%与红开线"),
+            "expected_gap_covered": sum(1 for v in marks.values()
+                                        if v.get("expected_gap_pct") is not None),
+            "expected_gap_missing": sum(1 for v in marks.values()
+                                        if v.get("expected_gap_pct") is None),
+            "counts": {k: sum(1 for v in marks.values()
+                              if v.get("auction_state") == k)
+                       for k in ("A", "B", "C", "unknown")},
+            "system": [c for c, v in marks.items()
+                       if v.get("view") == "participate" and v.get("auction_state") == "A"],
+            "manual_only": [c for c, v in marks.items() if v.get("manual_only")],
+            "filtered": list(_filtered_by_state),
+        },
         # 🎯 名额策略留痕（2026-11-04）：原 stance 名额 / 最终名额 / 是否放宽到 2 /
         #    真实达标票数 / 是否单票场景。诊断只读，⛔ 不参与二次裁决。
         "slot_policy": {
@@ -1614,6 +2123,30 @@ def call_pool(candidates: dict[str, Any] | None,
             "participate_count": len(_participants),
             "single_pick": bool(_single_pick),
             "single_pick_cap": _single_cap,
+            # 🎯 2026-11-05：不限制只数 + 平均分配（卡面/账本读这几个字段，⛔ 别再读旧档位）
+            "unlimited_slots": bool(POOL_CALL_UNLIMITED_SLOTS),
+            "even_allocation": bool(POOL_CALL_EVEN_ALLOCATION),
+            "even_cap": _even_cap,
+            "allocation_count": _n_pick,
+            # 🎯 11-05 21:45 高开降权留痕（只读对账：谁被降了、降到多少仓）
+            "gap_weight_enabled": bool(POOL_CALL_GAP_WEIGHT_POSITION and _ac.AI_GAP_WEIGHT),
+            "gap_weight_reduced": [c for c in _participants
+                                   if marks[c].get("gap_weight_active")],
+            "gap_weight_caps": {c: marks[c].get("position_cap")
+                                for c in _participants
+                                if marks[c].get("gap_weight_active")},
+            # 📏 11-06 身位降权留痕（分母＝同题材最高板；只降仓不剔除）
+            "position_gap_hard": bool(POOL_CALL_POSITION_GAP_HARD),
+            "position_weight_enabled": bool(POOL_CALL_POSITION_WEIGHT_POSITION
+                                            and _ac.AI_POSITION_WEIGHT),
+            "position_weight_reduced": [c for c in _participants
+                                        if 0 < float(marks[c].get("position_weight") or 1) < 1],
+            "position_weight_caps": {c: marks[c].get("position_cap")
+                                     for c in _participants
+                                     if 0 < float(marks[c].get("position_weight") or 1) < 1},
+            "position_gap_basis": {c: (marks[c].get("position_gap") or {}).get("basis")
+                                   for c in marks
+                                   if marks[c].get("position_gap")},
         },
         "single_pick": bool(_single_pick),
         # 🛡️ 防守闸门留痕（2026-10-08 经验）：环境档位 + 两道硬闸各拦了谁
@@ -1678,6 +2211,9 @@ def call_pool(candidates: dict[str, Any] | None,
         #    ⛔ 不接进名额或逐票判定（位置判断置信度低于硬数据，让它决策风险大于收益）。
         "cycle_phase": _cycle_info(),
     }
+    # 🎯 11-05 A 档：三环联动统计只进 meta，⛔ 开关关时整节不存在（旧消费方零感知）。
+    if _sgc_on:
+        meta["sector_gap_context"] = _sgc.summary(_sgc_ctx, set(marks))
     return {"enabled": True, "stance": _stance, "quota": quota,
             "effective_quota": effective_quota, "single_pick": bool(_single_pick),
             "views": marks, "meta": meta}
@@ -1713,6 +2249,17 @@ def apply_to_views(pool_result: dict[str, Any], views: dict[str, Any] | None) ->
         cur["defense_warn"] = m.get("defense_warn")
         cur["position_warn"] = m.get("position_warn")
         cur["theme_name"] = m.get("theme_name")
+        # 🎯 11-05 竞价三态：卡面文案不展示内部档位，但决策行要带 manual_only，
+        #    供 ai_caliber.decide / 账本统一拦住「人工二次机会」不写系统成交。
+        # ⛔ `is_20cm` 必须透传：decide 的物理封死线要靠它取 20% 而非 10%，
+        #    否则创业板票开 +15% 会被误当「已封涨停买不进」。
+        #    `low_open_expected` 只作反证留痕（默认不否决）。
+        for _k in ("auction_state", "auction_r", "auction_route",
+                   "auction_state_reason", "manual_only",
+                   "expected_gap_pct", "gap_vs_expected",
+                   "is_20cm", "low_open_expected", "low_open_guard"):
+            if m.get(_k) is not None:
+                cur[_k] = m.get(_k)
         if not cur.get("name"):
             cur["name"] = m.get("name")
     return out

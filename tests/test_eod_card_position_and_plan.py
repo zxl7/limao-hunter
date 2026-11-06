@@ -96,7 +96,10 @@ def _build(monkeypatch, plan: dict | None, ai_plan: dict | None = None):
 
 
 # ── ① 动态仓位块：回撤压过仓 → 档位基数与实际两个数都在 ──────────────────
+# ⛔ 旧口径回归锁（11-05 用户「回撤不需要压仓」）：显式开 ENABLE_DRAWDOWN_SCALING=1，
+#    验证旧文案与压仓数字逐字可复现；新默认由 test_drawdown_narrative_freeze.py 锁。
 def test_eod_card_shows_dynamic_position_two_numbers(monkeypatch):
+    monkeypatch.setattr(rp, "ENABLE_DRAWDOWN_SCALING", True)
     plan = rp.build_plan(strength=0.40, tier="weak", dd=19.64,
                          theme_info={"day_count": 31, "theme_count": 164})
     card = _build(monkeypatch, plan)

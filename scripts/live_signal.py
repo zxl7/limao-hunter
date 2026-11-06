@@ -32,6 +32,8 @@ ROOT = HERE.parent
 # launchd 以 scripts/live_signal.py 直接启动，后续机构行情等模块需从项目根目录导入 common。
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from common.em_flow import sector_risk_for_decision
+
 CACHE = ROOT / "cache"
 SNAP = CACHE / "pulse_snapshots"
 PUSH = HERE / "push_card.py"
@@ -163,7 +165,7 @@ def detect_fund_switch(latest: dict, prev: dict, sig: dict, hhmm: str) -> dict |
                     old_fall.setdefault(sec, []).append(rec.get("name") or code)
         # ---- 新线承接：涨停潮 + 资金净流入 + 龙头封板/近板 ----
         inflow_names = {str(x.get("name")) for x in
-                        ((latest.get("sector_risk") or {}).get("inflow_top") or [])}
+                        (sector_risk_for_decision(latest.get("sector_risk")).get("inflow_top") or [])}
         new_up = []
         for s in (latest.get("top5") or []):
             nm = str(s.get("name") or "")
@@ -1407,7 +1409,7 @@ def _sector_money_txt(latest: dict, board_name: str, *, enabled: bool = True,
             return (f"💰{head}板块合计净额 <text_tag color='{clr}'>{sign}{abs(tot):.1f}亿</text_tag>"
                     f"（{det}…）")
     # 4) 兜底：sector_risk top10（池过期/未建时）
-    sr = latest.get("sector_risk") or {}
+    sr = sector_risk_for_decision(latest.get("sector_risk"))
     base = _norm_board(board_name)
 
     def _hit(name: str) -> bool:
@@ -2130,10 +2132,10 @@ def main():
     _st_confirm_skip = _st_confirm_cool = 0
     try:
         tr = load(CACHE / "theme_rotation.json")
-        inflow_names = {x.get("name") for x in (tr.get("market_context") or {}).get("inflow_top", [])}
+        inflow_names = {x.get("name") for x in sector_risk_for_decision(tr.get("market_context")).get("inflow_top", [])}
         # 盘中实时净流入榜（latest.json.sector_risk.inflow_top），优先；无则用盘前快照
         live_inflow = {(x.get("name")) for x in
-                       ((latest.get("sector_risk") or {}).get("inflow_top") or [])}
+                       (sector_risk_for_decision(latest.get("sector_risk")).get("inflow_top") or [])}
         if not live_inflow:
             live_inflow = inflow_names
         # P2-10（2026-09-11 根因修复）：原判定只认 phase=="re-entry-candidate"，
@@ -2687,12 +2689,12 @@ def main():
         tdir = _sector_trend_dir(zt_series)
         # 板块资金（sector_risk inflow/outflow 匹配）用于横盘判别
         _flow = None
-        for _f in ((latest.get("sector_risk") or {}).get("inflow_top") or []):
+        for _f in (sector_risk_for_decision(latest.get("sector_risk")).get("inflow_top") or []):
             if str(_f.get("name") or "") == nm:
                 _flow = float(_f.get("flow_yi") or 0)
                 break
         if _flow is None:
-            for _f in ((latest.get("sector_risk") or {}).get("outflow_top") or []):
+            for _f in (sector_risk_for_decision(latest.get("sector_risk")).get("outflow_top") or []):
                 if str(_f.get("name") or "") == nm:
                     _flow = -abs(float(_f.get("flow_yi") or 0))
                     break

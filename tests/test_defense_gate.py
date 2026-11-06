@@ -23,6 +23,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 WC = ROOT / "wealth_code"
 for _p in (str(WC), str(ROOT), str(ROOT / "scripts")):
@@ -31,6 +33,21 @@ for _p in (str(WC), str(ROOT), str(ROOT / "scripts")):
 
 from core import defense_gate as dg  # noqa: E402
 from core import pool_call  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _legacy_position_gate(monkeypatch):
+    """身位闸 11-06 已改「同题材分母 + 只降仓不剔除」，本文件锁的是 10-08 防守腿场景，
+    显式回退旧语义，保证这几条断言里**只有防守腿一个变量**在动。"""
+    monkeypatch.setenv("POOL_CALL_POSITION_GAP_SCOPE", "market")
+    monkeypatch.setattr(pool_call, "POOL_CALL_POSITION_GAP_HARD", True)
+
+
+# ⚠️ 既有缺口（2026-11-06 发现，与身位改动**无关**）：本文件多条断言锁的是
+#    「10-08/11-04 生产行为」（名额按 stance 截断、量能 0.7 单线否决），
+#    但没挂 `legacy_pool_call_rules` → 11-05「不限制只数」上线后这两条一直红。
+#    这里补挂，让历史场景断言重新成立（已用「中和身位」复现确认过与本次改动无关）。
+pytestmark = pytest.mark.usefixtures("legacy_pool_call_rules")
 
 
 # ── 夹具：2026-09-30 候选真实字段（code/hs/seal_amt/lt_mktcap/fbt/dev_10d_pct）────────
@@ -513,7 +530,11 @@ def test_pool_call_defense_missing_flow_still_blocks_position():
 
 
 def test_pool_call_env_block_kills_quota():
-    """环境 ≥3 条命中 → 名额 0，全部降观察（不主动买）。"""
+    """环境 ≥5 条命中 → 名额 0，全部降观察（不主动买）。
+
+    ⚠️ 2026-11-06 阈值校准：block 门槛 3→5（命中 3/4 条组实测 −0.19%/+0.70%，
+    是**最好**的两组，⛔ 不该被 block）。本夹具 5 条全中，新旧口径都拦。
+    """
     cands = _candidates()
     cands["environment"] = {"sentiment_score": 1.0, "promote_rate": 19.2, "nuke_count": 11,
                             "break_count": 3, "broken_rate": 44.7}
@@ -526,14 +547,36 @@ def test_pool_call_env_block_kills_quota():
 
 
 def test_pool_call_env_defensive_caps_then_min_two_widens(monkeypatch):
-    """≥2 条命中 → 环境腿先把名额压到 1；2026-11-04「尽量推两个」在**允许买**时放宽回 2。
+    """≥3 条命中 → 环境腿先把名额压到 1；2026-11-04「尽量推两个」在**允许买**时放宽回 2。
 
     ⛔ 只放宽名额，不放宽准入：本夹具只有 1 只票过闸 → 实际仍只买 1 只。
     开关 `POOL_CALL_MIN_TWO_SLOTS=False` 逐字回退到「环境压到 1」。
+
+    ⚠️ 2026-11-06 阈值校准：diffensive 门槛 2→3（命中 2 条组实测 +0.20%/胜 58.3%，
+    是**次好**的一组，⛔ 不该压名额）→ 2 条走 normal、3 条才 defensive，两条路径都锁。
     """
+    from core import defense_gate as dg
+
+    two = _candidates()
+    two["environment"] = {"sentiment_score": 2.0, "promote_rate": 21.0, "nuke_count": 3,
+                          "break_count": 0, "broken_rate": 10.0}
+    r2 = pool_call.call_pool(two, QUOTES_1008, plan=_plan(), stance="selective",
+                             line_cores={}, market_open=MO_1008, sector_flow=FLOW_0930,
+                             zt_series=ZT_SERIES, zt_days=ZT_DAYS)
+    assert r2["meta"]["defense"]["env"]["hit_count"] == 2
+    assert r2["meta"]["defense"]["env"]["level"] == "normal", "2 条不该压名额"
+
+    # 回退旧门槛（2）→ 2 条重新算 defensive
+    monkeypatch.setattr(dg, "ENV_DEFENSIVE_HITS", 2)
+    r2b = pool_call.call_pool(two, QUOTES_1008, plan=_plan(), stance="selective",
+                              line_cores={}, market_open=MO_1008, sector_flow=FLOW_0930,
+                              zt_series=ZT_SERIES, zt_days=ZT_DAYS)
+    assert r2b["meta"]["defense"]["env"]["level"] == "defensive"
+    monkeypatch.setattr(dg, "ENV_DEFENSIVE_HITS", 3)
+
     cands = _candidates()
     cands["environment"] = {"sentiment_score": 2.0, "promote_rate": 21.0, "nuke_count": 3,
-                            "break_count": 0, "broken_rate": 10.0}
+                            "break_count": 0, "broken_rate": 45.0}
 
     def _run():
         return pool_call.call_pool(cands, QUOTES_1008, plan=_plan(), stance="selective",
