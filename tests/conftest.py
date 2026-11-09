@@ -68,6 +68,10 @@ def legacy_pool_call_rules(monkeypatch):
         monkeypatch.setattr(daily_screen, "POS_SCREEN_FACT_ONLY", False)
     except Exception:            # noqa: BLE001 —— 模块缺失不阻断旧口径夹具
         pass
+    # 2026-11-06 用户「盘后预案全系统关闭」→ `POOL_CALL_EOD_PLAN` 默认 0（不消费 plan）。
+    # 本夹具代表 11-06 之前的旧口径（会读盘后预案的 bias/stance），故显式打开，
+    # 同时验证该开关可逆。新口径默认关的回归锁见 `tests/test_eod_plan_off.py`。
+    monkeypatch.setattr(pool_call, "POOL_CALL_EOD_PLAN", True)
 TMP_DIR = ROOT / ".pytest_tmp"
 
 

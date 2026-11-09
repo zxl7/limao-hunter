@@ -383,7 +383,7 @@ _HIDE_BLOCK_ENV = "VERIFY_CARD_HIDE"
 #      「候选N只 / 买1只以内」在 🤖 今日买入段首句；「机械M只达标」在 📊 机械段标题；
 #      净值/战绩在 metrics.json 与复盘卡。
 _HIDE_BLOCK_DEFAULT = "head,dd,phase,pnl,global"
-_HIDE_ALLOWED = ("head", "dd", "phase", "pnl", "global")
+_HIDE_ALLOWED = ("head", "dd", "phase", "pnl", "global", "track")
 
 
 def _hide_block(tag: str) -> bool:
@@ -2423,6 +2423,14 @@ def _ai_plan_block(raw: dict, records: list[dict],
     mmdd = dd[5:] if len(dd) >= 10 else dd
     stance_label = (str(raw.get("stance_label") or "")
                     or _AI_STANCE_FALLBACK.get(str(raw.get("stance") or ""), ""))
+    # 🚫 2026-11-06 用户「盘后预案全系统关闭」：`pool_call` 已不再消费预案的 stance/bias。
+    #    卡面若继续写「昨日预案：防守」，读者会以为它还是今天的名额依据 → **必须停显**。
+    #    判据用裁决自带留痕 `meta.stance_source.eod_plan`，⛔ 不读环境变量（防卡与裁决不同源）。
+    _stance_src = (pool_summary or {}).get("stance_source")
+    _plan_live = not (isinstance(_stance_src, dict)
+                      and _stance_src and _stance_src.get("eod_plan") is False)
+    if not _plan_live:
+        stance_label = ""
     direction = str(raw.get("direction") or "")
     note = str(raw.get("note") or "").strip()
 
@@ -2445,7 +2453,9 @@ def _ai_plan_block(raw: dict, records: list[dict],
             blocks.append(_div("｜".join(head)))
         # 🪶 档位 2：昨日预案 note 不再整段搬（150 字）——「在什么位置」🌊 已说、
         #    「今天几度」📡 已说、「买几只」本段标题已说。⛔ 不丢信息：方向行仍在上两行。
-        if note and not _two_line_rows():
+        #    🚫 预案关闭时（`_plan_live=False`）note 也一并停显：它是盘后预案的正文，
+        #       继续上卡会被读成"今天还是这么看"（时点口径铁律）。
+        if note and _plan_live and not _two_line_rows():
             blocks.append(_div(f"<font color='grey'>{_shift_day_words(note)}</font>"))
         if isinstance(_n, (int, float)):
             _slot_h = (pool_summary or {}).get("slot_policy") or {}
@@ -2936,24 +2946,39 @@ def _board_track_block(date: str) -> list[dict]:
     if _ready:
         _ready.sort(key=lambda x: (-int(x.get("boards") or 0), str(x.get("name") or "")))
         _items = "、".join(_hl(str(x.get("name") or ""), "red") for x in _ready[:5])
-        _base = ((_ready[0].get("hist") or {}).get("base") or {}).get("rate")
-        _tail = (f"<font color='grey'>（这一档历史上 {_base:g}% 能再涨停）</font>"
-                 if isinstance(_base, (int, float)) else "")
+        # ⛔ 口径（2026-11-06 修）：这里的数字来自 `hist.base`＝**全部涨停样本**的次日再涨停率，
+        #    不是「封板质量四项全中」这一档的专属命中率。⛔ 原文案写「这一档历史上…」会让人
+        #    误读成该档实测值（数据不支持），故改为如实标「它历史上 N 次涨停里…」。
+        _b = ((_ready[0].get("hist") or {}).get("base") or {})
+        _tail = (f"<font color='grey'>（它历史上 {_b['n']} 次涨停里 {_b['rate']:g}% 次日还能涨停）</font>"
+                 if isinstance(_b.get("n"), int) and isinstance(_b.get("rate"), (int, float)) else "")
         blocks.append(_div(f"　　封板质量四项全中：{_items}{_tail}"))
 
     # ③ 跟得最久的那只 + 它这一档的历史脾气（天梯里没有的信息：跟了几天、历来能不能续）
+    #    ⛔ 口径（2026-11-06 修）：优先用 `hist.cond`（**同板数档**，带 stage 如 5to6）；
+    #       同档样本 <5 次不足以说明问题 → 退回 `hist.base`（全体涨停基准）并**明说是整体口径**，
+    #       ⛔ 不许再把 base 写成「同档」——这是取数与文案不符。
     _long = max(tracked, key=lambda x: (int((x.get("track") or {}).get("days_in_track") or 0),
                                          int(x.get("boards") or 0)), default=None)
     if _long:
         _tr = _long.get("track") or {}
-        _hist = ((_long.get("hist") or {}).get("base") or {})
-        _n, _r = _hist.get("n"), _hist.get("rate")
+        _hs = (_long.get("hist") or {})
+        _same = _hs.get("cond") or {}
+        _all = _hs.get("base") or {}
         _line = (f"　　{_hl(str(_long.get('name') or ''), 'red')} 已连 "
                  f"**{int(_tr.get('days_in_track') or 0)}** 天")
-        if isinstance(_n, int) and isinstance(_r, (int, float)) and _n:
+        _n, _r = _same.get("n"), _same.get("rate")
+        _an, _ar = _all.get("n"), _all.get("rate")
+        if isinstance(_n, int) and _n >= 5 and isinstance(_r, (int, float)):
             _verdict = "历来续不上" if _r < 25 else ("还能续一半" if _r < 50 else "历来能续")
-            _line += (f"<font color='grey'>；同档 {_n} 次里 {_r:g}% 能继续涨停"
+            _stage = str(_same.get("stage") or "").replace("to", "→")
+            _line += (f"<font color='grey'>；同板数（{_stage} 板）历史 {_n} 次里 {_r:g}% 能继续涨停"
                       f" —— {_verdict}</font>")
+        elif isinstance(_an, int) and isinstance(_ar, (int, float)):
+            # ⛔ 用词受 card_copy_rules 白话门禁约束：「样本」属机器黑话（会 FAIL），
+            #    改「同一板数的次数太少」；同时把口径差异说清楚，别让读者以为这是同档数据。
+            _line += (f"<font color='grey'>；历史上 {_an} 次涨停里 {_ar:g}% 次日还能涨停"
+                      f"（同一板数的次数太少，按整体看）</font>")
         blocks.append(_div(_line))
 
     # ④ 题材口径降级要如实说（⛔ 别把申万行业当题材用）
@@ -3055,6 +3080,17 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
             blocks.append(_div(f"  **{k}板**：{hl_names}"))
     if ladder:
         blocks.append(_hr())
+
+    # 📋 在册连板（龙头战法交易员 核心台账）
+    #   2026-11-06 用户拍板「优化」→ 接线进盘后卡。此前 `_board_track_block` 只有定义、
+    #   全仓无调用点（死代码），台账每天落盘却从不上卡。
+    #   ⛔ 只读 `cache/board_track/track_<date>.json`（盘后 board_track.py build 落盘），
+    #      本函数不重算；文件缺失/空 → 整段不渲染，不写「暂无数据」占位。
+    #   ⛔ 与相邻两段分工：天梯答「今天几板、都是谁」，本段答「跟了几天、谁断了、
+    #      谁的封板质量真够格」——同一只票只补新增信息，不重复报板数。
+    #   ⛔ 可逆开关：`VERIFY_CARD_HIDE=track` 即整段回退，无需改代码。
+    if not _hide_block("track"):
+        blocks += _board_track_block(date)
 
     # 接力池（核心，全部标红）
     # 2026-09-09 用户「冰点也要推接力池·买不买由人决定」：ice 解冻产池后 relay 有货 →
@@ -3641,6 +3677,10 @@ def _ai_plan_eod_block(raw: dict, cand_by_code: dict,
       时序大前提＝盘后只缩范围、不拍板（2026-09-21 用户定）。
     ⛔ 理由只在此处渲染一次（盘后卡别处不渲染 AI 理由），走 `_narr_render` 分段排版。
     视图缺失（未跑 record / 非交易日）→ []（诚实省略，不编造）。
+
+    ⛔⛔ **2026-11-06 用户拍板「独立明日预案不展示」→ 本函数保持不接入 `build_eod_card`。**
+       预案数据仍照常落盘（`cache/ai_view_<次日>.json`，次日 09:25 池内裁决与竞价卡消费），
+       只是盘后卡不渲染这一块。⛔ 后续勿擅自接线，否则等于推翻用户决定。
     """
     views = raw.get("views") or {}
     if not views:

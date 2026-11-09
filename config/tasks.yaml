@@ -177,6 +177,18 @@ tasks:
     writeback: null
     # 2026-10-10 补登：尾盘潜伏仓次日 10:00 卖出结算（DB 已 ACTIVE·rrule 10:00）
 
+  # ---------- 盘后数据台账（2026-11-06 立项）----------
+  - name: "【盘后】池内台账·竞价→收盘"
+    id: "bdec460f-1221-4943-bf5f-6059b2da8413"
+    kind: "脚本"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=16;BYMINUTE=0"
+    webhook: null
+    writeback: null
+    # 2026-11-06 用户「今天推了这 30 支，对比早上 9:25 开盘价看当天收盘赚没赚，一目了然」
+    # → scripts/pool_ledger.py（只读聚合，不重算判据），产物 cache/pool_ledger/<date>.json
+    # ⏰ 16:00 选在收盘 K 线落盘之后：11-06 实测 15:19 查无当日 bar、15:32 才有。
+    #   缺 bar 脚本直接 exit 2、不写半截文件（这就是 15:19 基线虚报 +13.2%→实际 +2.6% 的那个洞）。
+
   # ---------- 盘后长卡/复盘系 ----------
   - name: "【盘后】盘后复盘"
     id: "automation-1785767491575"

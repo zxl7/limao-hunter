@@ -810,7 +810,8 @@ def _build_expectation(boards: int, is_20cm: bool) -> dict[str, Any]:  # pragma:
 
 def _attach_sector_ladder(scored: list[dict[str, Any]], *,
                          zt_rows: list[dict[str, Any]] | None = None,
-                         theme_map: dict[str, Any] | None = None
+                         theme_map: dict[str, Any] | None = None,
+                         asof: str | None = None
                          ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """
     板块梯队因子接入：按题材聚合涨停池，调用 core/leader.build_sector_ladder 计算
@@ -843,6 +844,33 @@ def _attach_sector_ladder(scored: list[dict[str, Any]], *,
 
     # ── 龙一：单一源覆盖（sector_leader 的分层判据）────────────────────────
     from core import sector_leader
+    # 🧬 上一波连板高度（2026-11-06 用户「东方海洋上次四连板，皇台只有三连板」）：
+    #    `sector_leader.leader_key` 的**第二序**（同板数内才起作用）。缺序列/失败 →
+    #    字段不写，leader_key 用中性 0，与旧行为逐字一致。`EOD_GENE_HEIGHT=0` 回退。
+    if str(os.environ.get("EOD_GENE_HEIGHT", "1")).strip() not in {"0", "false", "off", ""}:
+        try:
+            from core import defense_gate as _dg_gene
+            from core import gene_height as _gh
+            _series, _ = _dg_gene.load_zt_series(upto=asof or None)
+            for it in scored:
+                _c = str(it.get("code") or "")
+                it["prev_streak_boards"] = (
+                    _gh.prev_streak_for(_series, _c, asof, it.get("boards")) if asof
+                    else _gh.prev_streak_of(_series, _c)
+                )
+            # ⛔ 必须连**完整涨停池**一起补：龙一是在 zt_rows 内比的，只补候选会让
+            #    池外强票的基因变成 0（中性）→ 反而更容易被候选顶掉龙一。
+            for _r in (zt_rows or []):
+                _c = str(_r.get("code") or _r.get("dm") or "")
+                if not _c or _r.get("prev_streak_boards") is not None:
+                    continue
+                _b = _r.get("boards") if _r.get("boards") is not None else _r.get("lbc")
+                _r["prev_streak_boards"] = (
+                    _gh.prev_streak_for(_series, _c, asof, _b) if asof
+                    else _gh.prev_streak_of(_series, _c)
+                )
+        except Exception:                                       # noqa: BLE001
+            pass
     extra = {str(it.get("code") or ""): it for it in scored if it.get("code")}
     res = sector_leader.compute(zt_rows, theme_map, extra_by_code=extra)
     for it in scored:
@@ -2038,7 +2066,8 @@ def run_eod(
     # 🐉 同时用 `core.sector_leader`（单一源·分层判据）覆盖龙一归属：
     #    分组基准 = **完整涨停池 ztgc**（含被门槛剔掉的票，否则"龙一"会变成"池内最强"）。
     scored, _dragon_summary = _attach_sector_ladder(
-        scored, zt_rows=zt.get("ztgc") or [], theme_map=_theme_map_all)
+        scored, zt_rows=zt.get("ztgc") or [], theme_map=_theme_map_all,
+        asof=zt.get("date"))
 
     # 板块孤军标注（2026-08-24 用户「板块掉队只剩一人·次日高开无承接被砸」思想）：
     # 同 sector 涨停池成员数==1 → sector_is_lone=True + sector_mates=[]（供次日 09:25
@@ -2371,7 +2400,8 @@ def run_eod(
         # 一字核心从完整评分池补观察，复用同日完整池龙一判定；不绕入可交易池。
         _anchors, _ = _attach_sector_ladder(
             [dict(r) for r in _scored_all if r.get("is_one_word")],
-            zt_rows=zt.get("ztgc") or [], theme_map=_theme_map_all)
+            zt_rows=zt.get("ztgc") or [], theme_map=_theme_map_all,
+            asof=zt.get("date"))
         _used = {str(r.get("code")) for r in relay + watch}
         _one_word_kinds = {"一字核心", "一字龙头"}
         for _r in _anchors:

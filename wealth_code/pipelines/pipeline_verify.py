@@ -211,6 +211,10 @@ def _load_full_zt_rows(date10: str) -> list[dict[str, Any]]:
 def _load_plan(trade_date: str) -> dict[str, Any]:
     """读盘后**预案**（`狸猫猎手/cache/ai_view_<执行日>.json`·项目根 cache，非 wealth_code）。
 
+    ⛔ **2026-11-06 起默认不调用**：用户「盘后预案全系统关闭」→ `pool_call.POOL_CALL_EOD_PLAN=0`
+    时本函数不被执行（连文件都不读），名额改走 `DEFAULT_QUOTA`。只有显式
+    `POOL_CALL_EOD_PLAN=1` 回退旧口径时才会走到这里。
+
     2026-09-21 语义变更：该文件的 `views[code].view` 不再是「买不买」的终态（旧口径），
     9:25 池内裁决只从这里读 `stance`（攻守基调·定当日可买只数）与 `views[code].bias`（预案档）。
     文件缺失 → {}（诚实降级：按 DEFAULT_QUOTA 走，不编造）。
@@ -686,9 +690,25 @@ def run_verify(
                 except Exception as _e:              # 诚实降级：缺题材 → 身位不裁决
                     _code_theme_pos = None
                     print(f"[VERIFY] 同题材身位上下文跳过：{_e}")
+                # 🚫 盘后预案（2026-11-06 用户「全系统关闭」）：开关关时**根本不读** ai_view，
+                #    并从 09:25 竞价读数机械定调（`core/stance_intraday`），名额不再来自
+                #    「昨天盘后 LLM 拍的攻守基调」。
+                _eod_plan_on = bool(getattr(pool_call, "POOL_CALL_EOD_PLAN", False))
+                _intraday_on = bool(getattr(pool_call, "POOL_CALL_STANCE_INTRADAY", False))
+                _stance_why = ""
+                _plan_in = _load_plan(trade_date10) if _eod_plan_on else {}
+                _stance_in = ai_caliber.ai_stance(trade_date10) if _eod_plan_on else None
+                if not _eod_plan_on and _intraday_on:
+                    try:
+                        from core import stance_intraday as _si
+                        _st = _si.stance_from_open(market_open_read)
+                        _stance_in = _st.get("stance")
+                        _stance_why = _st.get("reason")
+                    except Exception as _e:      # 诚实降级：定调失败 → 不裁决
+                        _stance_in, _stance_why = None, f"机械定调跳过：{_e}"
                 pool_res = pool_call.call_pool(
-                    candidates, quotes, plan=_load_plan(trade_date10),
-                    stance=ai_caliber.ai_stance(trade_date10),
+                    candidates, quotes, plan=_plan_in,
+                    stance=_stance_in,
                     market_open=market_open_read,
                     # 🌊 2026-11-04 独苗高开闸：要**昨日完整涨停池**算「同板块其余票红开率」。
                     #    ⛔ 不能只给候选池：池内大消费只有 3 只、红开 2 只=67%，
@@ -705,6 +725,17 @@ def run_verify(
                 # 📈 昨日连板 · 今晨竞价溢价榜（2026-11-04 用户）
                 _attach_premium_board(pool_res, full_zt_rows, quotes,
                                       prev_date=date10, trade_date=trade_date10)
+                # 🧾 定调来源留痕（只读诊断·⛔ 不改裁决）
+                try:
+                    _pm = pool_res.setdefault("meta", {})
+                    _pm["stance_source"] = {
+                        "eod_plan": bool(_eod_plan_on),
+                        "intraday": bool(_intraday_on),
+                        "stance": _stance_in,
+                        "why": _stance_why,
+                    }
+                except Exception:               # noqa: BLE001
+                    pass
 
                 _freeze_blocked = early_freeze_blocked(trade_date10)
                 if _freeze_blocked:

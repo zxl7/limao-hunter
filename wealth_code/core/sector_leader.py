@@ -73,6 +73,12 @@ _SCORE_TIEBREAK = (os.environ.get("SECTOR_LEADER_SCORE_TIEBREAK") or "1").strip(
     "0", "false", "off", "no", ""
 }
 
+# 🧬 同板数内是否用「上一波连板高度」决定龙一（2026-11-06 用户裁定，默认开）。
+#    0 = 回退旧序（同板数直接比封板时段档）。口径与计算见 `core/gene_height.py`。
+_GENE_TIEBREAK = (os.environ.get("SECTOR_LEADER_GENE_TIEBREAK") or "1").strip().lower() not in {
+    "0", "false", "off", "no", ""
+}
+
 
 def _num(v: Any, default: float = 0.0) -> float:
     try:
@@ -233,16 +239,23 @@ def leader_key(row: Mapping[str, Any], *, band: int = 0) -> tuple:
     ratio = seal_ratio_of(row)
     order: list[Any] = [
         -boards_of(row),                                  # 1. 板数高
-        band,                                             # 2. 封板时段档（早者优先）
-        0 if ratio is not None else 1,                    # 3. 有封单数据者优先（缺 ≠ 不利，但不给优势）
-        -(ratio if ratio is not None else 0.0),           # 4. 封单/流通厚者优先
-        -carry_of(row),                                   # 5. 带动家数多者优先
-        fbt_min(row) if fbt_min(row) is not None else 1e9,  # 6. 更早封板
+    ]
+    if _GENE_TIEBREAK:
+        # 2. 🧬 上一波连板高度（股性·2026-11-06 用户「东方海洋上次四连板，皇台只有三连板」）
+        #    ⛔ 只在**同板数**内起作用：主序仍是板数，不动「推的票必须是板块龙一」。
+        #    ⛔ 缺数据给中性 0（不罚），不拿缺料当劣势。
+        order.append(-(_opt_num(row.get("prev_streak_boards")) or 0.0))
+    order += [
+        band,                                             # 3. 封板时段档（早者优先）
+        0 if ratio is not None else 1,                    # 4. 有封单数据者优先（缺 ≠ 不利，但不给优势）
+        -(ratio if ratio is not None else 0.0),           # 5. 封单/流通厚者优先
+        -carry_of(row),                                   # 6. 带动家数多者优先
+        fbt_min(row) if fbt_min(row) is not None else 1e9,  # 7. 更早封板
     ]
     if _SCORE_TIEBREAK:
-        # 7. 同层内综合分高者优先（缺分 → 0 中性，不影响主序与旧行为）
+        # 8. 同层内综合分高者优先（缺分 → 0 中性，不影响主序与旧行为）
         order.append(-(_opt_num(row.get("score")) or 0.0))
-    order.append(code_of(row))                            # 8. 稳定兜底（可复现）
+    order.append(code_of(row))                            # 9. 稳定兜底（可复现）
     return tuple(order)
 
 
@@ -350,6 +363,8 @@ def compute(rows: Iterable[Mapping[str, Any]],
                 "fbt": str(r.get("fbt") or ""),
                 "boards": boards_of(r),
                 "time_band": bands.get(c),
+                # 🧬 上一波连板高度（同板数内的第二序，留痕可追溯）
+                "prev_streak_boards": _opt_num(r.get("prev_streak_boards")),
             }
         board_diag.append({
             "theme": "" if th == "__theme_missing__" else th,

@@ -204,6 +204,103 @@ try:
 except ValueError:
     HIGH_GAP_ROOM_MIN = 0.5
 
+# ── 🧮 当日整体开盘偏移修正 DEV（2026-11-06 用户「今天受外盘影响…低开是可以理解的」）──
+# 病根：`DEV = gap − E` 是**绝对**判据。外盘砸下来那天池内中位开幅 −1.5%，每只票的
+#   DEV 都被同一个负偏移压低 → 逐票质量判据集体误杀（11-06 被 DEV 门砍掉的 5 只事后
+#   均值 **+1.11%**，其中博纳影业 +5.24%、模塑科技 +2.34%）。
+# 修法：把池内**中位开幅**当作当日「环境基准」扣掉，DEV 改判「比同行强多少」。
+#   ⛔ 只在整体明显低开（中位 ≤ `DEV_ENV_TRIGGER_PCT`）时启用，平时恒 0（零回归）。
+#   ⛔ 偏移量上限 `DEV_ENV_MAX_OFFSET_PCT`，防单日极端把闸整个废掉。
+#   ⛔ 样本 < `DEV_ENV_MIN_SAMPLES` 不判（缺数据不裁决）。
+# 可逆：`POOL_CALL_DEV_ENV_OFFSET=1` 打开。
+# ⚠️ 2026-11-06 实测（35 日 A/B，`scripts/research_new_caliber_ab.py`）：开偏移只新增 2 笔、
+#    均 −3.43%（胜 0%），把日均从 +0.33% 压到 +0.22%。中位数偏移量只有 1 个点，
+#    而被误杀的票 DEV 在 −5 以下 —— **幅度不够**，改由下面的「深低开豁免」处理。
+#    本开关**默认关**，仅留作对照与极端日人工复核。
+POOL_CALL_DEV_ENV_OFFSET = os.environ.get("POOL_CALL_DEV_ENV_OFFSET", "0") != "0"
+try:
+    DEV_ENV_TRIGGER_PCT = float(os.environ.get("POOL_CALL_DEV_ENV_TRIGGER", "-1.0"))
+except ValueError:
+    DEV_ENV_TRIGGER_PCT = -1.0
+try:
+    DEV_ENV_MAX_OFFSET_PCT = abs(float(os.environ.get("POOL_CALL_DEV_ENV_MAX", "3.0")))
+except ValueError:
+    DEV_ENV_MAX_OFFSET_PCT = 3.0
+DEV_ENV_MIN_SAMPLES = 8
+
+# ── 🕳️ 深低开豁免 DEV（2026-11-06 用户「今天低开是可以理解的」的**真解**）──────────
+# 病根不是「环境整体压低 DEV」，而是 **DEV 的收益曲线是 U 形**（35 日 · 366 票次实测）：
+#
+#   DEV 档          n    均值     胜率   中位
+#   < −6           40  +2.69%    60%   +2.02%   ← 砸出来的错杀，最好的一档
+#   −6 ~ −4        24  −0.48%    38%   −1.65%
+#   −4 ~ −2        65  −0.92%    35%   −1.50%   ← 最差的一档
+#   −2 ~ 0         83  +0.04%    48%   −0.44%
+#   0 ~ +3         87  −0.21%    45%   −0.70%
+#   ≥ +3           67  −2.87%    30%   −2.58%   ← 高开透支（另由顶部空间闸/降权管）
+#
+# 旧规则「DEV < −2 一律放弃」把**最差档和最好档一起砍**。故改为**带豁免**：
+#   DEV ≤ `DEEP_LOW_OPEN_DEV` → 不按「走弱」处理，放行（标记 `deep_low_rescue`）。
+#   `DEEP_LOW_OPEN_DEV < DEV < EXPECTED_GAP_DEV_MIN` → 仍放弃（那才是真走弱）。
+# ⛔ 只放宽「④ 明显低于预期」这一道门：量能/顶部空间/身位/名额/仓位一律原样。
+# ⛔ 一字板、竞价封死仍在其之前被判 `above`，进不来。
+# 可逆：`POOL_CALL_DEEP_LOW_RESCUE=0` 逐字回到「DEV<−2 全放弃」。
+POOL_CALL_DEEP_LOW_RESCUE = os.environ.get("POOL_CALL_DEEP_LOW_RESCUE", "1") != "0"
+try:
+    DEEP_LOW_OPEN_DEV = float(os.environ.get("POOL_CALL_DEEP_LOW_DEV", "-6.0"))
+except ValueError:
+    DEEP_LOW_OPEN_DEV = -6.0
+
+# ── 🧬 龙一基因复核（2026-11-06 用户「东方海洋上次四连板，皇台只有三连板」）──────────
+# 盘后 `sector_leader` 已知用「板数 → 上一波连板高度 → 封板时段…」排龙一；但**旧候选
+#   文件**里的 `dragon_rank` 是按旧序（板数 → 封板时段）写死的。09:25 是最终裁决，
+#   故在此做一次基因复核：同板数、且本票上一波**严格更硬** → 不按「跟风」否决。
+#   ⛔ 只放宽「龙一身位」这一件事：⑩d 之外的所有闸（量能/预期/身位/顶部空间/名额）
+#      一律原样，仓位仍按既有 cap。`POOL_CALL_DRAGON_GENE=0` 逐字回退。
+POOL_CALL_DRAGON_GENE = os.environ.get("POOL_CALL_DRAGON_GENE", "1") != "0"
+# 换位：认定挑战者更强时，原龙一**降为跟风**（⑩d 会拦），而不是两个都买。
+#   理由：⑩d 的语义是「只做龙一、跟风不追」；两个都留等于同一套判据下自相矛盾。
+#   11-06 实证：皇台 −10.66% + 东方海洋 +8.17% 一对仓位对冲成 −1.25%，只买对的那只 +8.17%。
+#   `POOL_CALL_DRAGON_GENE_SWAP=0` → 只放行不顶替（两个都买，旧的「只放开」行为）。
+POOL_CALL_DRAGON_GENE_SWAP = os.environ.get("POOL_CALL_DRAGON_GENE_SWAP", "1") != "0"
+
+# ── 📋 盘后预案「回避」是否仍是硬否决（2026-11-06 用户「盘后预案这个功能关了」）──────
+# 用户原话：「盘后预案这个功能关了，根本不需要，全网全系统关闭这个盘后预案。」
+#   病根：盘后 LLM 给的 `bias=avoid` 在 09:25 是**一步否决**，且理由无代码层校验
+#   （09-22 已踩过一次：真龙被软理由判 avoid）。11-06 当天 7 只被 avoid 砍掉，
+#   事后均值 **+0.42%**，其中新亚制程 **+16.00%** 是当日第二强。
+# ⛔ 关闭后：`avoid` 只留痕（`bias_avoided=True`），不再否决；买不买交给竞价链自己判。
+#   预案文案与卡面展示一律保留 —— 关的是「硬否决」这一个动作。
+# 可逆：`POOL_CALL_BIAS_AVOID=1` 逐字回到「盘后回避 → 今天不买」。
+POOL_CALL_BIAS_AVOID_VETO = os.environ.get("POOL_CALL_BIAS_AVOID", "0") == "1"
+
+# ── 🚫 盘后预案是否进入 09:25 裁决（2026-11-06 用户「盘后预案全系统关闭·根本不需要」）──
+# 用户原话：「盘后预案这个功能关了，根本不需要，全网全系统关闭这个盘后预案！！」
+# 关的是**整条消费链**，不只是「回避否决」：
+#   · `views[code].bias`（重点看/一般/回避）→ 不再参与任何判断，只留 `bias` 字段供追溯；
+#   · `plan.stance`（攻守基调）→ 不再兜底名额，缺省走 `DEFAULT_QUOTA`。
+# 📊 35 日实测（`scripts/research_cycle_ab.py` → `cache/research/cycle_ab_bt.json`）：
+#    读预案 20天/67笔/日胜70.0%/日均+1.73%/复利+39.99%
+#    → 不读   25天/83笔/日胜72.0%/日均+1.97%/**复利+61.05%**（回撤同为 −4.70%）
+#    新增 16 笔均 +1.70%，**全部**落在「盘后 LLM 判 hibernate（空仓）」的那 5 天。
+#    ⇒ LLM 的「今天别做」在本窗口是**负价值**，关掉它是净收益。
+# ⚠️ 这 35 日是强势窗口，⛔ 不能据此说「永远该做」。真正的熔断是环境防守腿
+#    （`env level=block → effective_quota=0` 照旧生效），与 stance 无关。
+# 回退：`POOL_CALL_EOD_PLAN=1` 逐字恢复「读盘后预案」。
+POOL_CALL_EOD_PLAN = os.environ.get("POOL_CALL_EOD_PLAN", "0") == "1"
+
+# ── 🌅 09:25 机械定调（关预案后**可选**的定调来源）──────────────────────────
+# 只用**今晨竞价开出来那一刻**就能看到的四个数：昨涨停红开率 / 连板红开率 /
+#   连板竞价量比 / 覆盖率（`core.market_open`）。⛔ 不看指数、不看 LLM 主观。
+# 档位沿用既有 `POOL_CALL_QUOTA`：attack 3 / selective 2 / defend 1 / hibernate 0。
+# 📊 35 日实测（同上脚本 P2）：24天/81笔/日胜70.8%/日均+1.96%/复利+57.73%
+#    —— **略差于「不设定调·名额恒 2」（+61.05%）**：它的 `hibernate` 档又在重复
+#    「今早很弱 → 空仓」，而本窗口里「空仓」整体站在错的那一边。
+#    ⚠️ 阈值 0.60/0.45/0.30 扫到 0.50/0.35/0.20，日均几乎不动（平台非尖峰）——
+#       它本身没坏，只是在这个窗口里不如「无条件给名额 + 环境腿兜底」。
+# ⇒ 默认关。留作弱市窗口的备选，⛔ 不得据此宣称提高胜率。
+POOL_CALL_STANCE_INTRADAY = os.environ.get("POOL_CALL_STANCE_INTRADAY", "0") == "1"
+
 # 回看天数（找「同一条线的核心」——含已断板的核心）
 LINE_CORE_LOOKBACK_DAYS = 4
 
@@ -831,6 +928,8 @@ def call_pool(candidates: dict[str, Any] | None,
     _prev_amounts = (_ast.prev_amounts_from_rows(theme_open_rows)
                      if prev_amounts is None else dict(prev_amounts))
     plan = plan if isinstance(plan, dict) else {}
+    if not POOL_CALL_EOD_PLAN:
+        plan = {}                      # 🚫 盘后预案整体不消费（2026-11-06 用户拍板）
     _stance = str(stance or plan.get("stance") or "").strip() or None
     quota = quota_for(_stance)
     # 昨日空仓不是绝对封死：只有整批昨涨停股的 09:25 红开、连板红开、竞价量能
@@ -938,6 +1037,45 @@ def call_pool(candidates: dict[str, Any] | None,
     zt_days = list(zt_days) if isinstance(zt_days, (list, tuple)) else []
     _pos_on = bool(POOL_CALL_DEFENSE_GATE and POOL_CALL_DEFENSE_POSITION)
     _od_on = bool(POOL_CALL_DEFENSE_GATE and POOL_CALL_DEFENSE_OLD_DRAGON)
+
+    # 🧬 基因换位预扫（2026-11-06）：同板数下「上一波更硬」的挑战者**顶替**原龙一。
+    #   为什么需要顶替而不是只放行：⑩d 的语义是「只做龙一、跟风不追」。若 09:25 认定
+    #   东方海洋才是这条线更强的那个，那皇台在**同一套判据下**就是跟风 —— 两个都买
+    #   等于自相矛盾（11-06 实证：皇台 −10.66%、东方海洋 +8.17%，一对仓位对冲成 −1.25%）。
+    #   ⛔ 只在「板数完全相同」时判（板数是第一序，⛔ 不许跨板数翻案）。
+    #   ⛔ 缺序列/缺任一侧 → 不裁决（`gene_stronger` 自带缺数据保护）。
+    #   可逆：`POOL_CALL_DRAGON_GENE_SWAP=0` → 只放行不顶替（两个都买）。
+    _gene_swap: dict[str, dict[str, Any]] = {}
+    if POOL_CALL_DRAGON_GENE and POOL_CALL_DRAGON_GENE_SWAP and zt_series:
+        try:
+            from core import gene_height as _gh0
+            for c in pool:
+                _lc0 = str(c.get("dragon_leader_code") or "")
+                if not _lc0:
+                    continue
+                _b0, _lb0 = c.get("boards"), c.get("dragon_leader_boards")
+                try:
+                    _b0 = int(_b0) if _b0 is not None else None
+                    _lb0 = int(_lb0) if _lb0 is not None else None
+                except (TypeError, ValueError):
+                    continue
+                if _b0 is None or _lb0 is None or _b0 != _lb0:
+                    continue
+                _my0 = _gh0.prev_streak_of(zt_series, str(c.get("code") or ""))
+                _th0 = _gh0.prev_streak_of(zt_series, _lc0)
+                if not _gh0.gene_stronger(_my0, _th0):
+                    continue
+                _prev0 = _gene_swap.get(_lc0)
+                if _prev0 is None or (int(_my0 or 0) > int(_prev0.get("mine_prev_streak") or 0)):
+                    _gene_swap[_lc0] = {
+                        "by": str(c.get("code") or ""),
+                        "by_name": c.get("name"),
+                        "mine_prev_streak": _my0,
+                        "leader_prev_streak": _th0,
+                        "boards": _b0,
+                    }
+        except Exception:                                # noqa: BLE001
+            _gene_swap = {}
 
     # 同线板数排名（池内）：板数高的排前面（核心优先于跟风）
     _by_line: dict[str, list[dict[str, Any]]] = {}
@@ -1137,6 +1275,28 @@ def call_pool(candidates: dict[str, Any] | None,
     #    这里只搬运字段，⛔ 不读盘、不重算、不改任何既有裁决变量。
     _sgc_on = bool(_sgc.enabled() and isinstance(sector_gap, dict) and sector_gap)
     _sgc_ctx: dict[str, dict[str, Any]] = sector_gap if _sgc_on else {}
+
+    # 🧮 当日整体开盘偏移（见模块顶部 `POOL_CALL_DEV_ENV_OFFSET` 段）：池内中位开幅
+    #    明显为负时，把它当作「今天的基准」从每只票的 DEV 里扣掉。
+    _dev_env_offset = 0.0
+    _dev_env_info: dict[str, Any] = {"enabled": bool(POOL_CALL_DEV_ENV_OFFSET),
+                                     "offset": 0.0}
+    if POOL_CALL_DEV_ENV_OFFSET:
+        _pool_gaps = sorted(
+            g for g in (_gap_of(qs.get(str(c.get("code") or "").strip())) for c in pool)
+            if g is not None
+        )
+        if len(_pool_gaps) >= DEV_ENV_MIN_SAMPLES:
+            _n = len(_pool_gaps)
+            _med = (_pool_gaps[_n // 2] if _n % 2
+                    else (_pool_gaps[_n // 2 - 1] + _pool_gaps[_n // 2]) / 2.0)
+            _dev_env_info.update({"pool_n": _n, "median_gap": round(_med, 2),
+                                  "trigger": DEV_ENV_TRIGGER_PCT})
+            if _med <= DEV_ENV_TRIGGER_PCT:
+                _dev_env_offset = max(float(_med), -DEV_ENV_MAX_OFFSET_PCT)
+                _dev_env_info["applied"] = True
+        _dev_env_info["offset"] = round(_dev_env_offset, 2)
+
     for c in pool:
         code = str(c.get("code") or "").strip()
         name = str(c.get("name") or "")
@@ -1222,9 +1382,13 @@ def call_pool(candidates: dict[str, Any] | None,
             _exp = (expected_gaps.get(code) if isinstance(expected_gaps, dict)
                     else _eg.expected_gap_pct(c))
         zone = (_ac.gap_zone(gap, exp, expected_gap_pct=_exp,
-                             is_20cm=bool(c.get("is_20cm")))
+                             is_20cm=bool(c.get("is_20cm")),
+                             env_offset=_dev_env_offset)
                 if gap is not None else "unknown")
         base["zone"] = zone
+        if _dev_env_offset:
+            # 留痕：本票的 DEV 是被扣过环境偏移的（卡面/复盘要看得出这一天整体低开）
+            base["dev_env_offset"] = round(_dev_env_offset, 2)
         # ⛔ `AI_EXPECTED_GAP_MODE=absolute` 一键回退：逐字回到 11-05 之前的字段结构，
         #    ⛔ 不写逐票预期字段、不留低开标记（旧测试/旧消费方零感知）。
         if _ac.relative_mode():
@@ -1369,11 +1533,16 @@ def call_pool(candidates: dict[str, Any] | None,
                                "reason": (f"今开 {gap:+.2f}%，离涨停只剩 {_room:.2f} 个点"
                                           f"（上限 {_lim:.0f}%）→ 上方空间不够，不追")}
                 continue
-        # ③ 盘后预案＝回避
+        # ③ 盘后预案＝回避（2026-11-06 用户「盘后预案这个功能关了，全系统关闭」）
+        #    ⛔ 默认**不再否决**：只留痕 `bias_avoided`，买不买交给竞价链自己判。
+        #    依据：11-06 被 avoid 砍掉的 7 只事后均值 +0.42%（新亚制程 +16.00% 当日第二）。
+        #    `POOL_CALL_BIAS_AVOID=1` 逐字回退旧行为。
         if bias == BIAS_AVOID:
-            marks[code] = {**base, "view": "skip",
-                           "reason": "昨天做预案时就把它划成回避 → 今天不买"}
-            continue
+            if POOL_CALL_BIAS_AVOID_VETO:
+                marks[code] = {**base, "view": "skip",
+                               "reason": "昨天做预案时就把它划成回避 → 今天不买"}
+                continue
+            base["bias_avoided"] = True
         # 🎯 低开例外（2026-11-02·只对全市场最高板）
         #   「最高板 ∧ 低开>3%」是全交叉里唯一显著为正的一组（n=7 胜 71.4%/均 +5.02%，
         #   验证段 n=5 胜 60%）。样本小 → 三道锁（只认最高板 / 半仓 / 不额外放号）。
@@ -1385,7 +1554,25 @@ def call_pool(candidates: dict[str, Any] | None,
             and base.get("gap_to_top") == 0
         )
         # ④ 明显低于**这只票自己的质量预期**（relative）/ 低于 AI 区间下沿（absolute 回退）
-        if zone == "below" and not _lo_top:
+        #    🕳️ 深低开豁免：DEV 曲线是 U 形，「砸穿」和「走弱」必须分开判（见常量区注释）。
+        _dev_val = base.get("gap_vs_expected")
+        if isinstance(_dev_val, (int, float)) and _dev_env_offset:
+            _dev_val = float(_dev_val) - float(_dev_env_offset)
+        _deep_rescued = bool(
+            zone == "below"
+            and POOL_CALL_DEEP_LOW_RESCUE
+            and _ac.relative_mode()
+            and isinstance(_dev_val, (int, float))
+            and float(_dev_val) <= DEEP_LOW_OPEN_DEV
+        )
+        if _deep_rescued:
+            base["deep_low_rescue"] = {
+                "dev": round(float(_dev_val), 2),
+                "threshold": DEEP_LOW_OPEN_DEV,
+                "note": (f"开 {gap:+.2f}% 比它自己的预期低 {abs(float(_dev_val)):.1f} 个点，"
+                         "属于被砸下来的错杀档 → 不按走弱处理"),
+            }
+        if zone == "below" and not _lo_top and not _deep_rescued:
             _e_show = base.get("expected_gap_pct")
             if _ac.relative_mode() and isinstance(_e_show, (int, float)):
                 _why = (f"今天开 {gap:+.2f}%，按昨日质量该开 {float(_e_show):+.2f}% "
@@ -1627,6 +1814,49 @@ def call_pool(candidates: dict[str, Any] | None,
             if isinstance(_dr, (int, float)) and int(_dr) > 0 and _has_sector is not False:
                 _dr_i = int(_dr)
                 _lead_nm = str(c.get("dragon_leader_name") or "") or "别人"
+                # 🧬 换位：本票是原龙一，但同板数下有票「上一波更硬」→ 降为跟风身位
+                _swapped = _gene_swap.get(code) if _dr_i == 1 else None
+                if _swapped:
+                    _dr_i = 2
+                    _lead_nm = str(_swapped.get("by_name") or _swapped.get("by") or "同线另一只")
+                    base["gene_demoted"] = {
+                        "by": _swapped.get("by"),
+                        "by_name": _swapped.get("by_name"),
+                        "mine_prev_streak": _swapped.get("leader_prev_streak"),
+                        "challenger_prev_streak": _swapped.get("mine_prev_streak"),
+                        "note": (f"同 {_swapped.get('boards')} 板下，"
+                                 f"{_lead_nm}的上一波 "
+                                 f"{_swapped.get('mine_prev_streak')} 连板比它更硬 → 它降为跟风"),
+                    }
+                if _dr_i > 1:
+                    # 🧬 基因复核（2026-11-06 用户「东方海洋上次四连板，皇台只有三连板」）
+                    #   旧候选文件里的 `dragon_rank` 按旧序写死（板数 → 封板时段），
+                    #   同板数时「谁封得早」压过「谁上一波走得高」。09:25 是最终裁决，
+                    #   这里用**同一套股性判据**复核一次：同板数 ∧ 我上一波严格更硬 → 不按跟风。
+                    #   ⛔ 前置不变量：`zt_series` 截止昨日，而池内票昨日全部在板，
+                    #      故 `prev_streak_of` 的「当前段」就是它昨日的连板数（口径正确）。
+                    if POOL_CALL_DRAGON_GENE:
+                        try:
+                            from core import gene_height as _gh
+                            _my_prev = _gh.prev_streak_of(zt_series, code)
+                            _ld_prev = _gh.prev_streak_of(
+                                zt_series, str(c.get("dragon_leader_code") or ""))
+                            _ld_b = c.get("dragon_leader_boards")
+                            _ld_b = int(_ld_b) if isinstance(_ld_b, (int, float)) else None
+                            if (_gh.gene_stronger(_my_prev, _ld_prev)
+                                    and _ld_b is not None and _ld_b <= boards_i):
+                                base["gene_leader_override"] = {
+                                    "mine_prev_streak": _my_prev,
+                                    "leader_prev_streak": _ld_prev,
+                                    "leader": _lead_nm,
+                                    "leader_rank": _dr_i,
+                                    "note": (f"同板数下它的{_gh.prev_streak_text(_my_prev)}、"
+                                             f"强过{_lead_nm}的{_gh.prev_streak_text(_ld_prev)}"
+                                             f" → 不按跟风处理"),
+                                }
+                                _dr_i = 1        # 本地视为龙一：后续「邻龙/顶替」分支不再拦
+                        except Exception:                            # noqa: BLE001
+                            pass
                 if _dr_i > 1:
                     # 🚪 隔壁通道（2026-11-04 用户 BBB「今天龙一买不到，必须考虑龙二能不能买」）
                     #   只在「龙一自己买不进（一字/ST）」且它是第 2 身位时放行：
@@ -1944,6 +2174,9 @@ def call_pool(candidates: dict[str, Any] | None,
             #    「符合这只票的预期」（与 ai_caliber.decide 同源）；absolute 回退逐字保留旧句。
             _zone_reason = ("符合这只票的预期 → 买入" if _ac.relative_mode()
                             else "没超 5% 上限、也没低于预期 → 买入")
+            if isinstance(e.get("deep_low_rescue"), dict):
+                # 🕳️ 深低开豁免：⛔ 不能说「符合预期」（它明显低于预期），要说清是**被砸出的错杀**
+                _zone_reason = "比它自己的预期低得多，属于被砸下来的错杀档 → 买入"
             marks[code] = {**e, "view": "participate", "quota_rank": i + 1,
                            "reason": (f"今天开在 {e['gap_pct']:+.2f}%，"
                                       f"{_zone_reason}"
@@ -2111,6 +2344,17 @@ def call_pool(candidates: dict[str, Any] | None,
                        if v.get("view") == "participate" and v.get("auction_state") == "A"],
             "manual_only": [c for c, v in marks.items() if v.get("manual_only")],
             "filtered": list(_filtered_by_state),
+        },
+        # 🧮 当日整体开盘偏移（2026-11-06）：池内中位开幅 + 实际生效的偏移量。
+        #    ⛔ 只读诊断：被它影响的是 `zone`（已写进逐票 `dev_env_offset`）。
+        "dev_env_offset": dict(_dev_env_info),
+        # 🕳️ 深低开豁免留痕（2026-11-06）：开关 / 阈值 / 当日被豁免的票。
+        #    ⛔ 只读诊断：⛔ 不参与二次裁决，逐票明细在 `views[code].deep_low_rescue`。
+        "deep_low_rescue": {
+            "enabled": bool(POOL_CALL_DEEP_LOW_RESCUE),
+            "threshold": DEEP_LOW_OPEN_DEV,
+            "rescued": [c for c, v in marks.items()
+                        if isinstance(v.get("deep_low_rescue"), dict)],
         },
         # 🎯 名额策略留痕（2026-11-04）：原 stance 名额 / 最终名额 / 是否放宽到 2 /
         #    真实达标票数 / 是否单票场景。诊断只读，⛔ 不参与二次裁决。

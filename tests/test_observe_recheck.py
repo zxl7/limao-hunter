@@ -206,13 +206,19 @@ def test_state_still_blocked_by_5pct_and_green_open():
     assert _call([_watch("000001")], gap=-1.0)["views"]["000001"]["view"] != "participate"
 
 
-def test_state_still_blocked_by_avoid_plan():
+def test_state_no_longer_blocked_by_avoid_plan(monkeypatch):
+    """盘后「回避」默认不再否决（2026-11-06）；旧行为用开关逐字复原。"""
     r = _watch("000001")
-    res = pc.call_pool({"relay": [], "watch": [r]}, {"000001": _q()},
-                       plan={"stance": "attack",
-                             "views": {"000001": {"bias": "avoid"}}},
-                       stance="attack", line_cores={}, sector_flow={},
-                       zt_series={}, zt_days=[], market_open=None, relay_plan=None)
+    kw = dict(plan={"stance": "attack",
+                    "views": {"000001": {"bias": "avoid"}}},
+              stance="attack", line_cores={}, sector_flow={},
+              zt_series={}, zt_days=[], market_open=None, relay_plan=None)
+    res = pc.call_pool({"relay": [], "watch": [r]}, {"000001": _q()}, **kw)
+    assert res["views"]["000001"]["view"] == "participate"
+
+    monkeypatch.setattr(pc, "POOL_CALL_EOD_PLAN", True)   # 要验「回避」必须先消费预案
+    monkeypatch.setattr(pc, "POOL_CALL_BIAS_AVOID_VETO", True)
+    res = pc.call_pool({"relay": [], "watch": [r]}, {"000001": _q()}, **kw)
     assert res["views"]["000001"]["view"] != "participate"
 
 

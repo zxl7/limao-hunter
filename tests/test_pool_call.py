@@ -110,8 +110,23 @@ def test_above_user_line_gives_up():
     assert "5%" in v["reason"]
 
 
-def test_plan_avoid_gives_up():
-    """③ 昨日预案＝回避 → 放弃（预案只降不升的否决权）。"""
+def test_plan_avoid_no_longer_vetoes_by_default(monkeypatch):
+    """③ 盘后预案「回避」**默认不再否决**（2026-11-06 用户「盘后预案这个功能关了」）。
+
+    11-06 被 avoid 砍掉的 7 只事后均值 +0.42%（新亚制程 +16.00% 当日第二）→
+    关掉硬否决，只留痕 `bias_avoided`；买不买交给竞价链自己判。
+    """
+    res = pool_call.call_pool({"relay": [_cand("000001", "甲票")], "watch": []},
+                              {"000001": _q(10.0, 2.0)},
+                              plan=_plan({"000001": "avoid"}))
+    v = res["views"]["000001"]
+    assert v["view"] == "participate"
+    assert v.get("bias_avoided") is True
+
+
+def test_plan_avoid_veto_switch_restores_old_behavior(monkeypatch):
+    """`POOL_CALL_BIAS_AVOID=1` → 逐字回到「预案回避 → 今天不买」。"""
+    monkeypatch.setattr(pool_call, "POOL_CALL_BIAS_AVOID_VETO", True)
     res = pool_call.call_pool({"relay": [_cand("000001", "甲票")], "watch": []},
                               {"000001": _q(10.0, 2.0)},
                               plan=_plan({"000001": "avoid"}))
@@ -399,10 +414,11 @@ def test_bias_backfilled_from_legacy_view():
     assert pool_call._bias_of(plan, "000001") == "focus"
     assert pool_call._bias_of(plan, "000002") == "avoid"
     assert pool_call._bias_of(plan, "000003") == "normal"
-    # 回避档生效：乙票即便竞价达标也放弃
+    # 回避档默认不再否决（2026-11-06）：乙票竞价达标 → 照常参与，只留痕
     cands = {"relay": [_cand("000002", "乙票", need=1.0)], "watch": []}
     res = pool_call.call_pool(cands, {"000002": _q(10.0, 2.0, amt=5.0)}, plan=plan)
-    assert res["views"]["000002"]["view"] == "skip"
+    assert res["views"]["000002"]["view"] == "participate"
+    assert res["views"]["000002"].get("bias_avoided") is True
 
 
 def test_missing_plan_entry_defaults_normal():

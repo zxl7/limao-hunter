@@ -431,12 +431,13 @@ HIBERNATE_VALVE_VIEWS = ("watch",)
 def gap_zone(gap_pct: Any, expected_range: Any = None,
              tol: float = EXPECTED_ZONE_TOL, *,
              expected_gap_pct: Any = None,
-             is_20cm: Any = False) -> str:
+             is_20cm: Any = False,
+             env_offset: Any = 0.0) -> str:
     """竞价「是否符合预期」的 **唯一判据源**（池内裁决 / 账本 / 卡面共用）。
 
     2026-11-05 用户删掉 5% 与「必须红开」两条绝对线，改为逐票质量预期管理：
       · 任何模式：竞价封死（≥涨停−0.2pct）→ 'above'（**买不进**的物理事实，非幅度线）
-      · relative（默认）：`DEV = gap − expected_gap_pct`
+      · relative（默认）：`DEV = gap − expected_gap_pct − env_offset`
             DEV < `EXPECTED_GAP_DEV_MIN`(−2.0) → 'below'（明显低于这只票的预期）
             其余 —— 高开、低开、超预期 —— 一律 'ok'
             缺 `expected_gap_pct` → 'unknown'（⛔ 缺数据不裁决，不猜、不否决）
@@ -444,6 +445,16 @@ def gap_zone(gap_pct: Any, expected_range: Any = None,
             gap > 5% → 'above'；gap < lo − tol → 'below'；其余 'ok'
     ⛔ 区间上沿 hi 两种模式都不参与（09-17 A2 修订已废）。
     ⛔ 本函数是唯一实现——任何地方不得再自写一套（防账本/卡面双轨脱节）。
+
+    ## 🧮 `env_offset`（2026-11-06 用户「今天受外盘影响，绿盘那么多票，低开是可以理解的」）
+
+    当日全池整体低开时，**每只票的 DEV 都被同一个负偏移压低**，逐票质量判据会
+    集体误杀（11-06 池内 5 只被 DEV 门砍掉、事后均值 +1.11%）。传入池内中位开幅后，
+    DEV 改为「相对当日整体开幅」的超额，恢复「这只票比同行强多少」的本意。
+
+    ⛔ 偏移量由调用方（`pool_call`）**按当日池内中位数算好再传**，本函数只做算术：
+      不读盘、不判环境、不自己找基准（否则账本/卡面又会各算一套）。
+    ⛔ 默认 0.0 = 与 11-05 行为逐字一致；⛔ 不作用于 absolute 回退模式。
     """
     if gap_pct is None:
         return "unknown"
@@ -464,7 +475,13 @@ def gap_zone(gap_pct: Any, expected_range: Any = None,
             e = None
         if e is None or not math.isfinite(e):
             return "unknown"          # 缺质量数据 → 不裁决，不否决
-        return "below" if (g - e) < EXPECTED_GAP_DEV_MIN else "ok"
+        try:
+            off = float(env_offset) if env_offset is not None else 0.0
+        except (TypeError, ValueError):
+            off = 0.0
+        if not math.isfinite(off):
+            off = 0.0
+        return "below" if (g - e - off) < EXPECTED_GAP_DEV_MIN else "ok"
     # ③ 旧绝对线（一键回退，逐字保留 11-05 之前行为）
     if g > USER_ENTRY_MAX_GAP_PCT:
         return "above"

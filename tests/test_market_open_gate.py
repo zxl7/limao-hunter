@@ -39,6 +39,9 @@ def test_full_market_open_needs_complete_sample_and_three_signals():
 
 
 def test_hibernate_releases_only_one_when_full_market_recovers(monkeypatch):
+    # 2026-11-06 起 `POOL_CALL_EOD_PLAN=0` 默认不读预案的 stance；本用例验的是
+    # 「hibernate + 竞价回暖 → 只放 1 只」这条旧机制，须显式打开预案消费。
+    monkeypatch.setattr(pool_call, "POOL_CALL_EOD_PLAN", True)
     monkeypatch.setattr(market_open, "MIN_LEADERS", 2)
     rows = [_row("000001", 3), _row("000002", 2), _row("000003", 1),
             _row("000004", 1), _row("000005", 1)]
@@ -56,6 +59,7 @@ def test_hibernate_releases_only_one_when_full_market_recovers(monkeypatch):
 
 
 def test_hibernate_stays_closed_when_leaders_open_weakly(monkeypatch):
+    monkeypatch.setattr(pool_call, "POOL_CALL_EOD_PLAN", True)
     monkeypatch.setattr(market_open, "MIN_LEADERS", 2)
     rows = [_row("000001", 3), _row("000002", 2), _row("000003", 1),
             _row("000004", 1), _row("000005", 1)]
