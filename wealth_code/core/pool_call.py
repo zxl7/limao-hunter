@@ -89,6 +89,10 @@ from core import auction_state as _ast                  # noqa: E402
 from core import expected_gap as _eg                    # noqa: E402
 # 🎯 9:25 三环联动影子上下文（2026-11-05 用户拍板 A 档）：只留痕，⛔ 不裁决。
 from core import sector_gap_context as _sgc             # noqa: E402
+# 🧩 板块打分（2026-11-10 用户「短线接力的时候，每一个个股其实也是有板块的，这个板块进行一个打分挺好」）：
+#    把散在 row_tier / sector_support / theme_linkage / theme_phase 的板块信号收成一个 0~100 的数。
+#    第一版**只留痕**（写 views[code].theme_score），⛔ 不改 view / 仓位 / 名额 / 任何闸。
+from core import theme_score as _ts                     # noqa: E402
 
 # ── 开关（架构改动必留可逆开关）─────────────────────────────────────────────
 # True  = 9:25 池内裁决（本模块接管「买哪只」）
@@ -369,6 +373,26 @@ POOL_CALL_LINE_CONSISTENCY_GATE = True
 POOL_CALL_BACKROW_GATE = True
 BACKROW_MIN_VOL_RATIO = 1.0       # 次排/后排要求 竞价额 / 计划需求 ≥ 该值（＝放量确认）
 
+# ── 🧩 板块打分（2026-11-10）：只留痕，不裁决 ───────────────────────────────
+# 用户原话：「短线接力的时候，每一个个股其实也是有板块的，这个板块进行一个打分挺好」
+# 把规模（同板块家数）/ 高度（板块最高板）/ 卡位（本票身位）/ 承接（今早红开率）
+# 四维等权合成 0~100，写进 `views[code].theme_score`。
+# ⛔ 第一版**不参与任何判断**：不改 view、不改 position_cap、不改名额、不进任何闸。
+#    要进权重必须先用 `scripts/research_theme_score_ab.py` 证明分档单调（分越高收益越高），
+#    否则它只是个好看的数 —— 那比没有更糟，因为它会让人以为系统看了板块。
+# 回退：`POOL_CALL_THEME_SCORE=0` → 完全不计算、不写字段。
+POOL_CALL_THEME_SCORE = os.environ.get("POOL_CALL_THEME_SCORE", "1") != "0"
+
+# ── 🌊 题材动量（2026-11-10 第二轮）：也先只留痕，等验证 ─────────────────────
+# 热度分验证下来**分越高反而越差**（35 日 ≥70 强 −0.57% vs 30~49 弱 +0.24%），
+# 说明「线有多热」已被身位/板数覆盖。改打**变化**：家数环比 / 位置(÷5日峰值) / 连续天数。
+# 数据来自 `cache/theme_momentum/<day>.json`（由 `scripts/build_theme_momentum.py` 预生成，
+# 底座是 zt_history + theme_snapshot，⛔ 不用只有一份的 theme_rotation）。
+# ⛔ 同样只写 `views[code].theme_momentum`，不改任何裁决。
+# 回退：`POOL_CALL_THEME_MOMENTUM=0`。
+POOL_CALL_THEME_MOMENTUM = os.environ.get("POOL_CALL_THEME_MOMENTUM", "1") != "0"
+
+
 # ── ⚓ 锚点闸（2026-10-21 用户口述「次日只需做好锚点的对比与观察」）────────────────
 # 体系：昨天收盘用**涨停时间**定出每条线的大将军（`core/anchor_call.pick_general`）→
 #   今天 09:25 只看这只怎么开（一字/大高开/强开/平开/破预期）→ 决定这条线今天能不能出手。
@@ -630,6 +654,30 @@ def _theme_map_for(day: str, root: Path | None = None) -> dict[str, str]:
     return out
 
 
+def load_theme_momentum(day: str, root: Path | None = None) -> dict[str, dict[str, Any]]:
+    """该交易日 09:25 可用的「题材动量」特征（`cache/theme_momentum/<day>.json`）。
+
+    2026-11-10 用户：「短线接力…这个板块进行一个打分挺好」→ 热度分验证下来不单调
+    （分越高反而越差），所以改打**变化**：家数环比 / 位置 / 连续天数。
+
+    ⛔ 快照里的数据**严格早于 day**（由 `scripts/build_theme_momentum.py` 保证），
+       把 day 自己写进去就是未来函数。
+    ⛔ 不用 `theme_rotation.json`：它只有一份、覆盖写，回放会读到未来数据。
+       底座是 `zt_history` + `theme_snapshot`（都按日归档，可回放）。
+    缺失/损坏 → {}（诚实降级，不裁决）。
+    """
+    p = ((Path(root) if root else ROOT.parent) / "cache" / "theme_momentum"
+         / f"{day}.json")
+    try:
+        d = json.loads(p.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    themes = d.get("themes") if isinstance(d, dict) else None
+    if not isinstance(themes, dict):
+        return {}
+    return {str(k): v for k, v in themes.items() if isinstance(v, dict)}
+
+
 def load_line_cores(date10: str, *, days: int = LINE_CORE_LOOKBACK_DAYS,
                     root: Path | None = None) -> dict[str, dict[str, Any]]:
     """近 N 个交易日涨停池 → {线族: 该线**最高板**那只}（含已断板的核心）。
@@ -766,6 +814,12 @@ def load_line_cores(date10: str, *, days: int = LINE_CORE_LOOKBACK_DAYS,
         core["broken"] = broken
         core["in_pool"] = bool(beacon)
         core["beacon"] = beacon
+        # ⭐ 2026-11-10：带出锚点那行的**原始涨停数据**（fbt/seal/hs/boards）。
+        #    锚点态度已改为按 DEV（相对它自己的质量预期）判 —— 没有这行就算不出预期，
+        #    只能退回绝对开幅（旧口径），那正是「卡面说别碰、裁决却买」的根源。
+        #    ⛔ 只多带一个字段，不改任何既有语义。
+        core["quality_row"] = dict(
+            ((best if alive and beacon else hist_best).get("last_row")) or {})
         out[fam] = core
     return out
 
@@ -894,6 +948,7 @@ def call_pool(candidates: dict[str, Any] | None,
              expected_gaps: dict[str, float] | None = None,
              sector_gap: dict[str, dict[str, Any]] | None = None,
              code_theme: dict[str, str] | None = None,
+             theme_momentum: dict[str, dict[str, Any]] | None = None,
              enabled: bool | None = None) -> dict[str, Any]:
     """9:25 池内裁决 → 今天买哪只（**唯一判据源**）。
 
@@ -1140,11 +1195,18 @@ def call_pool(candidates: dict[str, Any] | None,
         _by_line.setdefault(line_family(c), []).append(c)
     _line_rank: dict[str, int] = {}
     _line_max_boards: dict[str, int] = {}     # 本线池内最高板（身位判定的参照系之一）
+    # 🧩 本线池内票数（板块打分的「规模」维）。⛔ 池内口径，不是全市场涨停池 ——
+    #    全市场口径（`theme_open_rows`）只有生产链路传，回放拿不到，两套口径永远对不上。
+    _line_count: dict[str, int] = {}
+    # 🧩 本线 ≥2 板的票数（板块打分的「厚度」维）：只有一只高板 + 一堆首板＝独角戏，不是梯队。
+    _line_depth: dict[str, int] = {}
     for fam, arr in _by_line.items():
         def _bd(x: dict[str, Any]) -> int:
             v = x.get("boards")
             return int(v) if v is not None and str(v).strip().isdigit() else 0
         _line_max_boards[fam] = max([_bd(x) for x in arr] or [0])
+        _line_count[fam] = len(arr)
+        _line_depth[fam] = sum(1 for x in arr if _bd(x) >= 2)
         for i, c in enumerate(sorted(arr, key=lambda x: -_bd(x))):
             _line_rank[str(c.get("code"))] = i + 1
 
@@ -1199,6 +1261,10 @@ def call_pool(candidates: dict[str, Any] | None,
     # 缺失 / 为空 → 映射空 → `position_weight` 返回 basis=unknown、权重 1.0（不裁决）。
     _theme_board_max: dict[str, int] = {}
     _code_theme_pos: dict[str, str] = {}
+    # 🧩 同板块家数（板块打分的「规模」维）：这条线昨天有几只涨停。
+    #    ⛔ 与 `_theme_board_max` 同源同口径（同一份 theme_open_rows + 同一个 code_theme 映射），
+    #    不另起一套分组 —— 两套分组必然有一天打架。
+    _theme_count: dict[str, int] = {}
     # ⛔ 题材源优先级：显式 `code_theme`（调用方用选股宝 plates 算好的**炒作题材**）
     #    > 行内 core_theme/theme > sector。**只要显式传入就严格只用它**：
     #    `full_zt_rows` 只带 sector（行业），混用会让分母变成「同行业最高板」，
@@ -1230,6 +1296,7 @@ def call_pool(candidates: dict[str, Any] | None,
         if _bd <= 0:
             continue
         _code_theme_pos[_cd] = _th
+        _theme_count[_th] = _theme_count.get(_th, 0) + 1
         if _bd > _theme_board_max.get(_th, 0):
             _theme_board_max[_th] = _bd
 
@@ -1251,10 +1318,20 @@ def call_pool(candidates: dict[str, Any] | None,
             if not _in_pool:
                 continue
             code = str(lc.get("code"))
+            # ⭐ 2026-11-10 口径统一：锚点态度也按 **DEV = 实际开幅 − 它自己的质量预期** 判，
+            #    与 `gap_zone` 同一套阈值。⛔ 不传预期就会退回绝对开幅（旧口径），
+            #    那正是「卡面说别碰、裁决却买」的根源。
+            _exp_anc = (expected_gaps.get(code) if isinstance(expected_gaps, dict) else None)
+            if _exp_anc is None and _eg.enabled():
+                _exp_anc = _eg.expected_gap_pct((lc or {}).get("quality_row") or lc)
             read = _ac2.anchor_read(qs.get(code), code=code,
-                                    expected_range=(lc.get("expectation") or {}).get("expected_range"))
+                                    expected_range=(lc.get("expectation") or {}).get("expected_range"),
+                                    expected_gap=_exp_anc)
             _anchors[fam] = {"code": code, "name": lc.get("name"),
-                             "boards": lc.get("boards"), **read}
+                             "boards": lc.get("boards"), **read,
+                             # ⭐ 2026-11-10 晚：动作文案随冻结件一起落盘（单一源 ATT_ACTION），
+                             #    卡面/API 都读它，⛔ 不在各自那一层重写一套结论。
+                             "action": _ac2.attitude_action(read.get("attitude"))}
 
     # 🌊 独苗高开预计算（2026-11-04）：按炒作题材统计「昨日同板块涨停票今早红开率」。
     #    供 ⑪d 判「自己高开、同方向其余票集体绿开」。
@@ -1423,6 +1500,51 @@ def call_pool(candidates: dict[str, Any] | None,
             "linkage_facts": c.get("linkage_facts"),
             "linkage_discipline": c.get("linkage_discipline"),
         }
+        # 🧩 板块打分（第一版·粗算）—— 2026-11-10 用户
+        #    「短线接力的时候，每一个个股其实也是有板块的，这个板块进行一个打分挺好」
+        #
+        #    四维等权 0~100：规模（本线池内几只）/ 高度（本线最高板）/ 卡位（本票身位）/
+        #    承接（今早同板块红开率）。规则与阈值全在 `core/theme_score.py`（单一源）。
+        #
+        #    ⚠️ 为什么在这里就算：用户在**任一闸之前**都会看到这只票，先给每个票一个分。
+        #      走到⑪b之后会用当日真实身位 + 竞价承接**覆盖**成精算版（见 ⑪d 之前那段）。
+        #    ⛔ 只写字段：不改 view / position_cap / 名额 / 任何闸。
+        if POOL_CALL_THEME_SCORE:
+            try:
+                _ssp0 = c.get("sector_support")
+                _ssp0 = _ssp0 if isinstance(_ssp0, dict) else {}
+                base["theme_score"] = _ts.score(
+                    theme_zt_count=_line_count.get(fam),
+                    theme_max_boards=_line_max_boards.get(fam),
+                    theme_depth=_line_depth.get(fam),
+                    red_open=_ssp0.get("red_open"),
+                    mates_quoted=_ssp0.get("mates_quoted"),
+                    theme_name=str(fam or ""),
+                )
+            except Exception:                    # noqa: BLE001 —— 打分故障不许阻断裁决
+                pass
+
+        # 🌊 题材动量（变化，不是水平）—— 同样只留痕
+        #    ⛔ 与 `theme_score`（热度）并存但互不依赖：一个描述「多热」，一个描述「在变热还是变冷」。
+        #       等分档验证出来再决定留哪个、要不要进权重。
+        #    ⛔ 必须由调用方**显式传入**（`load_theme_momentum(买入日)`）：
+        #       本函数不知道「今天是哪天」——之前误用了一个不存在的 `day` 变量，
+        #       被 try/except 吞成 None，25 只票全无动量却看不出来。
+        if POOL_CALL_THEME_MOMENTUM:
+            try:
+                _mv = (theme_momentum or {}).get(str(fam or "").strip())
+                base["theme_momentum"] = _mv if isinstance(_mv, dict) else None
+                # 🎯 板块强度分：**只由全市场同题材涨停家数决定**（`theme_score.strength`）。
+                #    这是四维热度分验证失败后，唯一通过「去日期效应」分档检验的一维：
+                #    n1~2 超额 −0.88% / n3~5 −0.65% / n≥6 **+0.69%**（单调递增）。
+                #    ⛔ 同样只写字段，不改裁决。
+                base["theme_strength"] = _ts.strength(
+                    (_mv or {}).get("n") if isinstance(_mv, dict) else None,
+                    theme_name=str(fam or ""))
+            except Exception:                    # noqa: BLE001 —— 故障不许阻断裁决
+                base["theme_momentum"] = None
+                base["theme_strength"] = None
+
         # 🎯 11-05 A 档影子留痕：三环联动字段在**所有短路之前**写入 base，
         #    被任一闸拦下的票也留痕，便于逐日对照「高开凭什么」。
         #    ⛔ 字段白名单不含任何裁决字段；缺上下文 / 开关关 → 一个字段都不写。
@@ -1762,14 +1884,20 @@ def call_pool(candidates: dict[str, Any] | None,
             base["line_anchor"] = {k: _anc.get(k) for k in ("code", "name", "boards",
                                                             "attitude", "label", "gap", "note")}
             _att = str(_anc.get("attitude") or "")
-            if _att in (_ac2.ATT_BREAK, _ac2.ATT_WEAK):
-                # 锚点破预期 / 低开 → 这条线今天不占名额（最强否决，只看它自己能不能拉回来）
+            # ⭐ 2026-11-10 口径统一后：**只拦 ATT_BREAK**（DEV < 破预期线，真低于它自己的预期）。
+            #    `ATT_WEAK` 现在只在「拿不到该票预期」时出现 —— 按「缺数据不裁决」，
+            #    ⛔ 不拦，只留痕。旧逻辑把这两档一起拦，等于用绝对开幅替判据说话。
+            if _att == _ac2.ATT_BREAK:
                 marks[code] = {**base, "view": "watch", "anchor_gate": True,
                                "reason": (f"开在 {gap:+.2f}% 达标，但这条线的锚点"
                                           f"{_anc.get('name')}今天{_anc.get('label')}"
-                                          f"（{_anc.get('gap'):+.2f}%）→ 前排态度坏了，"
-                                          f"这条线今天先别碰")}
+                                          f"（{_anc.get('gap'):+.2f}%，DEV "
+                                          f"{_anc.get('dev') if _anc.get('dev') is not None else '—'}"
+                                          f"）→ 未达预期，这条线今天放弃")}
                 continue
+            if _att == _ac2.ATT_WEAK:
+                # 无预期可依 + 低开：⛔ 不裁决，留痕即可
+                base["anchor_weak_no_expect"] = True
             if _att == _ac2.ATT_FLAT:
                 # 平开＝前排还没表态。⛔ 不硬拦（平开太常见，全拦会把系统打成常年空仓），
                 #   只留痕：卡面标「前排平开·未表态」，出手与否交给量能/身位两道闸。
@@ -2086,6 +2214,28 @@ def call_pool(candidates: dict[str, Any] | None,
                                               f"比最高板低 {_gt_i} 板 —— 后排不做"
                                               f"（同题材后排 T+1 均 −1.62%、胜率 37.3%）")}
                     continue
+        # 🧩 板块打分（精算版·覆盖前面那一版粗算）
+        #    走到这里的票，`line_tier`（当日身位）与 `sector_support`（今早同板块红开）
+        #    都已就绪 → 重新算一次，覆盖 base 里那份粗分。
+        #
+        #    ⛔ 仍然**只写字段**：不改 view、不改 position_cap、不改名额、不进任何闸。
+        #       要进权重必须先证明分档单调（`scripts/research_theme_score_ab.py`），
+        #       否则它就是个好看的数——比没有更糟，因为会让人以为系统真看了板块。
+        if POOL_CALL_THEME_SCORE:
+            try:
+                _ssp = base.get("sector_support")
+                _ssp = _ssp if isinstance(_ssp, dict) else {}
+                base["theme_score"] = _ts.score(
+                    theme_zt_count=_line_count.get(fam),
+                    theme_max_boards=_line_max_boards.get(fam),
+                    theme_depth=_line_depth.get(fam),
+                    red_open=_ssp.get("red_open"),
+                    mates_quoted=_ssp.get("mates_quoted"),
+                    theme_name=str(fam or ""),
+                )
+            except Exception:                    # noqa: BLE001 —— 打分故障不许阻断裁决
+                pass
+
         # ⑪d 🌊 独苗高开闸（2026-11-04 用户「独苗高开可以立马设，适合跑路」）
         #   用户原话：「独苗高开 + 同板块集体绿开」不是强势信号，是派发信号。」
         #

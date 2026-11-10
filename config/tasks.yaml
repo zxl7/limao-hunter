@@ -16,6 +16,12 @@
 #   复盘系        = 盘后复盘派生小卡（龙虎榜速览·挂财神-复盘）
 #   脚本          = 纯脚本任务（无 AI 拼卡）
 
+# ⛔ 2026-11-10 用户「静默一些任务」：盘中猎手 13 档 → 4 档（09:30 / 10:30 / 13:30 / 14:45）。
+#    理由：个股级事件（涨停/封板/涨幅突增）已由 `scripts/live_signal.py` 每 120s 事件驱动覆盖，
+#    AI 盘中只需「定时定调 + 主线解读」；另测得约 4 成 AI 盘中调用落在「静默跳过·未推卡」。
+#    下 6 个时点在 automation DB 里已置 PAUSED（备份 `.workbuddy-db-backup-20261110.db`，
+#    回滚 `.workbuddy-pause-rollback.sql`）。保留档：0930 / 1030 / 1330 / 1445。
+
 tasks:
   # ---------- 盘前 ----------
   - name: "【盘前】盘前预测"
@@ -75,6 +81,7 @@ tasks:
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=40"
     webhook: "auto"
     writeback: "盘中猎手-0940"
+    paused: true   # 2026-11-10 静默（AI 盘中降为 4 档）
   - name: "【盘中】盘中猎手-0945"
     id: "automation-1785767316822"
     kind: "骨架B"
@@ -93,12 +100,14 @@ tasks:
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=11;BYMINUTE=20"
     webhook: "auto"
     writeback: "盘中猎手-1120"
+    paused: true   # 2026-11-10 静默（AI 盘中降为 4 档）
   - name: "【盘中】盘中猎手-1300"
     id: "automation-1785767419563"
     kind: "骨架B"
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=13;BYMINUTE=0"
     webhook: "auto"
     writeback: "盘中猎手-1300"
+    paused: true   # 2026-11-10 静默（AI 盘中降为 4 档）
   - name: "【盘中】盘中猎手-1330"
     id: "automation-1785767449762"
     kind: "骨架B"
@@ -128,6 +137,7 @@ tasks:
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=10;BYMINUTE=0"
     webhook: "auto"
     writeback: "盘中猎手-1000"
+    paused: true   # 2026-11-10 静默（AI 盘中降为 4 档）
     # 2026-10-14 用户「快照合并进猎手」：原名 盘中快照-1000 → 猎手-1000（内容按骨架B·含步骤4.52 📡核心标的）
   - name: "【盘中】盘中猎手-1100"
     id: "automation-1786674820934"
@@ -135,6 +145,7 @@ tasks:
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=11;BYMINUTE=0"
     webhook: "auto"
     writeback: "盘中猎手-1100"
+    paused: true   # 2026-11-10 静默（AI 盘中降为 4 档）
     # 2026-10-14 同上：原名 盘中快照-1100 → 猎手-1100
   - name: "【盘中】盘中猎手-1430"
     id: "automation-1786674820935"
@@ -142,6 +153,7 @@ tasks:
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=14;BYMINUTE=30"
     webhook: "auto"
     writeback: "盘中猎手-1430"
+    paused: true   # 2026-11-10 静默（AI 盘中降为 4 档）
     # 2026-08-25 曾 PAUSED
     # 2026-10-14 用户「快照合并进猎手」：原名 盘中快照-1445 → 暂名猎手-1445（名实错配）
     # 2026-10-14 用户「名称与实际跑的时间对齐」：猎手-1445（跑 14:30）→ 猎手-1430。rrule 未动，仅改名+prompt。

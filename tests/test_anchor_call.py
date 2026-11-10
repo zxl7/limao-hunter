@@ -69,7 +69,7 @@ def _q(prev, gap):
 def test_anchor_yizi_10cm():
     r = ac.anchor_read(_q(10.0, 10.0), code="600001")
     assert r["attitude"] == ac.ATT_YIZI
-    assert "买不到" in r["note"]
+    assert "不买" in r["note"]           # 2026-11-10 晚文案：一字＝不买，看跟风（不再说「买不到」）
 
 
 def test_anchor_yizi_20cm():
@@ -151,7 +151,7 @@ def test_anchor_gate_blocks_line_when_anchor_breaks():
     res = _pool_call({"600002": _q(10.0, 1.0), "600001": _q(10.0, -4.0)}, cores)
     v = res["views"]["600002"]
     assert v["view"] == "watch" and v.get("anchor_gate") is True
-    assert "锚点票" in v["reason"] and "先别碰" in v["reason"]
+    assert "锚点票" in v["reason"] and "放弃" in v["reason"]
     assert res["meta"]["defense"]["anchor"]["blocked"] == ["600002"]
 
 

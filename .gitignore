@@ -70,3 +70,6 @@ wealth_code/cache/*.jsonl
 
 # ===== npx 隔离缓存（2026-11-09：~/.npm 权限损坏后的项目内替代，5MB 可随时删） =====
 .npm-cache/
+
+# ===== 同步清单（manifest.py 每 30s 重写的运行时产物，勿入库）=====
+dist/migrate/*.txt

@@ -1023,7 +1023,20 @@ def main():
     else:
         sg_msg = "snapshot_guard=skip(开关关闭)"
 
-    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {arch_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {gg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | {th_msg} | {ld_msg} | {technical_msg} | {sg_msg} | pruned={removed}")
+    # 15) 🐲 龙头基因沉淀池（2026-11-10 用户「挂在盘后复盘」·不新建定时任务）。
+    #     依赖第 2 步刚写好的 zt_history；`dragon_gene.py` 自身会跳过盘中不完整归档，
+    #     所以盘中重跑本脚本也不会凭空判断板。⛔ 失败只降级，不阻断复盘主流程。
+    try:
+        import subprocess as _sp2
+        _dg = _sp2.run([sys.executable, str(Path(__file__).resolve().parent / "dragon_gene.py")],
+                       capture_output=True, text=True, timeout=120)
+        _dgl = [x for x in (_dg.stdout or "").splitlines() if "入池" in x]
+        dg_msg = (_dgl[0].strip()[:80] if _dg.returncode == 0 and _dgl
+                  else f"ERR:rc={_dg.returncode} {(_dg.stderr or '').strip()[:80]}")
+    except Exception as e:
+        dg_msg = f"dragon_gene ERR:{e}"
+
+    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {arch_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {gg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | {th_msg} | {ld_msg} | {technical_msg} | {sg_msg} | {dg_msg} | pruned={removed}")
 
 
 if __name__ == "__main__":

@@ -725,6 +725,10 @@ def run_verify(
                     #    ⛔ 必须用 `theme_open_rows` 而非 `zt_rows`：后者还负责「市场最高板」
                     #       兜底，传进去会改身位闸参照系，并让测试吃到生产文件（11-04 实测 3 例红）。
                     theme_open_rows=full_zt_rows,
+                    # 🌊 题材动量（变化）：家数环比 / 位置 / 连续天数。
+                    #    读 `cache/theme_momentum/<买入日>.json`（由 build_theme_momentum 预生成，
+                    #    内容严格早于买入日）。⛔ 只写 views[code].theme_momentum，不改裁决。
+                    theme_momentum=pool_call.load_theme_momentum(trade_date10),
                     # 🎯 11-05 竞价三态分母 = 昨日全天成交额（昨收归档 cje_yi，
                     #    09:25 前已存在）。复用上面已冻结的 full_zt_rows，不额外抓行情。
                     prev_amounts=_ast.prev_amounts_from_rows(full_zt_rows),

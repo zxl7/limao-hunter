@@ -26,6 +26,8 @@
 """
 from __future__ import annotations
 
+import os
+
 from typing import Any
 
 # ── 节点档（涨停时间）————————————————————————————————————————————
@@ -327,14 +329,78 @@ ATT_WEAK = "weak"            # 低开 -1%~0
 ATT_BREAK = "break"          # 低开超 1% 或低于预期 → 破预期
 ATT_UNKNOWN = "unknown"
 
+# ⭐ 2026-11-10 口径统一（用户「先 A 再 B，直接按新策略执行，全局文案同步统一」）：
+#    态度判定从**绝对开幅**改为 **DEV = 实际开幅 − 该票自己的质量预期**，
+#    与 `ai_caliber.gap_zone`（09:25 唯一准入判据）**同一套口径**。
+#
+#    ⛔ 为什么必须改：11-10 东方创业(600278) 预期 −0.17%、实际 −0.89%、DEV −0.72
+#       → 池内裁决判 `ok` 并买入，但风向标按「gap < 0 就叫弱」写成「低开转弱 → 别碰」，
+#       同一张卡自相矛盾。
+#    🔬 35 日实测：62 笔买入里 23 笔低开，其中「自己就是这条线锚点且低开」13 笔
+#       **9 赚 4 亏、均值 +3.17%**，好于全样本 +1.73% ⇒ 旧那句「别碰」本身是错的。
+ATT_DEEP_LOW = "deep_low"    # 深低开·错杀档（DEV ≤ 深低开线，与 gap_zone 豁免同源）
+ATT_LOW = "low"              # 低于自身预期但没砸穿（破预期线 ≤ DEV < 0）→ 可打
+
+# ⭐ 2026-11-10 晚 用户定稿文案（两轮口述，逐字落地）：
+#    「高于预期就是**超预期，观察接力**；低开错杀＝**错杀，可低吸**；
+#      一字＝**一字不买，看跟风**；略低于预期＝**观察下杀力度，低吸**；
+#      符合预期，就是符合预期；未达预期，放弃。」
+#
+#    落地方式：**状态（label）+ 动作（action）各一段**——
+#      · `ATT_LABEL` 只答「开成什么样」，⛔ 不含结论；
+#      · `ATT_ACTION` 只答「怎么办」，⛔ 不重复状态。
+#    卡面拼成「状态 开幅 → 动作」，例如「错杀 −6.20% → 可低吸」。
+#    ⛔ 两段都由本文件单一源给，卡面/闸/回放一律引用 —— 11-10 早上
+#       「卡面说别碰、裁决却买」就是两处各写一套文案造成的。
+#
+#    ⛔ **动作必须等于系统真实行为**（用户 11-10 19:36「只想要文案和行为一致」）：
+#       写「放弃」的档，⑥b 就必须真拦（目前只有 `break` 拦）；写「可低吸/观察接力/看量能」
+#       的档，就真的放行交给后面的闸。⛔ 不许出现「卡面说放弃、系统照买」。
 ATT_LABEL = {
-    ATT_YIZI: "一字顶板", ATT_BIG_GAP: "大高开·压仓", ATT_STRONG: "强开可打",
-    ATT_FLAT: "平开待确认", ATT_WEAK: "低开转弱", ATT_BREAK: "破预期",
-    ATT_UNKNOWN: "未拿到报价",
+    ATT_YIZI: "一字", ATT_BIG_GAP: "大高开", ATT_STRONG: "超预期",
+    ATT_FLAT: "符合预期", ATT_LOW: "略低于预期", ATT_DEEP_LOW: "错杀",
+    # ⚠️ `weak` = 拿不到该票预期（无 DEV 可比），只是「低开 + 缺基准」，⛔ 不叫「低于预期」
+    ATT_WEAK: "低开·无预期", ATT_BREAK: "未达预期", ATT_UNKNOWN: "未拿到报价",
 }
+# 动作＝「这条线今天怎么办」。空串表示**不给额外动作**（符合预期就是符合预期）。
+# ⛔ 每一个"放弃"都必须能在 `pool_call` ⑥b 找到对应的硬拦，否则就是文案撒谎。
+ATT_ACTION = {
+    ATT_YIZI: "不买，看跟风", ATT_BIG_GAP: "压仓位", ATT_STRONG: "观察接力",
+    ATT_FLAT: "", ATT_LOW: "观察下杀力度，低吸", ATT_DEEP_LOW: "可低吸",
+    # ⚠️ weak 判据**不拦**（缺数据不裁决，只留痕 `anchor_weak_no_expect`）
+    #    ⇒ 动作只能写「看量能」（交给量能/身位/名额），⛔ 不能写「放弃」。
+    ATT_WEAK: "看量能", ATT_BREAK: "放弃", ATT_UNKNOWN: "",
+}
+# 动作里出现这几个词 = 系统必须否决这条线。`test_anchor_copy_consistency` 会扫。
+ACTION_REJECT = "放弃"
+
+
+def attitude_action(att: Any) -> str:
+    """态度 → 动作（卡面/闸/回放共用的**唯一**文案源）。未知档返回空串。"""
+    return ATT_ACTION.get(str(att or ""), "")
+
+
+def attitude_label(att: Any, default: str = "") -> str:
+    """态度 → 状态词。⛔ 不读冻结件里的旧 label —— 旧存档存的是当时的文案
+    （「深低开错杀」「一字顶板」），照读会让卡面出现两代文案混排。"""
+    return ATT_LABEL.get(str(att or ""), default)
+
+
+def attitude_text(att: Any) -> str:
+    """态度 → 「状态·动作」一行字（无动作时只给状态）。日志/回放用。"""
+    a = str(att or "")
+    label = ATT_LABEL.get(a, "")
+    act = ATT_ACTION.get(a, "")
+    return f"{label}·{act}" if (label and act) else (label or act)
 # 态度对「这条线今天能不能打」的结论权重（只用于排序/解释，不直接下单）
-_ATT_RANK = {ATT_STRONG: 4, ATT_YIZI: 3, ATT_BIG_GAP: 3, ATT_FLAT: 2, ATT_WEAK: 1,
-             ATT_BREAK: 0, ATT_UNKNOWN: 2}
+# ⚠️ `ATT_DEEP_LOW` 排到 3：它是 v1.1 最赚钱的一档（深低开豁免），⛔ 不是「弱」。
+_ATT_RANK = {ATT_STRONG: 4, ATT_DEEP_LOW: 3, ATT_YIZI: 3, ATT_BIG_GAP: 3, ATT_FLAT: 2,
+             ATT_LOW: 2, ATT_WEAK: 1, ATT_BREAK: 0, ATT_UNKNOWN: 2}
+
+# ⭐ 2026-11-10 口径开关：态度是否按 DEV（相对自身预期）判。
+#    `ANCHOR_ATTITUDE_DEV=0` → 逐字回到「绝对开幅」旧口径（gap<0 就叫弱）。
+#    ⚠️ 留它只为 A/B 与回滚，⛔ 不要长期关着——关着就是「卡面说别碰、裁决却买」那套。
+ANCHOR_ATTITUDE_DEV = os.environ.get("ANCHOR_ATTITUDE_DEV", "1") != "0"
 
 LIMIT_PCT_MAIN = 10.0
 LIMIT_PCT_20CM = 20.0
@@ -347,8 +413,62 @@ def is_20cm(code: Any) -> bool:
     return c.startswith(("300", "301", "302", "688", "689", "8", "4"))
 
 
+
+def dev_lines() -> tuple[float, float]:
+    """(破预期线, 深低开线) —— ⛔ 单一源，不在本文件硬编码。
+
+    破预期线取 `ai_caliber.EXPECTED_GAP_DEV_MIN`（gap_zone 同一个常量，环境变量可调）；
+    深低开线取 `pool_call.POOL_CALL_DEEP_LOW_DEV`，且豁免开关关掉时**没有这一档**。
+    """
+    brk, deep = -2.0, -2.0
+    try:
+        from core import ai_caliber as _ac
+        brk = float(_ac.EXPECTED_GAP_DEV_MIN)
+    except Exception:                                    # noqa: BLE001
+        pass
+    deep = brk
+    try:
+        from core import pool_call as _pc
+        if getattr(_pc, "POOL_CALL_DEEP_LOW_RESCUE", True):
+            # ⚠️ 常量名是 `DEEP_LOW_OPEN_DEV`（不是 POOL_CALL_DEEP_LOW_DEV，那是环境变量名）
+            deep = float(getattr(_pc, "DEEP_LOW_OPEN_DEV", brk))
+    except Exception:                                    # noqa: BLE001
+        pass
+    return brk, deep
+
+
+def _attitude_by_dev(gap: float, expected_gap: float) -> dict[str, Any]:
+    """按 **DEV = 实际开幅 − 该票自己的质量预期** 定态度（与 `gap_zone` 同阈值）。
+
+    ⛔ 这是 2026-11-10 起的**唯一**态度口径。绝对开幅只在「拿不到预期」时才兜底。
+    """
+    brk, deep = dev_lines()
+    dev = round(gap - expected_gap, 2)
+    base = {"gap": round(gap, 2), "dev": dev, "expected_gap": round(expected_gap, 2)}
+    if dev <= deep:
+        return {**base, "attitude": ATT_DEEP_LOW, "label": ATT_LABEL[ATT_DEEP_LOW],
+                "note": (f"开在 {gap:+.2f}%，比它该开的 {expected_gap:+.2f}% 低 {abs(dev):.2f}pct"
+                         f" —— 被砸下来的错杀档（≤{deep:g} 豁免线），可低吸")}
+    if dev < brk:
+        return {**base, "attitude": ATT_BREAK, "label": ATT_LABEL[ATT_BREAK],
+                "note": (f"开在 {gap:+.2f}%，明显低于它该开的 {expected_gap:+.2f}%"
+                         f"（DEV {dev:+.2f} < {brk:g}）→ 未达预期，这条线今天放弃")}
+    if dev < 0:
+        return {**base, "attitude": ATT_LOW, "label": ATT_LABEL[ATT_LOW],
+                "note": (f"开在 {gap:+.2f}%，略低于它该开的 {expected_gap:+.2f}%"
+                         f"（DEV {dev:+.2f}，在容忍带内）→ 先看下杀力度，缩量不破就低吸")}
+    if dev < 3.0:
+        return {**base, "attitude": ATT_FLAT, "label": ATT_LABEL[ATT_FLAT],
+                "note": (f"开在 {gap:+.2f}%，符合它该开的 {expected_gap:+.2f}%"
+                         f"（DEV {dev:+.2f}）")}
+    return {**base, "attitude": ATT_STRONG, "label": ATT_LABEL[ATT_STRONG],
+            "note": (f"开在 {gap:+.2f}%，高于它该开的 {expected_gap:+.2f}%"
+                     f"（DEV {dev:+.2f}）→ 超预期，观察它能不能带出接力")}
+
+
 def anchor_read(quote: dict[str, Any] | None, *, code: Any = None,
-                expected_range: Any = None) -> dict[str, Any]:
+                expected_range: Any = None,
+                expected_gap: Any = None) -> dict[str, Any]:
     """② 锚点态度：只看今天 09:25 怎么开，五档 + 一句原因。
 
     ⛔ 不预测后续、不看盘中。锚点是「态度」，不是「走势预判」。
@@ -366,24 +486,28 @@ def anchor_read(quote: dict[str, Any] | None, *, code: Any = None,
     # 一字：开在涨停价（留 0.15pct 容差防浮点）
     if gap >= limit - 0.15:
         return {"attitude": ATT_YIZI, "label": ATT_LABEL[ATT_YIZI], "gap": round(gap, 2),
-                "note": "直接一字顶板：态度最强，但今天买不到 → 只能看隔壁"}
+                "note": "直接一字顶板：今天不买，看它把跟风带到谁身上"}
+    # ⭐ 2026-11-10：有逐票质量预期 → 一律按 DEV 判（与 gap_zone 同一套阈值）。
+    _eg = _num(expected_gap)
+    if _eg is not None and ANCHOR_ATTITUDE_DEV:
+        return _attitude_by_dev(gap, _eg)
     if gap > BIG_GAP_PCT:
         # ⛔ 不再写「买不到」：5% 线 11-05 已废，买不到＝竞价封死（上面 ATT_YIZI 已挡）。
         return {"attitude": ATT_BIG_GAP, "label": ATT_LABEL[ATT_BIG_GAP], "gap": round(gap, 2),
                 "note": (f"高开 {gap:+.2f}%（超 {BIG_GAP_PCT:g}%）：这档仍可打，"
-                         f"只是按仓位权重下调 → 别打满")}
+                         f"只是压仓位 → 别打满")}
     if gap < BREAK_GAP_PCT:
         return {"attitude": ATT_BREAK, "label": ATT_LABEL[ATT_BREAK], "gap": round(gap, 2),
-                "note": f"低开 {gap:+.2f}%，破预期：这条线今天先别碰"}
+                "note": f"低开 {gap:+.2f}%，未达预期：这条线今天放弃"}
     if gap < 0:
         return {"attitude": ATT_WEAK, "label": ATT_LABEL[ATT_WEAK], "gap": round(gap, 2),
-                "note": f"低开 {gap:+.2f}%：态度转弱，等它回到红盘再说"}
+                "note": f"低开 {gap:+.2f}%，但拿不到它该开的水平可比 → 不裁决，交给量能/身位"}
     if gap >= 2.0:
         out = {"attitude": ATT_STRONG, "label": ATT_LABEL[ATT_STRONG], "gap": round(gap, 2),
-               "note": f"强开 {gap:+.2f}%：前排确认，可以挑核心接力"}
+               "note": f"强开 {gap:+.2f}%：超预期，观察接力"}
     else:
         out = {"attitude": ATT_FLAT, "label": ATT_LABEL[ATT_FLAT], "gap": round(gap, 2),
-               "note": f"平开 {gap:+.2f}%：态度不明，要看开盘后能不能拉起来"}
+               "note": f"平开 {gap:+.2f}%：符合预期"}
     # 盘后预期区间（若有）：低于下沿＝跌破预期，降一档
     exp = expected_range if isinstance(expected_range, (list, tuple)) and len(expected_range) == 2 else None
     if exp:
@@ -394,7 +518,7 @@ def anchor_read(quote: dict[str, Any] | None, *, code: Any = None,
         if lo is not None and gap < lo:
             out = {**out, "attitude": ATT_BREAK, "label": ATT_LABEL[ATT_BREAK],
                    "below_expected": True,
-                   "note": f"开在 {gap:+.2f}%，低于昨天的预期 {lo:g}% 起：这条线今天先别碰"}
+                   "note": f"开在 {gap:+.2f}%，低于昨天的预期 {lo:g}% 起：未达预期，这条线今天放弃"}
     return out
 
 
@@ -430,40 +554,46 @@ def line_verdict(attitude: str, *, is_anchor: bool) -> str:
 
 
 def market_verdict(attitudes: list[str]) -> dict[str, Any]:
-    """全局：把各线锚点态度汇总成「今天整体能不能出手」。
+    """全局：把各线锚点态度汇总成「今天整体什么氛围」。
 
     ⛔ 只用锚点计数，不用指数/情绪分——锚点就是市场自己的态度，指数是滞后的。
+    ⛔ **`note` 只陈述事实，`advice` 才是建议**：这一层目前**不进任何裁决**
+      （只在 `meta.defense.anchor.market` 留痕），写成「今天整体空仓」会变成
+      一句系统并不执行的承诺（2026-11-10 用户「文案和行为一致」）。
     规则：
-      · 破预期 ≥2 条线 → 今天整体空仓（多点同时崩＝情绪断点）
-      · 破预期 1 条 + 无强开 → 只允许做最强的 1 条线
-      · 强开 ≥1 条 → 正常，按线各自判断
+      · 未达预期 ≥2 条线 → 建议空仓（多点同时崩＝情绪断点）
+      · 未达预期 1 条 + 无超预期 → 建议只做最强那条线
+      · 有超预期 → 正常，按线各自判断
     """
     a = [x for x in (attitudes or []) if x]
     brk = sum(1 for x in a if x == ATT_BREAK)
     strong = sum(1 for x in a if x == ATT_STRONG)
     yizi = sum(1 for x in a if x == ATT_YIZI)
     if not a:
-        return {"level": "unknown", "note": "锚点报价没拿到，今天不主动出手",
+        return {"level": "unknown", "note": "锚点报价没拿到", "advice": "今天不主动出手",
                 "break": 0, "strong": 0, "yizi": 0}
     if brk >= 2:
-        return {"level": "off", "note": f"{brk} 条线的锚点同时破预期 → 今天整体空仓",
+        return {"level": "off", "note": f"{brk} 条线的锚点未达预期",
+                "advice": "情绪断点，建议整体空仓（逐线裁决，系统不强制）",
                 "break": brk, "strong": strong, "yizi": yizi}
     if brk == 1 and strong == 0:
-        return {"level": "single", "note": "有锚点破预期、也没有强开 → 最多只做最强的那一条线",
+        return {"level": "single", "note": "1 条锚点未达预期、没有超预期",
+                "advice": "建议只做最强的那一条线",
                 "break": brk, "strong": strong, "yizi": yizi}
-    return {"level": "normal", "note": f"{strong} 条线强开、{yizi} 条一字 → 按各线自己判断",
+    return {"level": "normal", "note": f"{strong} 条线超预期、{yizi} 条一字",
+            "advice": "按各线自己判断",
             "break": brk, "strong": strong, "yizi": yizi}
 
 
 # ── 失效条件（明确写死，供卡面/复盘引用）———————————————————————————
 
 FAILURE_RULES = (
-    "锚点低开破预期 → 整条线当日作废（不看第二个指标）",
+    "锚点低开未达预期 → 整条线当日作废（不看第二个指标）",
     "锚点一字/大高开，但线内没有第二只跟（孤军）→ 不买隔壁，空仓",
     "锚点大高开后炸板且 30 分钟内回不去 → 该线当日作废",
     "前排大高开、后排全线低开（分歧）→ 只做锚点本身（若买得到），不做接力",
     "大将军是尾盘才封的（13:30 后）→ 它的次日锚点可信度打折，不做核心",
     "接力标的容量不达标（成交额<5亿 / 封单/流通<0.5% / 换手>25%）→ 不接",
     "位置太高（30 日超额>50% 且断板 ≥3 日后重启）→ 二波反抽，不做",
-    "多条线锚点同时破预期 → 当日整体空仓（情绪断点）",
+    "多条线锚点同时未达预期 → 当日整体空仓（情绪断点）",
 )

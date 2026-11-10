@@ -114,7 +114,15 @@ def replay_day(date: str, days: list[str]) -> dict | None:
     #    取错会让名额凭空多出来，回放结果整体失真）。
     stance = (snap or {}).get("stance") or plan.get("stance")
 
-    kw = dict(plan=plan, stance=stance, market_open=market_open, relay_plan=relay_plan)
+    # 🌊 题材动量：按**买入日**读预生成快照（内容严格早于该日，无未来函数）。
+    #    缺失返回 {} → views 里 theme_momentum=None，不裁决。
+    try:
+        from core import pool_call as _pc
+        _mom = _pc.load_theme_momentum(date)
+    except Exception:                                  # noqa: BLE001
+        _mom = {}
+    kw = dict(plan=plan, stance=stance, market_open=market_open, relay_plan=relay_plan,
+              theme_momentum=_mom)
     return {"date": date, "cands": cands, "quotes": quotes, "kw": kw,
             "snap_meta": meta}
 

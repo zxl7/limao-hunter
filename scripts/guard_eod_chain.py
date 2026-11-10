@@ -165,6 +165,9 @@ DATED_JSON = (
 #    （原「30 小时内写过」已废弃：它同样放行盘中写入。）
 FRESH_FILES = (
     ("载体证伪", "carrier_state.json", None, "载体确认/证伪（盘后链后段 `carrier_track.py`）"),
+    # 🐲 2026-11-10：终端 /dragon-gene 数据源（capture_daily 末步派生）。
+    #    用 mtime 覆盖判据：它的 `data_as_of` 是**最后完整归档日**，不是运行日，⛔ 不能按 date==today 判。
+    ("龙头基因池", "dragon_gene.json", None, "终端「龙头基因」页（≥4板入池·断板两日判 A 杀）"),
 )
 
 # ── 产出 `generated_ts` 语义声明（2026-10-14 审计 P2-⑨）──────────────
@@ -182,6 +185,7 @@ TS_SEMANTICS = {
     "carrier_state.json": "collect",                    # carrier_track 写入时刻
     # 🐉 连板日台账：`generated_ts` = 脚本写入时刻（`board_leader_daily.build_for_date`）→ collect
     "board_leader_daily/leader_{}.json": "collect",
+    "dragon_gene.json": "collect",                    # capture_daily 第15步写入时刻
 }
 DEFAULT_SEMANTIC = "collect"
 

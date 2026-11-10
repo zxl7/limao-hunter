@@ -89,6 +89,9 @@ def _seed(cache: Path, *, at: datetime, with_latest: bool) -> None:
     # 🐉 2026-10-27 新增第 4 项受检产出（终端 /leader-daily 数据源）。
     # 内容写 "{}"（无 generated_ts）→ 只按 mtime 判，与 eruption 同形态。
     _touch(cache / "board_leader_daily" / f"leader_{TODAY}.json", at)
+    # 🐲 2026-11-10 新增第 5 项受检产出（终端 /dragon-gene 数据源，capture_daily 末步派生）。
+    # 同样只按 mtime 判（内容无 date，`data_as_of` 是最后完整归档日，⛔ 不能按 date==today 判）。
+    _touch(cache / "dragon_gene.json", at)
     if with_latest:
         p = cache / "theme_rotation.json"
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -105,14 +108,15 @@ def test_missing_of_all_green_when_eod(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 def test_missing_of_flags_intraday_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """事故复现：文件全在但都是盘中写的 → 必须 6 项全报。"""
+    """事故复现：文件全在但都是盘中写的 → 必须 7 项全报。"""
     monkeypatch.setattr(g, "CACHE", tmp_path)
     _seed(tmp_path, at=DAY, with_latest=True)
     miss = g._missing_of(TODAY, live=True)
     names = {m[0] for m in miss}
-    assert len(miss) == 6, f"应报 6 项盘中口径，实得 {miss}"
+    assert len(miss) == 7, f"应报 7 项盘中口径，实得 {miss}"
     assert names == {
         "题材爆发快照", "板块资金流", "情绪日快照", "连板日台账", "题材回流引擎", "载体证伪",
+        "龙头基因池",
     }
     assert all("盘中口径" in m[1] for m in miss)
 

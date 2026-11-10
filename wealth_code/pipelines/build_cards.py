@@ -47,6 +47,10 @@ from typing import Any
 # 卡面「买入 / 没买到」的判定必须与账户账本（core/ai_caliber.decide）同值，
 # 否则会出现「卡面说没买到、账本记买到」或反之的三方打架（09-14 闽东电力实证）。
 from core import ai_caliber as _ai_caliber  # noqa: E402
+# 锚点态度文案单一源（2026-11-10 晚）：状态/动作都从 `core.anchor_call` 取，⛔ 不再本地另写。
+from core import anchor_call as _anchor_call  # noqa: E402
+# 竞价预期语义单一源（2026-11-10 抽离）：中文文案只在 core/verdict 出现一次。
+from core import verdict as _vs  # noqa: E402
 # 情绪周期四阶段（2026-10-21 P1·`regime` 判「今天几度」，本模块判「走到哪了」）。
 from core import cycle_phase as _cycle_phase  # noqa: E402
 # 龙头身份认定（2026-10-21 P2）：卡面只借 `tag_text` 拿一个极短标签，不重算判定。
@@ -283,7 +287,7 @@ def _v_tag_for(r: dict, verdict: str) -> str:
       与「量能够不够买」不冲突，删了反而丢信息（长春一东 -3.30% 低于预期要留）。
     """
     v = str(verdict or "")
-    if _unify_mech() and not _mech_pass(r) and "符合预期" in v and "低于" not in v:
+    if _unify_mech() and not _mech_pass(r) and _vs.is_ok(v):
         return ""
     return v
 
@@ -754,14 +758,8 @@ def _gate_plain(raw) -> str:
 
 
 # 竞价信号状态 → 白话（2026-09-10 用户「不要推专业术语」：修 hit 行泄漏英文 `expected`）
-_STATUS_PLAIN = {
-    "expected": "符合预期",
-    "super": "超预期",
-    "weak": "低于预期",
-    "pending": "待观察",
-    "reject": "没达标",
-    "miss": "没达标",
-}
+# ⛔ 2026-11-10：文案不再在本文件定义，统一由 `core.verdict` 派生（改词只改那一处）。
+_STATUS_PLAIN = {k: _vs.label(v) for k, v in _vs.STATUS_MAP.items()}
 
 
 # 观察池分组 → 白话（仅显示层别名·数据键 watch_group 不动）
@@ -793,9 +791,10 @@ _DEFENSE_GATE_PLAIN = {
 
 
 def _status_plain(raw) -> str:
-    """signal_status 英文档位 → 中文白话；未收录原样返回（不吞数据）。"""
-    s = str(raw or "").strip()
-    return _STATUS_PLAIN.get(s, s)
+    """signal_status 英文档位 → 中文白话；未收录原样返回（不吞数据）。
+
+    ⛔ 文案单一源 = `core.verdict.STATUS_MAP/LABEL`；本函数只是薄包装。"""
+    return _vs.status_plain(raw)
 
 
 def _gap_strength_short(it: dict) -> str:
@@ -853,22 +852,22 @@ def _exp_verdict(r: dict, oc: dict) -> tuple[str, str]:
         #    不再抢在 zone 前把高开票标成「超预期」——强票高开本就是符合它自己的预期。
         if (not _ai_caliber.relative_mode() and super_min is not None
                 and gap >= float(super_min)):
-            verdict = "🔺超预期"
+            verdict = _vs.tag(_vs.Verdict.SUPER)
         elif _zone == "above":
-            verdict = "⛔竞价封死买不进" if _ai_caliber.relative_mode() else "🔺高于预期"
+            verdict = _vs.tag(_vs.Verdict.SEALED) if _ai_caliber.relative_mode() else _vs.tag(_vs.Verdict.ABOVE)
         elif _zone == "ok":
-            verdict = "✅符合预期"
+            verdict = _vs.tag(_vs.Verdict.OK)
         elif _zone == "unknown":
             verdict = ""
         else:
-            verdict = ("⚠️明显低于预期" if _ai_caliber.relative_mode()
-                       else "⚠️低于预期")
+            verdict = _vs.tag(_vs.Verdict.DEEP_BELOW if _ai_caliber.relative_mode()
+                              else _vs.Verdict.BELOW)
         # 炸板类（炸板回封/放量烂板/任何炸板）次日红开：超预期信号，但需辨真假高开。
         # 2026-08-18 修：仅当判为非「低于预期」才追加——微红近平开（如 +0.3%）根本谈不上
         # "高开"，不能辨真假（曾把 苏州天脉/贵研铂业 的"低于预期"错配成"·辨真假高开"）。
         form = (exp.get("seal_form") or "")
         zbc = int(exp.get("seal_zbc") or 0)
-        if (form in ("炸板回封", "放量烂板") or zbc >= 1) and gap > 0 and "低于预期" not in verdict:
+        if (form in ("炸板回封", "放量烂板") or zbc >= 1) and gap > 0 and not _vs.is_negative(verdict):
             verdict = verdict + "·辨真假高开"
     else:
         verdict = ""
@@ -885,7 +884,7 @@ def _verdict_tag(verdict: str, *, loud: bool = False) -> str:
     """
     if not verdict:
         return ""
-    if "低于预期" in verdict:
+    if _vs.is_negative(verdict):
         color = "neutral"
     else:
         color = C_BUY if loud else C_HINT
@@ -2288,6 +2287,11 @@ def _buy_indicator_lines(r: dict, oc: dict, v: dict) -> list[str]:
 
     # ── 板块：题材为主，行业/家数作补充 ──────────────────────────────────
     theme = str(r.get("core_theme") or r.get("theme_em_name") or r.get("theme_name") or "").strip()
+    # ⛔ 2026-11-10 用户「就 pass 掉这个玄学方案吧，只是记录一下」：
+    #    人工归因（东方系/羊年等）**只存档、不上卡、不进判据**。
+    #    记录在 `cache/manual_theme.json`，查：`python3 scripts/theme_manual.py --list`。
+    #    所以这里**不读** manual_theme —— 卡面题材名保持系统原值（哪怕它是行业兜底）。
+    #    真要改，先过 A/B；在那之前别在这里加 hook。
     logic = str(r.get("core_theme_logic") or "").strip()
     ind = str(r.get("industry_sector") or r.get("sector") or "").strip()
     mates = r.get("theme_mates_cnt")
@@ -3465,15 +3469,13 @@ def _beacon_block(pool_meta: dict | None) -> list[dict]:
     if not lines:
         return []
 
-    # 态度 → 一句话结论（⛔ 不解释为什么，只给「能不能碰」）
-    _verdict = {
-        "yizi": "只能看隔壁",
-        "strong": "可以挑核心",
-        "flat": "等它表态",
-        "weak": "别碰",
-        "break": "别碰",
-        "unknown": "没拿到报价",
-    }
+    # 态度 → 动作（⭐ 2026-11-10 晚 文案统一：动作**不再在本文件另写一份**，
+    #   一律取 `core.anchor_call.ATT_ACTION` 单一源）。
+    #   ⛔ 为什么必须同源：11-10 早上「卡面说别碰、裁决却买」就是 anchor_call 一套、
+    #      本文件 `_verdict` 另一套，各写各的。文案再分家就会重演。
+    #   · 状态（超预期/错杀/一字…）由 `label` 给；
+    #   · 动作（观察接力/可低吸/不买，看跟风…）由 `attitude_action` 给；
+    #   · `flat`（符合预期）动作是空串 → 只显示状态，⛔ 不硬凑一句（用户「就是符合预期」）。
     out: list[dict] = [_div("**🧭 风向标**")]
     rows = []
     for fam, v in lines.items():
@@ -3486,16 +3488,25 @@ def _beacon_block(pool_meta: dict | None) -> list[dict]:
         if att == "unknown":
             continue                              # 没拿到报价 = 没有信息，不占版面
         gap = v.get("gap")
-        label = str(v.get("label") or "")
+        # ⛔ 状态/动作都从单一源取，**不读冻结件里存的 label**：旧存档是旧文案
+        #    （深低开错杀/一字顶板），照读会让卡面两代文案混排。
+        label = _anchor_call.attitude_label(att, str(v.get("label") or ""))
+        act = _anchor_call.attitude_action(att) or str(v.get("action") or "")
         boards = v.get("boards")
         bd = f"{int(boards)}板" if isinstance(boards, (int, float)) and boards else ""
         gap_txt = f"{float(gap):+.2f}%" if isinstance(gap, (int, float)) else "—"
-        tail = _verdict.get(att) or label or "—"
         bnum = int(boards) if isinstance(boards, (int, float)) and boards else 0
-        rows.append((att, bnum, f"　{name}（{bd}·{fam}） {label} {gap_txt} → {tail}"))
+        line = f"　{name}（{bd}·{fam}） {label} {gap_txt}"
+        if act:
+            line += f" → {act}"
+        rows.append((att, bnum, line))
     # 排序：**高度优先**（4板/2板的线才是真风向标，1板新线排后）→ 同高度看态度。
+    # ⚠️ `_ATT_RANK` 里 `deep_low` 已排 3（可打），⛔ 别让它按旧 rank 掉到「弱」那堆。
     # 最多 5 条防长卡；没态度的（unknown）上面已剔除，不占版面。
-    _order = {"strong": 0, "yizi": 1, "flat": 2, "weak": 3, "break": 4}
+    # ⚠️ 必须覆盖所有档位：缺键会走默认 9 → 该档永远排最后（11-10 实测 `deep_low`
+    #    这种最赚钱的档差点被排到「破预期」后面）。
+    _order = {"strong": 0, "deep_low": 1, "yizi": 1, "big_gap": 2, "low": 2,
+              "flat": 3, "weak": 4, "break": 5}
     rows.sort(key=lambda x: (-x[1], _order.get(x[0], 9)))
     if not rows:
         return []
