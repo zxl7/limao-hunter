@@ -446,10 +446,12 @@ PUBLIC_ROUTES = {
     "/api/decision/zt-pool": {"dir": "cache/decision_log", "dirPattern": r"^\d{4}-\d{2}-\d{2}$", "file": "zt_pool.json", "mode": "latest", "cadence": "daily", "desc": "决策时点涨停池明细"},
     "/api/decision/manifest": {"dir": "cache/decision_log", "dirPattern": r"^\d{4}-\d{2}-\d{2}$", "file": "manifest.json", "mode": "latest", "cadence": "daily", "desc": "存档清单"},
     "/api/decision/pool-call": {"dir": "wealth_code/cache", "pattern": r"^pool_call-\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "limit": 3, "cadence": "daily", "desc": "09:25 池内裁决终态"},
+    "/api/decision/pool-ledger": {"dir": "cache/pool_ledger", "pattern": r"^\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "limit": 20, "cadence": "daily", "desc": "池内台账（收盘评估）"},
     # 「今天 48 只涨停为什么只剩这几只」—— 全量过筛逐票结论（pass/watch_only/reject + 理由链）
     "/api/decision/screen": {"dir": "cache/daily_screen", "pattern": r"^screen_\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "limit": 5, "cadence": "daily", "desc": "全量涨停逐票过筛结论"},
     # 竞价三环影子逐日留痕（scripts/sector_gap_daily_trace.py 产出 · 只读、不裁决）
     "/api/decision/sector-gap-trace": {"file": "cache/sector_gap_trace/daily_trace.json", "cadence": "daily", "desc": "竞价三环影子逐日留痕（影子标记 × T+1 结算对账 · 恒不改裁决）"},
+    "/api/research/backtest": {"file": "cache/research/backtest_summary.json", "cadence": "manual", "desc": "回测战绩（三口径研究快照，只读）"},
     # 15.3 AI 判断 / 净值
     "/api/ai/view": {"dir": "cache", "pattern": r"^ai_view_\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "limit": 20, "cadence": "daily", "desc": "AI 判断（参与/放弃/观察 + 理由）"},
     "/api/ai/decisions": {"file": "wealth_code/cache/ai_decisions.jsonl", "format": "jsonl", "cadence": "daily", "desc": "AI 判断台账"},
@@ -776,6 +778,14 @@ class Handler(BaseHTTPRequestHandler):
                 status, payload = data_query
                 self._send_json(status, redact_secrets(payload))
                 write_access(ts, ip, path, status, status == 200, token_present)
+                return
+
+            if path == '/api/decision/participation-quotes' and SHARE_PRIVATE:
+                from common.participation_quotes import participation_quotes
+                try:
+                    self._send_json(200, participation_quotes(DATA_ROOT))
+                except (OSError, ValueError, TypeError):
+                    self._send_json(503, {'error': 'data_unavailable', 'route': path})
                 return
 
             defn = PUBLIC_ROUTES.get(path)

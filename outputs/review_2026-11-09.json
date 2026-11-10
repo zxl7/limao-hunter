@@ -1,0 +1,757 @@
+{
+ "title": "📝 盘后复盘 11-09 | 涨停回到 54 只·3 板以上只剩 1 只",
+ "color": "red",
+ "elements": [
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📉 ① 情绪演变**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**定调**　宽度回来了，中间层是空的"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**情绪分**　<text_tag color='red'>▰▰▰▰▰▰▰</text_tag><text_tag color='neutral'>▱▱▱</text_tag>　**7.1 / 10 · 偏强**　昨 1.8 → 今 7.1"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**评分轨迹**　10.0 → 5.5 → 5.6 → 1.8 → **7.1**（11-02→11-09，11-03 无收盘档）　近 3 日均 4.8"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "昨天留的五个确认点，今天答对四个：上证收回五日线、跌停 15 降到 1、科技链止血（通信技术 -148.6 亿翻成 +72.6 亿）、5 板上了 6 板。没答对的那个是「光伏新首板 1 进 2」——进去的两只都叫「东方」。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📊 ② 真实情绪总览**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**上证** 3660.79 **+0.32%**　**深证** 11145.49 **-0.27%**　**创业板** 2458.56 **-0.27%**　**科创50** **+0.30%**\n**指数没怎么动，涨停多了一大截**——四指里两个跌，涨的只有上证和科创50。"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**涨停**\n54 只（昨 32）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**首板**\n45 只（83.3%）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**连板**\n9 只（昨 11）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**最高板**\n5 → 6"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**晋级率**\n28.1%（门槛 20.2%）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**连板晋级**\n1 / 11 = 9.1%"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**首板晋级**\n8 / 21 = 38.1%"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**炸板率**\n45%（44 只炸 / 98 只摸板）"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**核按钮**\n2 只（昨 10）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**大面**\n2 只（昨 19）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**跌停**\n1 只（昨 15）"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**板数断层**\n3 / 4 / 5 板全空"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**昨涨停今均**　**+4.16%**　拆开看是两件事：昨首板 21 只 **+6.13%**（中位 +8.30%，17 只收红），昨连板 11 只只有 **+0.41%**。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**广度**　涨 <text_tag color='red'>2119</text_tag> : 跌 <text_tag color='green'>2996</text_tag>　还是跌多　成交 **1.48 万亿**（昨 1.66，少 1752 亿，缩 10.6%）——涨停多了 22 只，钱少了。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**上证五日线**　3658.83，收盘高 **1.96 点**。11-06 刚丢的那条线，今天收回来了，但只高出不到 2 个点。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**亏钱方向**　跌停只有 <text_tag color='green'>凤凰航运</text_tag> 一只（涉嫌信披违规被立案，跟情绪无关）；昨天的 32 只涨停里，今天一只跌停都没有。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🧠 ③ AI 综合判断**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**盘面状态**　钱在，方向散，接力断\n**判断**　54 只涨停放在那儿，可只有 9 只是连板，而且这 9 只里 1 只 6 板、8 只 2 板——3 板、4 板、5 板一只都没有。\n一句话：**这不是接力起来，是把地板重新铺了一遍。**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**含金量 · 第一个数**　首板晋级 8/21 = **38.1%**，昨天只有 6.3%——昨天埋在低位的钱，今天集体回本了。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**含金量 · 第二个数**　连板晋级 1/11 = **9.1%**，昨天是 33.3%——高位这一层今天几乎全断，只剩闽发铝业一只。两层数字正好跟昨天对调。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**含金量 · 第三个数**　摸板 98 只、封住 54 只，**44 只没封住**。今天看着很热，实际有一半试过就掉下来了。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**含金量 · 第四个数**　成交缩了 1752 亿，涨停却从 32 涨到 54——钱没变多，是原来躺在电池链的钱搬过来了：电力设备 -42.8、储能 -38.2、锂电池 -34.5、新能源 -33.1 亿。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>风险 A</text_tag>　中间层真空。8 只 2 板下面没有一只 3 板接得上，明天这 8 只要是补不出 3 板，54 只还是一次性的。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>风险 B</text_tag>　44 只炸板。今天按住的都是 10 点前封的，越往后封的越虚——买在 54 只里的感觉，和 98 只摸过板的感觉，差得很远。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>风险 C</text_tag>　11 只靠名字涨停：带「东方」的 7 只、带「羊」字辈的 4 只（光洋、盛洋、澳洋、红太阳）。8 只 2 板里有 6 只属于这一类，只有龙江交通、润贝航科有产业由头。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>风险 D</text_tag>　涨停在扩、成交在缩、涨跌家数还是跌多——这是存量博弈的形态，不是新增资金进场的形态。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**是不是换了主线**　<text_tag color='orange'>没换</text_tag>　旧高度没死（上了 6 板），新起来的机器人 12 只全是首板、一个连板都没有，还撑不起一条新主线。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🔥 ⑤ 主线复盘**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='red'>⭐ 最强</text_tag>　**机器人 12 只**（全是首板·概念资金 +50.4 亿）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· **华培动力** 六维力传感器　｜　**日盈电子** 电子皮肤　｜　**晶华新材** 机器人触觉\n· **祥明智能** 20cm 关节模组　｜　**锋龙股份** 优必选入主　｜　**胜通能源** 七腾机器人\n· **金固股份**、**金杯汽车**、**泰尔股份**、**飞亚达**、**光洋股份**、**世运电路** 等"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "⚠️ 12 只里 **0 只连板**，最高的就是首板；昨天这条线只有 5 只，今天翻到 12 只——扩散了，但还没长出高度。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='blue'>🔹 次强</text_tag>　**商业航天与卫星 10 只**（资金 +49.7 亿）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· **西部材料** 商业航天+核聚变　｜　**顺灏股份** 太空算力　｜　**腾达科技** 航天紧固件\n· **东方通信** 卫星互联网+商业航天　｜　**通则康威** 20cm 卫星通信\n· **苏州科达** 星载算力一体机　｜　**超声电子**、**雪人集团**、**飞亚达**、**祥明智能**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "⚠️ 这条线从 10-29 那波起来后一直没走出连板，润贝航科今天 2 板是唯一有高度的；板块里的大票（中国卫星）今天炸了 2 次，收 +4.55% 没封。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='blue'>🔹 第三</text_tag>　**冰雪与寒潮 7 只**（季节性，今天第一次成规模）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· **龙江交通** 2 板 冰雪旅游+黑龙江国资　｜　**冰山冷热** 冰雪工程+数据中心液冷\n· **龙建股份** 冰雪经济+寒区施工　｜　**雪人集团** 冰雪产业+氦气压缩机　｜　**晶雪节能** 20cm 冷库围护\n· **古麒绒材** 羽绒+寒潮　｜　**东方环宇** 寒潮供暖+天然气"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='blue'>🔹 第四个标签</text_tag>　**PCB 与元件 4 只**——**超声电子**（覆盖铜板+三季报增长·成交 15.27 亿）、**奥士康**、**世运电路**、**光洋股份**。这条线票不多，但钱最多：电子 +88.5、5G +84.4、通信技术 +72.6、光模块 +51.0、CPO +46.6 亿全在前排。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**支线**　煤炭 3（郑州煤电·云煤能源·安泰集团）｜传媒游戏 2（文投控股 AI 漫剧·大晟文化 短剧）｜零售 2（大东方·上海九百）｜中药 1（盘龙药业）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "⚠️ **今天真正的共同点不是产业**　同花顺给的 53 条涨停原因里，「东方」两个字出现 7 次、「羊」字辈 4 次，加起来 11 只——占全部涨停的两成。剩下能对得上产业的，是机器人、航天、冰雪这三条——同一只票常带两个标签，三条加总超过 54，实际各自成不了片。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**👑 ⑥.5 核心演化史**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**昨日核心 · 今日命运**"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**闽发铝业 5 板**\n→ 6 板 封 1.88 亿占 3.96%"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**浙文影业 5 板**\n→ 断板 +5.91% 换手 44.45%"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**永臻股份 4 板**\n→ 断板 -4.05%"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**鲁阳节能 4 板**\n→ 断板 -0.09%"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**春光科技 3 板**\n→ -0.89%"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**贝特利 3 板**\n→ -4.26% 换手 71%"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**新亚制程 3 板**\n→ +2.25%"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "**南侨食品 2 板**\n→ -6.46% 核按钮"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "昨天 11 只连板，今天只活下来 1 只。东方海洋 昨 2 板今天收 +10.08%，但**炸了 6 次、尾盘打开**，不算封住。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**今日核心**　**闽发铝业(002578) 6 板［光伏边框 · 工业金属］**　生命周期：加速末段，封单在变薄"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**走到哪步**　封单占流通从昨天的 **5.10% 降到 3.96%**，成交从 5.39 亿放到 7.07 亿，换手 14.94%，盘中还炸了 1 次——纪录是破了，但破纪录的钱是换手换来的，不是锁仓锁出来的。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**明日推演**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· **6 进 7 看封单**　它历史最长只有 4 板，现在站到 6 板，上面没有套牢盘可以参照，只能看封单占比能不能从 3.96% 重新变厚\n· **8 只 2 板里挑真货**　6 只是名字（5 只带「东方」+ 红太阳），只有龙江交通（冰雪）、润贝航科（航材）有产业由头\n· **接棒候选在首板**　机器人 12 只首板里最先上 2 板的，才是明天真正的新方向"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📊 ⑥ 轮动复盘**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· <text_tag color='red'>机器人 5 → 12</text_tag>　回到今天最大的一条线，但 12 只全是首板\n· <text_tag color='red'>商业航天重新有票又有钱</text_tag>　10 只带标签、资金 +49.7 亿，昨天这条线几乎没声音\n· <text_tag color='green'>短剧与 AI 影视 4 → 2</text_tag>　浙文影业 5 板断在 +5.91%，只剩文投控股、大晟文化两只首板"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· <text_tag color='green'>农业种植 3 → 0</text_tag>　万向德农 +9.04%、新赛股份 +8.30% 都差一口气没封住\n· <text_tag color='green'>电池整链 0 只</text_tag>　电力设备 -42.8、储能 -38.2、锂电池 -34.5、新能源 -33.1、电池 -26.8、固态电池 -25.2 亿，全线往外走\n· <text_tag color='red'>冰雪与寒潮 0 → 7</text_tag>、<text_tag color='red'>名字（东方 7 + 羊 4）0 → 11</text_tag>　两条全新出现的"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**切换日判定**　<text_tag color='orange'>不成立</text_tag>　旧高度没死（5 板上 6 板），新方向铺得很广却没一个有高度——这不叫换主线，叫找不到主线，于是同时买了很多条。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**💰 ⑦ 板块资金（收盘 · 亿）**"
+   }
+  },
+  {
+   "tag": "div",
+   "fields": [
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>电子 +88.5</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>电力设备 -42.8</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>5G概念 +84.4</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>储能概念 -38.2</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>通信技术 +72.6</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>锂电池 -34.5</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>光通信模块 +51.0</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>新能源 -33.1</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='red'>机器人概念 +50.4</text_tag>"
+     }
+    },
+    {
+     "is_short": true,
+     "text": {
+      "tag": "lark_md",
+      "content": "<text_tag color='green'>电池 -26.8</text_tag>"
+     }
+    }
+   ]
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**一句话**　进钱的地方（电子、5G、通信、光模块、机器人）里，只有机器人真的封出 12 只涨停；电子和通信钱最多，却只封出 4 只 PCB。**钱先到、票没跟上**，这是明天最该盯的错位。"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**📎 ⑨ 明日展望与延续观察**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**看点**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "① **6 板闽发的封单能不能变厚**　连续两天变薄（占流通 5.10% → 3.96%），成交从 5.39 亿放到 7.07 亿。它历史最长只有 4 板，这条线上没有参照物"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "② **8 只 2 板能不能补出 3 板**　今天 3、4、5 板全空。中间层补不出来，54 只就是一次性的；补出来才叫接力"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "③ **机器人 12 只首板明天出几只 2 板**　按今天 38.1% 的首板晋级率，正常在 5 只上下；少于 3 只说明这波也是一日游"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "④ **名字那 11 只过不过第二天**　没有产业由头，同花顺的原因栏直接写「东方」和「羊」字辈。这类东西的保质期通常只有一两天"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "⑤ **上证守 3658.83**　今天只高 1.96 点，是刚收回来的，站不稳就会再丢"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**明日确认点**　新方向能不能走出高度｜板块大票能不能连板｜老龙头反包还是续杀｜新龙头有没有资金接"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**股性参考**（近一年真实涨停次数 · 历史最长连板 · 晋级率 · 首板次日高开）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· **闽发铝业** 18 次·历史最长 4 板·晋级 35.3%·0.83%（今天第 6 板已在纪录之上）"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· **澳洋健康** 17 次·最长 4 板·31.2%·1.08%　｜　**上海九百** 13 次·最长 5 板·41.7%·0.79%"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· **超声电子** 16 次·最长 3 板·33.3%·2.69%　｜　**冰山冷热** 13 次·最长 6 板·33.3%·-0.07%"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· **大晟文化** 10 次·最长 3 板·66.7%·8.88%　｜　**东方嘉盛** 7 次·最长 5 板·50.0%·7.07%"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "· **光洋股份** 10 次·最长 4 板·44.4%·1.20%　｜　**云煤能源** 10 次·最长 3 板·22.2%·1.65%"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "<text_tag color='green'>风险</text_tag>　今天最贵的误会是「54 只涨停说明行情回来了」。同一批数里，3 板以上只有 1 只、44 只摸过板没封住、成交还缩了一成、涨的家数比跌的少 877 家。热闹的是家数，不是高度。"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**延续观察**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "① 机器人 12 只首板明天第一批 2 板在哪里出——这是今天唯一「有钱有票还有产业由头」的方向"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "② 电子与通信钱最多（+88.5 / +72.6 亿）却只封住 4 只 PCB，钱和票什么时候对上，科技硬件才算真回来"
+   }
+  },
+  {
+   "tag": "hr"
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "**🧘 心法**"
+   }
+  },
+  {
+   "tag": "div",
+   "text": {
+    "tag": "lark_md",
+    "content": "54 只涨停，3 板以上只有 1 只。市场今天买了很多东西，但一样也没买「明天」。"
+   }
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "📡 选股宝 + 东财 + 腾讯自选股 | 17:18 盘后 | AI 综合判断"
+    }
+   ]
+  },
+  {
+   "tag": "note",
+   "elements": [
+    {
+     "tag": "plain_text",
+     "content": "⚠️ 本报告基于公开信息分析，投资需谨慎"
+    }
+   ]
+  }
+ ]
+}

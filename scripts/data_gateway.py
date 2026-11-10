@@ -34,14 +34,32 @@ def main(argv: list[str] | None = None) -> int:
     profile = sub.add_parser("stock-profile", help="查询单票事实画像（跨源聚合·只读）")
     profile.add_argument("--code", required=True)
 
+    seal = sub.add_parser("auction-seal", help="竞价一字清单 + 方向线索（只读·仅解释）")
+    seal.add_argument("--date", help="交易日 YYYY-MM-DD，缺省今天")
+
+    watch = sub.add_parser("watch-paths", help="观察池竞价路径（弱转强事实·只读·仅解释）")
+    watch.add_argument("--date", help="交易日 YYYY-MM-DD，缺省今天")
+
+    scan = sub.add_parser("auction-scan",
+                          help="备选池竞价扫描（同一套逻辑逐票筛选·只读·仅观察）")
+    scan.add_argument("--date", help="交易日 YYYY-MM-DD，缺省今天")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "market-daily":
             payload = data_gateway.market_daily(args.code, args.limit)
         elif args.command == "stock-profile":
             payload = data_gateway.stock_profile(args.code)
-        else:
+        elif args.command == "auction-seal":
+            payload = data_gateway.auction_seal(args.date)
+        elif args.command == "watch-paths":
+            payload = data_gateway.watch_pool_paths(args.date)
+        elif args.command == "auction-scan":
+            payload = data_gateway.auction_scan(args.date)
+        elif args.command == "stock-registry":
             payload = data_gateway.stock_registry(args.code)
+        else:                                   # ⛔ 新增子命令必须显式接，不许落到 else
+            raise ValueError(f"未知子命令：{args.command}")
     except (ValueError, RuntimeError) as exc:
         print(json.dumps({"error": "invalid_request", "message": str(exc)}, ensure_ascii=False))
         return 2

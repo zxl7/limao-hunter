@@ -66,4 +66,19 @@ if [ "$hm" -ge 1545 ] && [ "$hm" -le 1600 ]; then
   fi
 fi
 
+# ③b 冷层·盘后补推（2026-11-09 新增）
+#    16:20 净值补档 / 17:18 复盘成文 / 18:20 卡片都写在 15:45 冷推**之后** →
+#    按原规则要等「次日 15:45」才上服务器（服务器上的"昨日复盘/净值"整整慢一天）。
+#    补一个 18:50-19:00 窗口：当日产物当日到。幂等标记独立，不干扰 15:45 的日闸。
+if [ "$hm" -ge 1850 ] && [ "$hm" -le 1900 ]; then
+  day="e$(date +%F)"
+  if [ "$(cat "$STATE_DIR/cold_evening" 2>/dev/null)" != "$day" ]; then
+    if TIER=2 "$MIG_DIR/sync_hot.sh" >>"$LOG" 2>&1; then
+      echo "$day" > "$STATE_DIR/cold_evening"
+    else
+      log_line "⚠️ T2 晚补失败"
+    fi
+  fi
+fi
+
 exit 0

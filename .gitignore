@@ -67,3 +67,6 @@ wealth_code/cache/*.jsonl
 *.log
 .pytest_tmp/
 .pytest_cache/
+
+# ===== npx 隔离缓存（2026-11-09：~/.npm 权限损坏后的项目内替代，5MB 可随时删） =====
+.npm-cache/

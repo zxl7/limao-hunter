@@ -1798,6 +1798,85 @@ def get_by_code(code: str, *, db_path: str | Path | None = None) -> Optional[dic
         conn.close()
 
 
+AUCTION_START = "09:15:00"
+AUCTION_END = "09:30:00"
+
+
+def load_auction_window(trade_date: str, *, db_path: str | Path | None = None,
+                        start: str = AUCTION_START, end: str = AUCTION_END
+                        ) -> dict[str, Any]:
+    """只读：取某交易日竞价时段的全市场观测序列 + 题材标签。
+
+    供 `core.auction_seal` 识别「竞价一字」。**只读连接（`mode=ro`）**：
+    不建表、不抢锁、不落盘。
+
+    ⛔ 缺失语义（三条，别混）：
+      ① 某票整段无观测 → 不在 `series` 里（**未观测**，不是"没涨停"）
+      ② 某票有观测但 `pct` 为空 → 该条被丢弃（未观测 ≠ 没下探）
+      ③ 中间没有记录 **不代表没采集**：`_insert_observation` 是
+         `INSERT OR IGNORE` + `dedup_hash`（同日同源同值只留一条），
+         所以「没有新记录」= **值没变过**。这是竞价一字判据的技术基础。
+
+    返回 `{date, start, end, rows, series, meta, plates}`：
+      · `series` `{code: [{ts, pct, price}]}` 按 ts 升序
+      · `meta`   `{code: {name, is_20cm, industry}}`
+      · `plates` `{code: [板块名...]}` —— **题材标签**（board 在 theme 之前）
+    """
+    date10 = _coerce_date10(trade_date)
+    if not date10:
+        raise ValueError(f"trade_date 无法解析: {trade_date!r}")
+
+    path = resolve_db_path(db_path)
+    if not Path(path).exists():
+        return {"date": date10, "start": start, "end": end, "rows": 0,
+                "series": {}, "meta": {}, "plates": {}}
+
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5.0)
+    try:
+        raw = conn.execute(
+            "SELECT code, asof_ts, "
+            "json_extract(payload, '$.pct') AS pct, "
+            "json_extract(payload, '$.price') AS price "
+            "FROM stock_observations "
+            "WHERE trade_date = ? AND substr(asof_ts, 12, 8) BETWEEN ? AND ? "
+            "ORDER BY code, asof_ts",
+            (date10, start, end),
+        ).fetchall()
+
+        series: dict[str, list[dict[str, Any]]] = {}
+        for code, ts, pct, price in raw:
+            if pct is None:
+                continue
+            series.setdefault(str(code), []).append(
+                {"ts": str(ts), "pct": pct, "price": price})
+
+        codes = list(series)
+        meta: dict[str, dict[str, Any]] = {}
+        plates: dict[str, list[str]] = {}
+        if codes:
+            marks = ",".join("?" * len(codes))
+            for code, name, is_20cm, industry in conn.execute(
+                    f"SELECT code, name, is_20cm, industry FROM stocks "
+                    f"WHERE code IN ({marks})", codes):
+                meta[str(code)] = {"name": name, "is_20cm": is_20cm,
+                                   "industry": industry}
+            # board 先于 theme：同一只票两者都有时，board 更贴「当前在炒什么」
+            for code, tag_type, tag_value in conn.execute(
+                    f"SELECT code, tag_type, tag_value FROM stock_tags "
+                    f"WHERE code IN ({marks}) AND tag_type IN ('board', 'theme') "
+                    f"ORDER BY CASE tag_type WHEN 'board' THEN 0 ELSE 1 END",
+                    codes):
+                bucket = plates.setdefault(str(code), [])
+                val = str(tag_value or "").strip()
+                if val and val not in bucket:
+                    bucket.append(val)
+    finally:
+        conn.close()
+
+    return {"date": date10, "start": start, "end": end, "rows": len(raw),
+            "series": series, "meta": meta, "plates": plates}
+
+
 def find_by_name(name: str, *, fuzzy: bool = False, limit: int = 20,
                  db_path: str | Path | None = None) -> list[dict[str, Any]]:
     """按名称检索（兜底手段）。歧义时返回多只——**不做猜测**。"""

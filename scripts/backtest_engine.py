@@ -119,8 +119,63 @@ def load_auction(d: str) -> dict:
         return {}
 
 
+def _structured_predict(p: Path) -> dict | None:
+    """读盘前数据里的 `sentiment_predict` **结构化字段**（2026-11-09 新增·最高优先）。
+
+    契约（写进 `cache/panqian_data_<MM-DD>.json`）：
+    ```json
+    "sentiment_predict": {"lo": 5.0, "mid": 5.5, "hi": 6.0, "basis": "一句话理由"}
+    ```
+    - `mid` **必填**，0 < mid ≤ 10；`lo`/`hi` 可选（缺则等于 mid）；`basis` 可选。
+    - 一旦有它，`sentiment_align` 就能算 —— 之前 8 期全 null 就是卡在「没有明日预判」这一半。
+
+    ⛔ 越界（0 / >10 / mid 不在 lo~hi 之间）一律**不采用**并留 `invalid_reason`：
+       宁可这一天算不出，也不能让一个 15/10 的分数进偏差曲线 —— 那会污染整条 R3/P1。
+    """
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:                                     # noqa: BLE001
+        return None
+    if not isinstance(obj, dict):
+        return None
+    sp = obj.get("sentiment_predict")
+    if not isinstance(sp, dict):
+        return None
+
+    def num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    mid = num(sp.get("mid"))
+    if mid is None:
+        return {"invalid_reason": "sentiment_predict 缺 mid（必填）"}
+    if not (0 < mid <= 10):
+        return {"invalid_reason": f"sentiment_predict.mid={mid} 越界（应 0<x≤10）"}
+    lo = num(sp.get("lo"))
+    hi = num(sp.get("hi"))
+    lo = mid if lo is None else lo
+    hi = mid if hi is None else hi
+    if not (0 <= lo <= mid <= hi <= 10):
+        return {"invalid_reason": f"sentiment_predict 区间不成立（lo={lo} mid={mid} hi={hi}）"}
+    return {
+        "predict_lo": lo, "predict_mid": round(mid, 2), "predict_hi": hi,
+        "parse_mode": "structured",
+        "basis": str(sp.get("basis") or "")[:200],
+    }
+
+
 def find_prediction_text(d: str) -> dict:
-    """从盘前卡/复盘卡 JSON 解析「预测情绪分」文本（尽力而为，解析不到返回空）。"""
+    """从盘前卡/复盘卡 JSON 取「预测情绪分」。
+
+    优先级（2026-11-09 调整）：
+      ① `panqian_data_*.json` 的 **`sentiment_predict` 结构化字段** —— 唯一可靠来源；
+      ② 文本正则「预判 7-8/10」「预测 5/10」—— 历史兜底，契约未落地时用；
+      ③ 「情绪 X/10」宽松识别 —— **只标记不采用**（实测全是昨日实际分，见下方注释）。
+
+    ⛔ 顺序不能倒：文本里那些「情绪X/10」多数在描述昨天，先正则会把回顾值当成预判值。
+    """
     result = {}
     d_compact = d.replace("-", "")
     d_short = d[5:]  # MM-DD
@@ -138,9 +193,18 @@ def find_prediction_text(d: str) -> dict:
             p = WC_CACHE / pat
         if not p.exists():
             continue
+        # ① 结构化字段（最优先）—— 命中即用，⛔ 不再看文本
+        sp = _structured_predict(p)
+        if sp and sp.get("predict_mid") is not None:
+            result.update(sp)
+            result["source"] = pat
+            break
+        if sp and sp.get("invalid_reason"):
+            # 字段写了但不合法：记下来，继续找下一个候选（不静默吞掉）
+            result.setdefault("invalid_structured", []).append(f"{pat}: {sp['invalid_reason']}")
         try:
             raw = p.read_text(encoding="utf-8")
-        except Exception:
+        except Exception:                                 # noqa: BLE001
             continue
         # ① 严格口径（优先）："预判 7-8/10" / "预测 5/10" / "预判 5~6/10"
         m = re.search(r"[预前][判测]\s*(\d+(?:\.\d+)?)\s*[~\-—至]\s*(\d+(?:\.\d+)?)\s*/\s*10", raw)
@@ -310,9 +374,20 @@ def backtest_sentiment_align(rec_date: str) -> dict:
     actual = actual_sentiment(rec_date)
     mid = pred.get("predict_mid")
     if mid is None:
-        reason = pred.get("reject_reason") or (
-            "盘前卡无「预判/预测 X/10」预测分（契约缺失，需落 sentiment_predict 结构化字段）"
-        )
+        # 2026-11-09：契约已定（`sentiment_predict`），缺的就是它。把「缺什么、什么格式」写进 reason，
+        # 让卡面能直接告诉读者怎么修，而不是一句「算不出来」。
+        # ⛔ 不拼接 `reject_reason`（那会把同一句话重复两遍）；改为把「识别到的回顾值」作为佐证附一句。
+        inv = pred.get("invalid_structured") or []
+        if inv:
+            reason = "盘前 `sentiment_predict` 已写但不可用：" + "；".join(inv[:2])
+        else:
+            reason = (
+                "盘前数据缺 `sentiment_predict` 结构化字段"
+                "（`{lo,mid,hi}`，mid＝**明日**预判情绪分，0<x≤10）"
+            )
+            loose = pred.get("rejected_loose_value")
+            if loose is not None:
+                reason += f"；正文里的「情绪{loose:g}/10」是**昨日实际分**（回顾语境），不能当预判"
         return {"available": False, "status": "contract_missing", "reason": reason,
                 "candidates_found": pred.get("rejected_loose_value")}
     if actual is None:

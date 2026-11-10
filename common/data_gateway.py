@@ -131,3 +131,97 @@ def stock_profile(code: Any) -> dict[str, Any]:
         return {"code": token, "found": False, "disabled": True,
                 "reason": "stock_profile 已关闭（ENABLE_STOCK_PROFILE=0）"}
     return {"code": token, "found": bool(view.get("found")), "profile": view}
+
+
+def auction_seal(trade_date: Any = None) -> dict[str, Any]:
+    """竞价一字清单 + 方向聚合（只做「看见」，⛔ 不参与任何裁决）。
+
+    与 `stock_profile` 同一条只读边界：不返回库路径、SQL、原始 payload。
+    `trade_date` 缺省为今天；非交易日/无观测 → `found=False`，⛔ 不编「无一字」。
+    """
+    from datetime import date as _date
+
+    from common import stock_registry as registry
+    from common.theme_base import is_attr_plate
+    # ⚠️ 优先 `core.*`：`pipeline_verify` 也是这么导入的。两条路径指向同一文件却是
+    #    **两个模块对象**，开关/常量不共享 —— 11-09 实测：monkeypatch `core.auction_seal`
+    #    对 `wealth_code.core.auction_seal` 无效，开关关了仍然出数据。
+    try:
+        from core import auction_seal as seals
+    except ImportError:
+        from wealth_code.core import auction_seal as seals
+
+    if not seals.ENABLE_AUCTION_SEAL:
+        return {"found": False, "disabled": True,
+                "reason": "竞价一字已关闭（ENABLE_AUCTION_SEAL=0）"}
+
+    date10 = registry._coerce_date10(trade_date or _date.today().isoformat())
+    if not date10:
+        raise ValueError("trade_date 必须为可解析的日期")
+
+    window = registry.load_auction_window(date10)
+    if not window["series"]:
+        return {"date": date10, "found": False, "reason": "当日竞价时段无观测",
+                "auction_seal": None}
+
+    result = seals.build_seals(
+        window["series"],
+        meta_by_code=window["meta"],
+        plates_by_code=window["plates"],
+        attr_filter=is_attr_plate,
+        limit_fn=seals.limit_up_pct,
+    )
+    result["date"] = date10
+    result["rows"] = window["rows"]
+    return {"date": date10, "found": bool(result["items"]), "auction_seal": result}
+
+
+def watch_pool_paths(trade_date: Any = None) -> dict[str, Any]:
+    """观察池竞价路径（弱转强事实）—— 只做「看见」，⛔ 不参与任何裁决。
+
+    数据源：`cache/watch_pool/<date>.jsonl` 的每轮心跳（首选），
+    心跳缺失时回落 `stock_observations`（⚠️ 后者按「值没变就不新写」去重，
+    所以 `pending` 判定会更保守，返回值里 `source` 会如实标注）。
+    """
+    from datetime import date as _date
+
+    from common import stock_registry as registry
+    from common import watch_pool
+
+    if not watch_pool.ENABLE_WATCH_POOL:
+        return {"found": False, "disabled": True,
+                "reason": "观察池快照已关闭（ENABLE_WATCH_POOL_SNAPSHOT=0）"}
+
+    date10 = registry._coerce_date10(trade_date or _date.today().isoformat())
+    if not date10:
+        raise ValueError("trade_date 必须为可解析的日期")
+
+    result = watch_pool.auction_paths(date=date10)
+    result["date"] = date10
+    return {"date": date10, "found": bool(result["items"]),
+            "watch_pool": result,
+            "pool": watch_pool.watch_codes(date=date10)}
+
+
+def auction_scan(trade_date: Any = None) -> dict[str, Any]:
+    """备选池竞价扫描（同一套逻辑逐票筛选·可比较）—— ⛔ 只观察，不参与裁决。
+
+    与 `watch_pool_paths` 同源同参数，多做三件事：每票 `grade` 档位、
+    每票 `basis` 判断依据、按固定口径 `rank` 排序并挑 `best`。
+    """
+    from datetime import date as _date
+
+    from common import stock_registry as registry
+    from common import watch_pool
+
+    if not watch_pool.ENABLE_WATCH_POOL:
+        return {"found": False, "disabled": True,
+                "reason": "观察池快照已关闭（ENABLE_WATCH_POOL_SNAPSHOT=0）"}
+
+    date10 = registry._coerce_date10(trade_date or _date.today().isoformat())
+    if not date10:
+        raise ValueError("trade_date 必须为可解析的日期")
+
+    result = watch_pool.scan(date=date10)
+    return {"date": date10, "found": bool(result.get("items")),
+            "auction_scan": result}

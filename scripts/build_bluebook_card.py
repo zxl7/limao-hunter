@@ -290,13 +290,19 @@ def already_pushed(card_date: str, batch: str) -> dict | None:
 
 
 def push(card_path: Path, card_date: str, batch: str, force: bool = False,
-         webhook: str | None = None) -> bool:
-    """推送到飞书，同日同批次幂等。返回 True=本次真的发出，False=已推过跳过。
+         webhook: str | None = None, dry_run: bool = False) -> bool:
+    """推送到飞书，同日同批次幂等。返回 True=本次真的发出，False=已推过/跳过（含 dry-run）。
 
     webhook=None 时交给 push_card 按交易日自动选群（任务用）；
     显式传 feishu_webhook_test 可只推测试群（调试用）。
+
+    ⚠️ 2026-11-09 改造：推送前先把卡片复制到「日期+批次」命名的临时路径再交给 push_card。
+    原因：push_card 的「日级发布闸」按文件名 stem 判卡身份，`bluebook_card_today.json`
+    身份恒定、跨天不变 → 次日起会被误判「今日已推」而拦死（11-09 新增该闸的叠加雷）。
+    改用 `bluebook_{date}_{batch}.json` 作推送身份，闸才按「每天一张」正确放行。
     """
     import hashlib
+    import shutil
     import subprocess
 
     digest = hashlib.sha1(card_path.read_bytes()).hexdigest()[:12]
@@ -310,12 +316,19 @@ def push(card_path: Path, card_date: str, batch: str, force: bool = False,
         )
         return False
 
-    cmd = [sys.executable, str(ROOT / "scripts/push_card.py"), str(card_path)]
+    dated = Path("/tmp") / f"bluebook_{card_date}_{batch}.json"
+    shutil.copyfile(card_path, dated)
+    cmd = [sys.executable, str(ROOT / "scripts/push_card.py"), str(dated)]
     if webhook:
         cmd += ["--webhook", webhook]
+    if dry_run:
+        cmd += ["--dry-run"]
     rc = subprocess.run(cmd, cwd=str(ROOT)).returncode
     if rc != 0:
         raise SystemExit(f"推送失败 rc={rc}")
+    if dry_run:
+        print(f"[push] dry-run：未真正发送（{card_date} {batch}），不写幂等台账")
+        return False
 
     PUSH_LEDGER.mkdir(parents=True, exist_ok=True)
     _ledger_path(card_date, batch).write_text(
@@ -343,6 +356,10 @@ def main() -> None:
     ap.add_argument("--refresh", action="store_true", help="配合 --fetch，强制重拉覆盖缓存")
     ap.add_argument("--pool", action="store_true", help="同时导出实操票池 institution_pool_<date>.json")
     ap.add_argument("--push", action="store_true", help="生成后直接推送（同日同批次幂等，只推一次）")
+    ap.add_argument("--push-only", action="store_true",
+                    help="跳过拉取/生成/票池，直接推送 --out 已存在的卡片（审阅优化后推送用）")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="配合推送：只走 lint + 选群校验，不真正发送、不写幂等台账")
     ap.add_argument("--force", action="store_true", help="配合 --push，强制重推（默认幂等跳过）")
     ap.add_argument("--webhook", default=None,
                     help="配合 --push：显式指定群（feishu_webhook_test / feishu_webhook_prod）；"
@@ -352,6 +369,15 @@ def main() -> None:
     card_date = args.date or date.today().isoformat()
     if not is_trading_day(card_date):
         raise SystemExit(f"{card_date} 非A股交易日，跳过（不生成卡、不写池）")
+
+    # ── 第③段专用：只推送已存在的卡（不再重新生成，保护第②段的优化结果）──
+    if args.push_only:
+        card_path = Path(args.out)
+        if not card_path.exists():
+            raise SystemExit(f"--push-only 但卡片不存在：{card_path}（先跑调研生成卡）")
+        push(card_path, card_date, args.batch,
+             force=args.force, webhook=args.webhook, dry_run=args.dry_run)
+        return
 
     cache_file = CACHE / f"{card_date.replace('-', '')}_{args.batch}.json"
     if args.fetch and (args.refresh or not cache_file.exists()):
@@ -369,7 +395,8 @@ def main() -> None:
         print(f"pool={ROOT / 'cache' / f'institution_pool_{card_date}.json'} {stats}")
 
     if args.push:
-        push(Path(args.out), card_date, args.batch, force=args.force, webhook=args.webhook)
+        push(Path(args.out), card_date, args.batch,
+             force=args.force, webhook=args.webhook, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

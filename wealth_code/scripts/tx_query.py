@@ -30,7 +30,7 @@ from typing import Any
 _ROOT = Path(__file__).resolve().parents[2]      # 狸猫猎手/
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
-from common.npx_path import find_npx  # noqa: E402
+from common.npx_path import find_npx, npx_env  # noqa: E402
 
 NPX = find_npx()
 PKG = "westock-data-skillhub@1.0.5"
@@ -51,8 +51,10 @@ def _run(args: list[str], timeout: int = 30) -> str | None:
         _warn(f"npx 不可用: {NPX!r}（检查 common/npx_path.find_npx）")
         return None
     try:
+        # ⛔ 带 npx_env()：用户 ~/.npm 权限损坏时裸调用会 EPERM 静默失效
         r = subprocess.run([NPX, "-y", PKG] + args,
-                           capture_output=True, text=True, timeout=timeout)
+                           capture_output=True, text=True, timeout=timeout,
+                           env=npx_env())
     except subprocess.TimeoutExpired:
         _warn(f"npx 超时 {timeout}s: {args[:2]}")
         return None

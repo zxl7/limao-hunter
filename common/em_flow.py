@@ -301,7 +301,7 @@ def fetch_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
     cached = _cache_get(key)
     if cached is not None:
         return cached
-    payload = _em_get(EM_SNAPSHOT_PATH, {"secids": secids, "fields": "f2,f3,f12,f14", "np": "1"})
+    payload = _em_get(EM_SNAPSHOT_PATH, {"secids": secids, "fields": "f2,f3,f12,f14,f124", "np": "1"})
     out: dict[str, dict[str, Any]] = {}
     if payload:
         for it in ((payload.get("data") or {}).get("diff") or []):
@@ -312,7 +312,8 @@ def fetch_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
                 continue
             out[code] = {"name": str(it.get("f14") or ""),
                          "price": _num(it.get("f2")),
-                         "pct": _num(it.get("f3"))}
+                         "pct": _num(it.get("f3")),
+                         "source_ts_iso": iso_bj_from_unix(it.get("f124"))}
     if out:
         _cache_put(key, out)
     return out

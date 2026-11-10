@@ -492,7 +492,7 @@ def _fetch_tx_selfchanged():
     import subprocess
     try:
         # ⛔ 禁止硬编码 node 版本路径（2026-09-12 事故）→ 统一 common/npx_path 运行时解析
-        from common.npx_path import find_npx
+        from common.npx_path import find_npx, npx_env
         _npx = find_npx()
         if not _npx:
             print("[intraday_pulse] npx 不可用（changedist 兜底跳过）")
@@ -500,6 +500,7 @@ def _fetch_tx_selfchanged():
         # launchd 的 PATH 可能没有 node；npx 的 shebang 通过 env 查找同目录 node。
         _env = os.environ.copy()
         _env["PATH"] = f"{Path(_npx).parent}{os.pathsep}{_env.get('PATH', '')}"
+        _env = npx_env(_env)   # ⛔ npm 缓存隔离（否则 ~/.npm EPERM → 静默失效）
         r = subprocess.run(
             [_npx, "-y", "westock-data-skillhub@1.0.5", "changedist"],
             capture_output=True, text=True, timeout=30, env=_env)
@@ -2339,6 +2340,30 @@ def _ingest_stock_registry(stocks, pre_stocks, rising, snapshot=None):
         print(f"  ⚠️ 个股底库更新失败(不影响主流程): {e}")
 
 
+def _snapshot_watch_pool():
+    """观察池行情快照（只采池内 15~30 只，⛔ 不扩全市场、⛔ 不参与裁决）。
+
+    非致命：任何异常只打印，不中断快照与推送。
+    """
+    try:
+        from common import watch_pool
+
+        if not watch_pool.ENABLE_WATCH_POOL:
+            return
+        res = watch_pool.snapshot()
+        if res.get("ok"):
+            print(f"  观察池快照: {res.get('quoted')}/{res.get('codes')} 只 "
+                  f"新增{res.get('written', 0)} 无变化{res.get('unchanged', 0)}"
+                  + (f" 陈旧{len(res['stale'])}" if res.get("stale") else "")
+                  + (f" 缺{len(res['missing'])}" if res.get("missing") else ""))
+        elif res.get("reason"):
+            print(f"  观察池快照跳过: {res['reason']}")
+        for err in (res.get("errors") or []):
+            print(f"  ⚠️ 观察池快照: {err}")
+    except Exception as e:  # noqa: BLE001 —— 快照失败不影响主链
+        print(f"  ⚠️ 观察池快照失败(不影响主流程): {e}")
+
+
 def run_mode(mode, dry_run=False, json_only=False):
     print(f"\n{'='*60}")
     print(f"  题材脉冲系统 v2 | {mode} | {'DRY-RUN' if dry_run else 'LIVE'}")
@@ -2456,6 +2481,12 @@ def run_mode(mode, dry_run=False, json_only=False):
     # 个股特征底库：命中即增量更新（未命中的票原样保留）
     # ⚠️ 非致命 —— 底库异常不得中断快照与推送；受 STOCK_REGISTRY_INTRADAY 开关控制
     _ingest_stock_registry(stocks, pre_stocks, rising, snapshot=summary)
+
+    # 观察池行情快照（2026-11-09 用户：「把观察池里面的所有票全部打上市场快照」）
+    # 为什么要单独一层：上面三个来源全是「往上走」的名单（异动/昨涨停/涨幅榜），
+    # 一只票竞价从跌停慢慢红开时，**跌的那一段它不在任何名单里** → 弱转强看不见。
+    # ⚠️ 只采观察池（pool_call ∪ candidates）约 15~30 只；⛔ 不写涨停闩锁、不参与裁决。
+    _snapshot_watch_pool()
 
     if dry_run or json_only:
         print("\n  --- JSON ONLY (no push) ---")

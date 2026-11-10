@@ -2401,7 +2401,8 @@ def _buy_indicator_lines(r: dict, oc: dict, v: dict) -> list[str]:
 
 
 def _ai_plan_block(raw: dict, records: list[dict],
-                   pool_summary: dict | None = None) -> list[dict]:
+                   pool_summary: dict | None = None,
+                   ice_ban: bool = False) -> list[dict]:
     """🤖 今日买入（**9:25 竞价落地后定**）＋ AI 独立成绩。
 
     ⏱️ 两个时点（2026-09-21 用户「接力池＝提前缩范围，不是提前拍板」）：
@@ -2443,7 +2444,9 @@ def _ai_plan_block(raw: dict, records: list[dict],
             _q = (pool_summary or {}).get("quota")
         _n = (pool_summary or {}).get("pool_size")
         blocks.append(_div(
-            "**🤖 今日买入**<font color='grey'>（9:25 竞价开出来后定的；昨天只出预案）</font>"))
+            "**🤖 今日买入**<font color='grey'>（9:25 竞价开出来后定的；昨天只出预案）</font>"
+            if not ice_ban else
+            "**🤖 今日命中**<font color='grey'>（今日冰点·一律禁买，只记录不进场）</font>"))
         head = []
         if stance_label:
             head.append(f"昨日预案：{stance_label}")
@@ -2461,7 +2464,11 @@ def _ai_plan_block(raw: dict, records: list[dict],
             _slot_h = (pool_summary or {}).get("slot_policy") or {}
             _even_n_h = _slot_h.get("allocation_count")
             _even_cap_h = _slot_h.get("even_cap")
-            if (_slot_h.get("unlimited_slots") and isinstance(_even_n_h, int)
+            if ice_ban:
+                # 冰点：⛔ 不写「买几只」——它和卡头「不买·空仓」直接对撞（2026-11-09 的事故）
+                blocks.append(_div(
+                    f"　　<font color='grey'>今天池内 {int(_n)} 只，今日冰点·全部不进场</font>"))
+            elif (_slot_h.get("unlimited_slots") and isinstance(_even_n_h, int)
                     and isinstance(_even_cap_h, (int, float)) and _even_cap_h > 0):
                 blocks.append(_div(
                     f"　　<font color='grey'>今天池内 {int(_n)} 只，竞价定下买 "
@@ -2530,9 +2537,13 @@ def _ai_plan_block(raw: dict, records: list[dict],
         _no_tag = ("<text_tag color='{C_HINT}'>没买到</text_tag>（竞价封死买不进）"
                    if _rel else
                    f"<text_tag color='{C_HINT}'>没买到</text_tag>（高开超{limit:g}%）")
-        _ok_tag = ("<text_tag color='{C_BUY}'>AI 买入</text_tag>（符合逐票预期）"
-                   if _rel else
-                   f"<text_tag color='{C_BUY}'>AI 买入</text_tag>（高开{limit:g}%以内）")
+        # ⛔ 冰点日：同一只票在卡上只能有一个结论——「命中·禁买」，⛔ 不许再出现「AI 买入」
+        #    （2026-11-09：标题写空仓、这一行写 AI 买入，用户直接问「这是谁推的」）
+        _ok_tag = ("<text_tag color='red'>命中·禁买</text_tag>（今日冰点一律不进场）"
+                   if ice_ban else
+                   ("<text_tag color='{C_BUY}'>AI 买入</text_tag>（符合逐票预期）"
+                    if _rel else
+                    f"<text_tag color='{C_BUY}'>AI 买入</text_tag>（高开{limit:g}%以内）"))
         v = views.get(code) or {}
         # 🎨 2026-10-21 用户「主要把要买的这个推得花哨一点，指标打满」：
         #    买入票是全卡唯一用**红底**的票名（`C_BUY`），其余一律降权。
@@ -3493,9 +3504,170 @@ def _beacon_block(pool_meta: dict | None) -> list[dict]:
     return out
 
 
+def _auction_seal_block(seal: dict | None) -> list[dict]:
+    """🧲 竞价一字 → 方向线索（2026-11-09 用户「先看见」）。
+
+    用户原话：「竞价的时候如果有一字涨停，需要留意他的炒作方向，
+              比如今天的西部材料带动商业航天逻辑！！」
+    拍板：「可以 没问题！！先看见」→ **只做解释层**。
+
+    ⛔ 不进名额、不进仓位、不改买入判定。一字板的隔壁票⛔ 不因此成为买入理由：
+       11-06 实测同题材龙头一字封死时，隔壁票 T+1 −1.49%、胜率 40.4%（虹吸不是外溢）。
+    ⛔ 取不到就写「未取到」，**不写「无一字」** —— 抓不到 ≠ 没有。
+    ⛔ 题材一律取标签（board/theme），⛔ 不读行业名：
+       002149 行业=小金属、题材=商业航天，读行业名会把方向整个丢掉。
+    """
+    if _hide_block("seal"):
+        return []
+    data = seal if isinstance(seal, dict) else {}
+    if not data:
+        return []
+
+    if not data.get("available"):
+        reason = str(data.get("reason") or "未取到").strip()
+        return [
+            _div("**🧲 竞价一字 → 方向**"),
+            _div(f"<font color='grey'>未取到竞价封板数据（{reason}）</font>"),
+        ]
+
+    items = [it for it in (data.get("items") or []) if isinstance(it, dict)]
+    states = data.get("states") if isinstance(data.get("states"), dict) else {}
+    themes = [t for t in (data.get("themes") or [])
+              if isinstance(t, dict) and t.get("theme")]
+
+    out: list[dict] = [_div("**🧲 竞价一字 → 方向**")]
+    if items:
+        head = "、".join(f"{t['theme']}{int(t.get('n') or 0)}只" for t in themes[:4])
+        out.append(_div(
+            f"竞价一字 <text_tag color='red'>{len(items)}</text_tag> 只"
+            + (f" → 方向：{head}" if head else "")
+        ))
+        for it in items[:6]:
+            pct = it.get("pct")
+            pct_txt = f"{float(pct):+.2f}%" if isinstance(pct, (int, float)) else "—"
+            th = str(it.get("theme") or "题材未标注")
+            out.append(_div(
+                f"　{it.get('name') or '—'}（{it.get('code') or '—'}）"
+                f"{pct_txt} → **{th}**"
+            ))
+        if len(items) > 6:
+            out.append(_div(f"<font color='grey'>　…另有 {len(items) - 6} 只</font>"))
+    elif (states.get("unconfirmed") or 0) > 0:
+        # ⏱️ 时序诚实：卡片可能生成在 09:25 之后、09:26 那份快照写入之前。
+        #    此时「没有 sealed」= **还没等到确认**，不是"市场没有一字"。
+        #    ⛔ 不许写「无一字」——抓不到 ≠ 没有。
+        out.append(_div(
+            f"<font color='grey'>{int(states.get('unconfirmed') or 0)} 只顶过板，"
+            f"但末条快照早于 09:25 → 一字尚未确认（不是没有）</font>"
+        ))
+    else:
+        out.append(_div("<font color='grey'>竞价没有顶到涨停的票</font>"))
+
+    tail: list[str] = []
+    wob = states.get("wobbled") or 0
+    unc = states.get("unconfirmed") or 0
+    if wob:
+        tail.append(f"顶板后撤单 {wob} 只已排除")
+    if unc and items:
+        tail.append(f"{unc} 只仅 09:20 前出现或未到确认时点")
+    tail.append("只做方向线索·不进名额不进仓位")
+    out.append(_div("<font color='grey'>" + "；".join(tail) + "</font>"))
+    return out
+
+
+def _watch_reversal_block(rev: dict | None) -> list[dict]:
+    """📉→📈 观察池竞价弱转强（2026-11-09 用户「弱转强写进竞价卡里面」）。
+
+    用户原话：「竞价的时候，昨天涨停，今天开盘竞价跌停，然后慢慢的居然红开了。
+              我靠，这种竞价弱转强，我也是非常想要买的呀」
+              「只关注我们当天收盘锁定的那些票」
+              「根据时间戳来更新，记录一次时间再记录一次时间，对比价格变化看趋势」
+
+    ⛔ 只做解释层：不进名额、不进仓位、不改买入判定。
+    ⛔ `pending`（末条早于 09:25）写成「终态未确认」，**不许写成「没有弱转强」**。
+    ⛔ `no_data` 写成「没抓到」，**不许写成「没反转」**——抓不到 ≠ 没有。
+    ⛔ 取不到数据时整段只留一行灰字说明，不静默消失（看不见比看见更危险）。
+    """
+    if _hide_block("reversal"):
+        return []
+    data = rev if isinstance(rev, dict) else {}
+    if not data:
+        return []
+
+    if not data.get("available"):
+        reason = str(data.get("reason") or "未取到").strip()
+        return [
+            _div("**📉→📈 竞价弱转强（观察池）**"),
+            _div(f"<font color='grey'>未取到观察池竞价路径（{reason}）</font>"),
+        ]
+
+    items = [it for it in (data.get("items") or []) if isinstance(it, dict)]
+    counts = data.get("counts") if isinstance(data.get("counts"), dict) else {}
+    rounds = data.get("rounds")
+    pool_n = data.get("pool_size") or len(items)
+    revs = [it for it in items if it.get("state") == "reversal"]
+    revs.sort(key=lambda x: -(x.get("span_pct") or 0))
+
+    out: list[dict] = [_div("**📉→📈 竞价弱转强（观察池）**")]
+
+    head = f"观察池 <text_tag color='grey'>{int(pool_n)}</text_tag> 只"
+    src = str(data.get("source") or "")
+    # ⚠️ `rounds` 在两套来源里含义不同：心跳=轮次；观测表兜底=**记录条数**（去重后
+    #    一只票可能只有 1 条）。⛔ 兜底时不许写「N 轮」——740 条记录不是 740 轮采样。
+    if src == "heartbeat" and isinstance(rounds, int) and rounds > 0:
+        head += f" · 竞价采样 {rounds} 轮"
+    elif src == "registry":
+        last = str(data.get("global_last_ts") or "")
+        head += f" · 观测表兜底{f'（最后采样 {last}）' if last else ''}"
+    out.append(_div(head))
+
+    if revs:
+        for it in revs[:4]:
+            first = it.get("first_pct")
+            low = it.get("low_pct")
+            last = it.get("last_pct")
+            span = it.get("span_pct")
+            def _p(v):
+                return f"{float(v):+.2f}%" if isinstance(v, (int, float)) else "—"
+            span_txt = f"{float(span):+.2f}pp" if isinstance(span, (int, float)) else "—"
+            # 三个时点摆出来 = 用户要的「记录一次再一次，对比看趋势」：
+            # 首笔（起点）→ 最低（砸到哪）→ 末条（爬回哪）。只给两端看不出过程。
+            out.append(_div(
+                f"　{it.get('name') or '—'}（{it.get('code') or '—'}）"
+                f"首 {_p(first)}（{it.get('first_ts') or '—'}）→ "
+                f"低 <text_tag color='green'>{_p(low)}</text_tag>"
+                f"（{it.get('low_ts') or '—'}）→ 末 "
+                f"<text_tag color='red'>{_p(last)}</text_tag>"
+                f"（{it.get('last_ts') or '—'}）· 拉升 {span_txt}"
+            ))
+        if len(revs) > 4:
+            out.append(_div(f"<font color='grey'>　…另有 {len(revs) - 4} 只</font>"))
+    else:
+        bits = ["观察池竞价没有「深水转红」"]
+        pend = int(counts.get("pending") or 0)
+        nod = int(counts.get("no_data") or 0)
+        if pend:
+            bits.append(f"{pend} 只终态未确认")
+        if nod:
+            bits.append(f"{nod} 只没抓到")
+        out.append(_div("<font color='grey'>" + "；".join(bits) + "</font>"))
+
+    tail: list[str] = []
+    pend = int(counts.get("pending") or 0)
+    nod = int(counts.get("no_data") or 0)
+    if revs and pend:
+        tail.append(f"{pend} 只终态未确认")
+    if revs and nod:
+        tail.append(f"{nod} 只没抓到")
+    tail.append("只描述竞价路径·不进名额不进仓位")
+    out.append(_div("<font color='grey'>" + "；".join(tail) + "</font>"))
+    return out
+
+
 def _relay_position_block(plan: dict | None, *, day_word: str = "今天",
                           title: str = "今日接力仓位建议（动态）",
-                          pool_meta: dict | None = None) -> list[dict] | None:
+                          pool_meta: dict | None = None,
+                          ice_ban: bool = False) -> list[dict] | None:
     """早盘接力·动态仓位建议块（2026-10-13 用户需求）。
 
     把 relay_position 的方案渲染成**大白话**块（过 card_lint 白话门禁）：行情强弱定调 +
@@ -3560,7 +3732,14 @@ def _relay_position_block(plan: dict | None, *, day_word: str = "今天",
     _single_ok = (single_pick and isinstance(single_cap, (int, float))
                   and float(single_cap) > 0)
 
-    if not can_buy:
+    if ice_ban:
+        # ⛔ 冰点日不许再喊「今天只买 N 只 · 每只 X%」——与卡头「不买·空仓」直接对撞
+        #    （2026-11-09 事故：同一张卡上「空仓」与「买1只50%」并存）。
+        _dd_ice = plan.get("drawdown_pct")
+        _dd_txt = f"（账户回撤 -{_dd_ice:.2f}% 的压仓乘数照常留痕）" if isinstance(_dd_ice, (int, float)) else ""
+        lines.append(f"🛡️ {day_word}冰点禁买 · 仓位归零{_dd_txt}")
+        lines.append("　　等情绪分走出冰点区再恢复名额（⛔ 竞价转强不翻多）")
+    elif not can_buy:
         # 防御分支：本系统（relay_position）2026-10-13 起**不再产生 can_buy=False**
         # （回撤改为动态压仓·不禁买）；此处仅为外部注入 plan 的兜底渲染。
         dd_v = plan.get("drawdown_pct")
@@ -3957,6 +4136,10 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
     records = (verify_result.get("payload") or {}).get("records") or []
     # feedback 10 分制情绪（规则层风险标记用·2026-08-16；pipeline_verify 已透传）
     fb_env = (verify_result.get("payload") or {}).get("environment")
+    # 🧲 竞价一字 → 方向线索（2026-11-09 用户「先看见」；⛔ 纯解释层）
+    _seal = (verify_result.get("payload") or {}).get("auction_seal")
+    # 📉→📈 观察池竞价弱转强（2026-11-09 用户「弱转强写进竞价卡里面」；⛔ 纯解释层）
+    _rev = (verify_result.get("payload") or {}).get("watch_reversal")
 
     # 🤖 AI 判断视图（2026-09-10 用户「AI 思考合并进竞价验证」·盘后写入次日卡展示）
     _ai_view = _load_ai_view(str(summary.get("trade_date10") or ""))
@@ -3968,8 +4151,17 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
     covered = summary.get("covered", 0)
     nav = summary.get("nav_latest")
     # 冰点 regime（2026-08-19 用户定）：命中照算·禁买不进场·卡片展示命中票
-    regime = str(((verify_result.get("payload") or {}).get("environment") or {}).get("regime") or "").strip()
-    ice_ban = regime == "ice"
+    # ⏱️ 2026-11-09 用户「我要买入的那一套逻辑，不要禁用的这一套逻辑」：
+    #    `regime` 可能是**上一交易日盘后**的标签（pipeline_verify 会带 `regime_trusted`
+    #    标明它是不是当日实时读数）。⛔ 不 trusted 的 ice 只当背景，不得渲染成禁买/空仓——
+    #    实测 2026-11-09：昨收 1.8 分 ice → 今晨 6.3 分修复，标题却仍写「不买·空仓」，
+    #    正文 AI 实判了买入，一卡两结论。缺字段（旧 payload）→ 维持旧行为（信任）。
+    _env = (verify_result.get("payload") or {}).get("environment") or {}
+    regime = str(_env.get("regime") or "").strip()
+    regime_trusted = bool(_env.get("regime_trusted", True))
+    ice_ban = bool(regime == "ice" and regime_trusted)
+    # 说明用：昨收冰点但当日已重判 → 给一行时点交代，⛔ 不改结论
+    ice_stale = bool(_env.get("regime_eod") == "ice" and not ice_ban)
 
     # ── 买入口径统一为 AI（2026-09-14 用户「我想统一为AI口径」→「全量以 AI 为唯一口径！」）──
     # AI 有判断 → 卡头/定调以 **AI 口径实际能成交的只数**（= 账本口径 = summary.buy_signals）为准，
@@ -3980,12 +4172,22 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
     ai_focus = _ai_focus_count(_ai_raw)
     caliber = str(summary.get("caliber") or "")
     ai_caliber = bool(AI_CALIBER_BUY_SIGNAL and (_ai_raw.get("views") or {}))
-    ai_filled = buys if (ai_caliber and caliber == "ai") else ai_focus
+    # 🎯 口径同源（2026-11-09）：标题的「买几只」**必须**与正文「🤖 今日买入」段同一个表达式。
+    #    踩过的坑：标题读账本 `buy_signals`（会被冰点闸门降级成 0），正文读
+    #    `record.open_check.ai_view == "participate"`（AI 原判，1 只）→ 同一张卡
+    #    标题写「空仓」、正文写「AI 买入阳光照明」，读者以为系统坏了。
+    _pool_has = bool((summary.get("pool_call") or {}).get("participate") is not None) or any(
+        _oc_of(r).get("pool_reason") for r in records)
+    _pool_buy_n = sum(1 for r in records if str(_oc_of(r).get("ai_view") or "") == "participate")
+    ai_filled = (_pool_buy_n if (ai_caliber and _pool_has)
+                 else (buys if (ai_caliber and caliber == "ai") else ai_focus))
     mech_buys = summary.get("mech_buy_signals")
     if mech_buys is None:
         mech_buys = buys if caliber == "" else None   # 旧 summary 回退；新链路缺字段则如实省略
 
-    if ice_ban and not (ai_caliber and ai_filled):
+    # ⛔ 冰点优先且**唯一**：当日实时冰点时，不管 AI 判了几只，卡头一律空仓（与正文的
+    #    「命中·禁买」段同结论）。非 trusted 的昨收冰点已在 ice_ban 处排除。
+    if ice_ban:
         tone = "市场很冷·不买·空仓"
     elif ai_caliber:
         tone = ("AI 空仓·观望" if ai_filled == 0 else
@@ -4057,10 +4259,40 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
         blocks.extend(_beacon)
         blocks.append(_hr())
 
+    # 🧲 竞价一字 → 方向线索（2026-11-09）：放在「买什么」之前——
+    #    先看今天哪条线在竞价就被点亮，再看自己那一只是不是在这条线上。
+    _seal_blocks = _auction_seal_block(_seal)
+    if _seal_blocks:
+        blocks.extend(_seal_blocks)
+        blocks.append(_hr())
+
+    # 📉→📈 观察池竞价弱转强（2026-11-09）：紧接一字之后——
+    #    一字答「今天哪条线被点亮」，弱转强答「我自己锁定的票里，谁在竞价被砸后爬回来」。
+    #    ⛔ 纯解释层，不进名额 / 仓位 / 买入判定。
+    _rev_blocks = _watch_reversal_block(_rev)
+    if _rev_blocks:
+        blocks.extend(_rev_blocks)
+        blocks.append(_hr())
+
     # 🤖 今日买入（2026-09-11 立项「竞价卡要告诉我今天买什么 + 统计 AI 自己的收益」；
     # 2026-09-21 时点改造：买哪只改在**今日 09:25 竞价落地后**由 `core/pool_call` 在池内判，
     # 昨日盘后只出「预案」（基调/方向/bias）——「接力池＝提前缩范围，不是提前拍板」。
-    blocks.extend(_ai_plan_block(_ai_raw, records, pool_summary=summary.get("pool_call")))
+    blocks.extend(_ai_plan_block(_ai_raw, records, pool_summary=summary.get("pool_call"),
+                                 ice_ban=ice_ban))
+
+    # ⏱️ 昨收冰点 · 今晨已重判（2026-11-09）：把两个时点摆出来，防读者把昨收的冰点
+    #    读成今天的结论。⛔ 只交代时点，不改任何结论。
+    if ice_stale:
+        _t_parts = []
+        if isinstance(_env.get("regime_eod_score"), (int, float)):
+            _t_parts.append(f"昨日收盘 {float(_env['regime_eod_score']):g} 分")
+        if isinstance(_env.get("regime_score"), (int, float)):
+            _t_parts.append(f"今晨 {float(_env['regime_score']):g} 分")
+        _t_lbl = str(_env.get("regime_label") or "")
+        if _t_parts:
+            blocks.append(_div(
+                f"<font color='grey'>⏱️ {' → '.join(_t_parts)}"
+                f"{('（' + _t_lbl + '）') if _t_lbl else ''}：昨日冰点已解除，今天按当日读数执行</font>"))
 
     # 👑 核心弱转强（昨日连板核心·今日竞价·2026-08-14 用户定·情绪核心战法）
     core_blocks = _core_reversal_block()
@@ -4416,7 +4648,8 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
         _rp_plan = _build_relay_plan(ROOT.parent, candidates=_cands, quotes=_quotes)
         # 🎯 2026-11-04：把 09:25 冻结的 pool_call meta 交给渲染层 —— 单票场景的单票上限、
         #    名额放宽到 2 的实际只数都取自这份**真实参与数**（⛔ 渲染层不自己猜名额）。
-        _rp_block = _relay_position_block(_rp_plan, pool_meta=(summary.get("pool_call") or None))
+        _rp_block = _relay_position_block(_rp_plan, pool_meta=(summary.get("pool_call") or None),
+                                          ice_ban=ice_ban)
         if _rp_block:
             blocks.append(_hr())
             blocks.extend(_rp_block)
@@ -4561,6 +4794,33 @@ def build_panqian_card(data: dict[str, Any]) -> dict:
     if _cyc:
         blocks.extend(_cyc)
     blocks.append(_hr())
+
+    # 🌡️ 今日预判情绪分（2026-11-09 新增）——「情绪对齐」回测的唯一数据源
+    #
+    # 为什么必须在卡面写出来：`backtest_engine.backtest_sentiment_align` 要用
+    # 「盘前预判情绪分 − 当日实际情绪分」，而过去 8 期全 null，卡在**根本没有预判分**。
+    # 卡片上原有的「情绪 X/10」描述的是**昨日实际**（如「退潮确认：情绪1.0/10」），
+    # 拿它当预判等于用昨天的实际减今天的实际，会凭空造出一条偏差曲线。
+    # 所以这里只认 `sentiment_predict` 结构化字段，⛔ 不从正文猜。
+    # ⛔ 不占模块编号（模块①~⑦ 是铁律），挂在定调之后作补充。
+    _sp = data.get("sentiment_predict") or {}
+    _sp_mid = _sp.get("mid") if isinstance(_sp, dict) else None
+    if isinstance(_sp_mid, (int, float)) and 0 < float(_sp_mid) <= 10:
+        _lo, _hi = _sp.get("lo"), _sp.get("hi")
+        _rng = ""
+        if isinstance(_lo, (int, float)) and isinstance(_hi, (int, float)) and float(_lo) != float(_hi):
+            _rng = f"（区间 {float(_lo):g}~{float(_hi):g}）"
+        _basis = str(_sp.get("basis") or "").strip()
+        _line = f"<text_tag color='neutral'>🌡️ 今日预判情绪 {float(_sp_mid):g}/10{_rng}</text_tag>"
+        if _basis:
+            _line += f"\n{_basis[:80]}"
+        blocks.append(_div(_line))
+        blocks.append(_hr())
+    else:
+        # ⛔ 不阻断推送（早上没卡比少一个指标严重得多），但要留痕：
+        #    当天回测的「情绪对齐」会记 contract_missing。
+        print("[panqian] ⚠️ 缺 sentiment_predict（今日预判情绪分）→ 回测『情绪对齐』本期不可算",
+              file=sys.stderr)
 
     # 模块② 外盘联动（2×2 网格 + 各题材独立块；个股数字纯文本减色；⛔ 题材内一行一票，禁 ｜ 连排）
     # ⛔ 外盘日期铁律（2026-08-19 事故）：最新可用收盘 = 美东(BJ-1天)·夏令时差12h；

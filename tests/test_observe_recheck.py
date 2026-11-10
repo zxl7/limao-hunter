@@ -45,6 +45,9 @@ def _new_rules(monkeypatch):
     monkeypatch.setattr(pc, "POOL_CALL_VOLUME_SOFT", False)
     monkeypatch.setattr(pc, "POOL_CALL_RECHECK_OBSERVE", True)
     monkeypatch.setattr(pc, "POOL_CALL_RECHECK_STATE_FULL", True)
+    # ⛔ 2026-11-10：本文件锁 11-03 两池契约的**回退口径**（观察池默认不可买）；
+    #    新默认「全池可交易」的回归锁见 tests/test_all_tradeable.py。
+    monkeypatch.setenv("POOL_CALL_ALL_TRADEABLE", "0")
 
 
 def _watch(code, *, kind="state", boards=2, need=1.0, **kw):

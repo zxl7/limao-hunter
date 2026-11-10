@@ -134,7 +134,8 @@ def annotate_eod(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if mode == "off":
             action, note = "neutral", "板块联动纪律已关闭"
         elif status == "linked":
-            action, note = "prefer", "同题材有涨停梯队"
+            # 白话门禁 Tier-2：「梯队」是圈内造词，读者看不懂；说「成批涨停」即可（2026-11-09）
+            action, note = "prefer", "同题材成批涨停"
         elif status == "standalone" and boards <= LOW_BOARD_MAX:
             action, note = "caution", "昨日同题材仅本股涨停，低板独立强势只观察"
         elif status == "standalone":
@@ -204,7 +205,7 @@ def apply_auction_gate(
             note = "昨日同题材仅本股涨停，今早没有可核验的同方向竞价助攻"
         action = "block"
     elif facts.get("eod_status") == "linked" and auction_status == "support":
-        action, note = "prefer", f"昨日有题材梯队，今早{red_open}家同方向红开"
+        action, note = "prefer", f"昨日成批涨停，今早{red_open}家同方向红开"
     elif facts.get("eod_status") == "unknown":
         action, note = "neutral", "题材联动数据不足，不作独立股裁决"
     else:

@@ -53,6 +53,30 @@ def npx_available() -> bool:
     return bool(find_npx())
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# npx 子进程环境（2026-11-09 新增 · 根治 npm 缓存权限事故）
+#
+# 事故：`~/.npm/_cacache` 变成 root 所有（历史上跑过一次 sudo npm），
+# 之后所有 `npx -y <pkg>` 都 `npm error code EPERM` → lhb_fetch / tx_query /
+# intraday_pulse 三个数据源**静默失效**，龙虎榜因此断更 41 天没人发现。
+#
+# 处置：一律把 npm 缓存指到**项目内**目录（不碰用户目录、不需要 sudo），
+# 需要换位置时用 `LIMAO_NPM_CACHE` 覆盖（服务器/迁移场景）。
+# ⛔ 任何调 npx 的地方都必须 `env=npx_env()`，否则会重新踩回这个坑。
+# ──────────────────────────────────────────────────────────────────────────
+_WORKSPACE_NPM_CACHE = Path(__file__).resolve().parents[1] / ".npm-cache"
+
+
+def npx_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """给 `subprocess.run(..., env=...)` 用的环境：隔离 npm 缓存 + 关掉交互噪音。"""
+    env = dict(os.environ if base is None else base)
+    env["npm_config_cache"] = os.environ.get("LIMAO_NPM_CACHE") or str(_WORKSPACE_NPM_CACHE)
+    env["npm_config_update_notifier"] = "false"
+    env["npm_config_fund"] = "false"
+    env["npm_config_audit"] = "false"
+    return env
+
+
 def describe() -> str:
     """诊断用：当前解析到的 npx 路径。"""
     p = find_npx()

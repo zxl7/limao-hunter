@@ -183,6 +183,33 @@ except Exception:
 # volume_trigger_step   # 2026-09-03 高频单通道停用（见 close_window_step 注释）
 echo "[$(date '+%H:%M:%S')] data→push→render done" >> "$LOG"
 
+# ── 龙虎榜自愈（2026-11-09 新增）──────────────────────────────────────────────
+# 背景：18:20 的「龙虎榜速览卡」automation 于 2026-09-29 20:59 被删除，而 tasks.yaml
+#      仍登记为 ACTIVE → 台账与 DB 漂移、零告警，数据断更 41 天；同期 ~/.npm 权限损坏
+#      使 npx 全程 EPERM（即使任务还在也拉不到数据）。
+# 方案：⛔ 不再依赖「单一 automation 会不会被删」—— 盘后 18:05 起，每个非交易时段 tick
+#      （10min）检查最近 3 个交易日，缺则补齐。失败 30 分钟内只告警一次，且绝不拖累主链路。
+# 回滚：设 LHB_SELF_HEAL=0 或注释本段。
+lhb_self_heal() {
+  [[ "${LHB_SELF_HEAL:-1}" == "0" ]] && return 0
+  local hhmm wd nowts last_warn gap
+  hhmm=$(date '+%H%M'); wd=$(date '+%u')
+  (( 10#$hhmm < 1805 )) && return 0      # 披露（约 18:00-20:00）前不跑，省一次 npx 冷启动
+  (( wd >= 6 )) && return 0              # 周末不跑（法定休市由 trading_calendar 判）
+  if "$PY" scripts/lhb_ensure.py --days 3 >> cache/lhb.log 2>&1; then
+    return 0
+  fi
+  nowts=$(date +%s)
+  last_warn=$(cat cache/.last_lhb_warn 2>/dev/null || echo 0)
+  gap=$(( nowts - last_warn ))
+  if (( gap >= 1800 )); then
+    echo "$nowts" > cache/.last_lhb_warn
+    echo "[$(date '+%H:%M:%S')] ⚠️ 龙虎榜未就绪（详见 cache/lhb.log）" >> "$LOG"
+  fi
+  return 0
+}
+lhb_self_heal
+
 # 链路断档守卫（2026-09-30 事故新增）：交易时段内数据/推送链路持续不就绪时，主动推一张告警卡，
 # 根治「静默停摆」——当日 09:15-09:41 共 98 轮全 skip 且**零告警**，早盘异动信号整段丢失，
 # 靠用户自己发现。判定：ready=false 或标记 5 分钟未刷新；连续 5 轮(≈2.5min)才告警，冷却 30min 防刷屏。

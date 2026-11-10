@@ -330,8 +330,8 @@ def forecast_one(row: dict, market_max: int, model: dict | None = None, *,
             verdict = VERDICT_DROP
             reasons.append(
                 f"{theme_max} 板是本题材最高、它 {boards} 板＝这条线第 {line_gap + 1} 档；"
-                f"同题材身位差 ≥2 这档 35 日实测 −1.62%、胜 37.3%"
-                f"（同题材差 1 板那档是 +0.52%/53.4%）")
+                f"比本题材最高板低 ≥2 板这档 35 日实测 −1.62%、胜 37.3%"
+                f"（只低 1 板那档是 +0.52%/53.4%）")
         elif boards >= CLIFF_BOARDS and (promo_board or 0) < CLIFF_PROMO_MAX:
             verdict = VERDICT_WATCH
             reasons.append(f"{boards} 板是历史崖位：这档晋级率只有 {promo_board}%"
@@ -342,7 +342,7 @@ def forecast_one(row: dict, market_max: int, model: dict | None = None, *,
             verdict = VERDICT_WAIT
             reasons.append(
                 f"本题材最高 {theme_max} 板、它 {boards} 板＝只差 1 板（最快的一档）；"
-                f"这档 35 日实测 +0.52%、胜 53.4%，是身位里最好的一档")
+                f"这档 35 日实测 +0.52%、胜 53.4%，是这几档里最好的一档")
         else:                                   # line_gap == 0：自己就是这条线的锚
             verdict = VERDICT_WATCH
             reasons.append(
@@ -356,11 +356,11 @@ def forecast_one(row: dict, market_max: int, model: dict | None = None, *,
                            f"（{CLIFF_BOARDS} 板以上断崖）")
         else:
             verdict = VERDICT_WATCH
-            reasons.append("缺题材归属（落行业兜底）→ 身位不裁决；"
-                           f"全市场身位差 {gap_to_top} 板只是参照，不据此否决")
+            reasons.append("缺题材归属（落行业兜底）→ 位置不裁决；"
+                           f"全市场比最高板低 {gap_to_top} 板只是参照，不据此否决")
     elif gap_to_top >= 2:
         verdict = VERDICT_DROP
-        reasons.append(f"身位差 {gap_to_top} 板＝后排；这档真买到时胜率只有 "
+        reasons.append(f"比最高板低 {gap_to_top} 板＝后排；这档真买到时胜率只有 "
                        f"{g.get('buy_win')}%、平均 {g.get('buy_avg')}%")
         if boards <= 3 and int(market_max or 0) >= 4:
             reasons.append(f"{boards} 板在 {market_max} 板的市场里就是后排"
@@ -373,7 +373,7 @@ def forecast_one(row: dict, market_max: int, model: dict | None = None, *,
             reasons.append(f"即便买到，这组胜率 {g.get('buy_win')}%、平均 {g.get('buy_avg')}%")
     elif gap_to_top <= 1 and (g.get("buy_win_lb") or 0) >= 30:
         verdict = VERDICT_WAIT
-        reasons.append(f"身位{'最高板' if gap_to_top == 0 else '差1板'}，"
+        reasons.append(f"位置{'最高板' if gap_to_top == 0 else '差1板'}，"
                        f"这组真买到时胜率 {g.get('buy_win')}%（下界 {g.get('buy_win_lb')}%）、"
                        f"平均 {g.get('buy_avg')}%")
     else:

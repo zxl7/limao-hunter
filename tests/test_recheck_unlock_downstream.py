@@ -33,6 +33,8 @@ import pipeline_verify as pv              # noqa: E402
 @pytest.fixture(autouse=True)
 def _defaults(monkeypatch):
     monkeypatch.setenv("POOL_CALL_RECHECK_UNLOCK", "1")
+    # 本文件锁「只有 state 类能翻案」的保守口径（回退路径）。
+    monkeypatch.setenv("POOL_CALL_ALL_TRADEABLE", "0")
     monkeypatch.setattr(ac, "AI_VOLUME_BANDS", True)
 
 

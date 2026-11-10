@@ -173,6 +173,24 @@ POOL_CALL_GAP_WEIGHT_POSITION = os.environ.get("POOL_CALL_GAP_WEIGHT_POSITION", 
 POOL_CALL_RECHECK_OBSERVE = os.environ.get("POOL_CALL_RECHECK_OBSERVE", "1") != "0"
 POOL_CALL_RECHECK_STATE_FULL = os.environ.get("POOL_CALL_RECHECK_STATE_FULL", "1") != "0"
 
+# ── 🧬 强基因豁免（2026-11-10 09:50 用户「量能可以增加强基因豁免，但是我这边说的
+#    历史连板，是指类似于冰山冷热这种，近一个月有连板，昨天涨停」）──────────────
+# 只豁免**一处**：上面那条「复核票须 full 量才算推翻盘后判断」的加严条款。
+#   实测当日（11-10）：锋龙股份 002931 09:25 开 +4.88%（5% 线内可买）、量 62% →
+#   被该条判 watch，随后封板 +10.01%；日盈电子 603286 量 67% → watch，收 +6.79%。
+# ⛔ 不拆量能硬地板（`ai_caliber.volume_band` 的 dry<0.35 仍拦，31 日回放：
+#   放进真没量的票，日均 2.79%→1.30%）。⇒ 只放行 `soft`（0.35~0.70），不放行 `dry`。
+# ⛔ 不进 zone / view / 名额 / 排序 / stance，只把「这条加严闸」让开。
+POOL_CALL_GENE_EXEMPT = os.environ.get("POOL_CALL_GENE_EXEMPT", "1") != "0"
+# 基因窗口回看天数（交易日）。基因判定窗口是 31 **自然日** ≈ 22 交易日，
+#   而共享 `zt_series` 只回看 `POSITION_LOOKBACK_DAYS=20` 交易日（≈28 自然日）
+#   ⇒ 会截掉窗口最前面 2~3 天。实测 11-09：20 日序列最早到 10-13，
+#   窗口起点 10-09，安泰集团 600408 因此被算成「1 板」（真实 2 板）、
+#   文投控股 600715 涨停次数少 1。⇒ 基因单独补一份长序列，⛔ 不改共享 zt_series
+#   （位置闸/老龙闸的 20 日口径不能跟着变）。
+POOL_CALL_GENE_LOOKBACK_DAYS = int(
+    os.environ.get("POOL_CALL_GENE_LOOKBACK_DAYS", "30"))
+
 # ── 🚫 顶部空间硬闸（2026-11-06 14:45 用户「一定要避开这种开的特别高又没有资格和
 #    行情秒板的票呀（扬子新材 +8.93%）」）──────────────────────────────────────
 # 用户要的不是「高开降权」（已有 `ai_caliber.gap_weight`，只降到 0.2 仓），是**不买**。
@@ -1026,7 +1044,8 @@ def call_pool(candidates: dict[str, Any] | None,
                      and sector_flow)
 
     # 涨停序列（位置闸/老龙复燃闸用·截到依据日 T-1；缺失/序列不足 → 不裁决，诚实降级）
-    if zt_series is None and zt_days is None:
+    _zt_injected = not (zt_series is None and zt_days is None)
+    if not _zt_injected:
         if POOL_CALL_DEFENSE_GATE and (POOL_CALL_DEFENSE_POSITION
                                        or POOL_CALL_DEFENSE_OLD_DRAGON):
             try:
@@ -1037,6 +1056,44 @@ def call_pool(candidates: dict[str, Any] | None,
     zt_days = list(zt_days) if isinstance(zt_days, (list, tuple)) else []
     _pos_on = bool(POOL_CALL_DEFENSE_GATE and POOL_CALL_DEFENSE_POSITION)
     _od_on = bool(POOL_CALL_DEFENSE_GATE and POOL_CALL_DEFENSE_OLD_DRAGON)
+
+    # 🧬 近段连板基因（2026-11-10 用户裁定口径：近一个月有连板 ∧ 昨天涨停）
+    #    ⛔ 与 `gene_height.prev_streak_boards`（上一波连板）不是一回事，见 gene_recent docstring。
+    #    ⛔ 唯一用途 = 量能门复核票豁免；不进 zone / view / 名额 / 排序 / 仓位。
+    _gene_recent: dict[str, dict[str, Any]] = {}
+    if POOL_CALL_GENE_EXEMPT:
+        # 序列来源：调用方注入（测试/回放）→ 原样用，保证隔离；
+        #   未注入 → 单独补一份覆盖完整 31 自然日窗口的长序列（见常量注释）。
+        _gene_src = zt_series
+        _gene_days = zt_days
+        if not _zt_injected:
+            try:
+                _gene_src, _gene_days = _dg.load_zt_series(
+                    days=max(int(POOL_CALL_GENE_LOOKBACK_DAYS), 22),
+                    upto=_env_date)
+            except Exception:                     # 补序列失败 → 用共享那份，如实标 truncated
+                _gene_src, _gene_days = zt_series, zt_days
+        _gene_src = _gene_src if isinstance(_gene_src, dict) else {}
+        # 数据源覆盖到哪天（⛔ 不是某只票的第一条涨停日）
+        _gene_avail = None
+        try:
+            _days_sorted = sorted(str(d)[:10] for d in (_gene_days or []))
+            _gene_avail = _days_sorted[0] if _days_sorted else None
+        except Exception:
+            _gene_avail = None
+        if _gene_src:
+            try:
+                from core import gene_recent as _gr
+
+                for c in pool:
+                    _c0 = str(c.get("code") or "").strip()
+                    if not _c0:
+                        continue
+                    _gene_recent[_c0] = _gr.recent_gene(
+                        _gene_src.get(_c0), asof=_env_date,
+                        avail_since=_gene_avail)
+            except Exception:
+                _gene_recent = {}
 
     # 🧬 基因换位预扫（2026-11-06）：同板数下「上一波更硬」的挑战者**顶替**原龙一。
     #   为什么需要顶替而不是只放行：⑩d 的语义是「只做龙一、跟风不追」。若 09:25 认定
@@ -1339,6 +1396,10 @@ def call_pool(candidates: dict[str, Any] | None,
             "gap_to_top": ((int(_market_max_boards) - boards_i)
                            if _market_max_boards and boards_i else None),
             "market_max_boards": int(_market_max_boards) if _market_max_boards else None,
+            # 🧬 近段连板基因（2026-11-10 用户口径）：窗口内最高连板 + 涨停次数 + 最近一次。
+            #    只作事实透传与量能豁免依据，⛔ 不参与 zone / view / 名额 / 排序。
+            #    缺序列 → None（"不知道"），⛔ 不当成"弱基因"。
+            "recent_gene": _gene_recent.get(code),
             # 只读候选事实，在本函数末端的名额排序消费；不改变任何竞价/风险短路规则。
             "mechanical_leader": mechanical_leader,
             "mechanical_leader_note": mechanical_leader_note or None,
@@ -1443,7 +1504,7 @@ def call_pool(candidates: dict[str, Any] | None,
             except Exception:                                # noqa: BLE001
                 base["forecast_band"] = None
 
-        from core.two_pool import observation_only, recheck_class
+        from core.two_pool import observation_only, recheck_class, all_tradeable_enabled
         if observation_only(c):
             # 🔁 11-05 用户拍板 A：观察票一律先用 09:25 实测「判一遍」并留痕，
             #    ⛔ 不再开局一句「板块观察参照，不参与交易」直接短路。
@@ -1467,7 +1528,7 @@ def call_pool(candidates: dict[str, Any] | None,
                                "participation_eligibility": "observe_only",
                                "reason": c.get("watch_reason") or "板块观察参照，不参与交易"}
                 continue
-            if _cls != "state":
+            if _cls != "state" and not all_tradeable_enabled():
                 _gap_txt = "竞价没拿到" if gap is None else f"今早开 {gap:+.2f}%"
                 _amt_txt = (f"、竞价 {float(amt):.2f} 亿"
                             if isinstance(amt, (int, float)) else "")
@@ -1487,10 +1548,14 @@ def call_pool(candidates: dict[str, Any] | None,
                                "recheck_class": _cls, "auction_recheck": _recheck,
                                "reason": f"{_gap_txt}{_amt_txt}{_band_txt} → {_why}，今天只看不买"}
                 continue
-            # 状态类：不短路，带复核标记走完整裁决链；买不买由后面每道闸现场判。
+            # 不短路，带复核标记走完整裁决链；买不买由后面每道闸现场判。
             # ⛔ 身份仍为 observe_only，本函数不改候选行、不写 buyable。
-            _recheck["verdict"] = "状态类·进入完整竞价裁决"
-            base["recheck_class"] = "state"
+            # 🆕 2026-11-10 用户「这些票全部都要有可交易的权限」：`POOL_CALL_ALL_TRADEABLE`
+            #    默认为 1 时，restricted / hard 类也一并进入完整裁决链——盘后分组不再
+            #    预先剥夺交易资格，只有竞价现场的价格/量能/顶部空间/封板质量/stance 名额能决定买不买。
+            _recheck["verdict"] = ("状态类·进入完整竞价裁决" if _cls == "state"
+                                   else "全池可交易·进入完整竞价裁决")
+            base["recheck_class"] = _cls or "state"
             base["auction_recheck"] = _recheck
             base["rechecked_from_observe"] = True
 
@@ -1639,10 +1704,36 @@ def call_pool(candidates: dict[str, Any] | None,
         #    ⛔ 这不是新门槛，是「竞价会变」的举证责任；开关关掉则只按常规量能门走。
         if (base.get("rechecked_from_observe") and POOL_CALL_RECHECK_STATE_FULL
                 and _vb["band"] != "full"):
-            marks[code] = {**base, "view": "watch", "recheck_gate": True,
-                           "reason": (f"今早开 {gap:+.2f}%、竞价只到计划 "
-                                      f"{(_vb['ratio'] or 0) * 100:.0f}% → 量没给足，今天先看")}
-            continue
+            # 🧬 强基因豁免（2026-11-10 用户）：近月连板基因够硬，就不必再拿满额量当
+            #    「推翻盘后状态」的举证 —— 股性本身就是它够格被复核的理由。
+            #    ⛔ 只让开 soft（0.35~0.70）；dry（<0.35）照旧拦（31 日回放：拆地板
+            #    日均 2.79%→1.30%）。仓位仍走 `volume_scale` 的 soft 系数，不加满。
+            _ge_gene = base.get("recent_gene") or {}
+            _ge_ok = False
+            if (POOL_CALL_GENE_EXEMPT and _vb["band"] == "soft"
+                    and isinstance(_ge_gene, dict)):
+                try:
+                    from core import gene_recent as _gr_mod
+
+                    # ⚠️ 必须显式传门槛：`is_strong` 的默认参数在**模块导入时**就绑定了，
+                    #    回放里改 `GENE_MIN_BOARDS` 常量对默认参数无效（A/B 会跑成同一结果）。
+                    _ge_ok = _gr_mod.is_strong(
+                        _ge_gene,
+                        min_boards=int(_gr_mod.GENE_MIN_BOARDS),
+                        min_zt=int(_gr_mod.GENE_MIN_ZT))
+                except Exception:
+                    _ge_ok = False
+            if _ge_ok:
+                base["gene_exempt"] = True
+                base["gene_exempt_reason"] = (
+                    f"近月 {_ge_gene.get('max_boards')} 板 · 涨停 "
+                    f"{_ge_gene.get('zt_n')} 次，股性够格 → 量 {(_vb['ratio'] or 0) * 100:.0f}% "
+                    f"按 {int((_vb.get('scale') or 0.5) * 100)}% 仓放行")
+            else:
+                marks[code] = {**base, "view": "watch", "recheck_gate": True,
+                               "reason": (f"今早开 {gap:+.2f}%、竞价只到计划 "
+                                          f"{(_vb['ratio'] or 0) * 100:.0f}% → 量没给足，今天先看")}
+                continue
         # ⑥a 🧲 板块联动纪律（2026-10-22）：低板独苗不能因本票量价达标就直接买。
         #    只在完整涨停池已确认“昨日独苗”时生效；今早同题材成员没报价是 unknown，
         #    不能偷换成“板块0红开”。soft 默认只拦 1~2 板；strict 才扩展至高标。
@@ -1881,7 +1972,7 @@ def call_pool(candidates: dict[str, Any] | None,
                                                           "leader_boards": c.get("dragon_leader_boards")},
                                        "reason": (f"开在 {gap:+.2f}% 达标，但这条线的龙一是"
                                                   f"{_lead_nm}（{c.get('dragon_leader_boards') or '?'} 板），"
-                                                  f"它是第{_dr_i}个身位 —— 只做龙一，跟风不追")}
+                                                  f"它是这条线第{_dr_i}个 —— 只做龙一，后面的不追")}
                         continue
                 # ⛔ `next_to_leader` 的票身上也带 `dragon_leader_block`（那描述的是**龙一**
                 #    的状态，不是它自己的），必须先排除，否则刚放行的隔壁会被这段再拦一次。
@@ -1992,7 +2083,7 @@ def call_pool(candidates: dict[str, Any] | None,
                     marks[code] = {**base, "view": "watch", "leader_only_gate": True,
                                    "reason": (f"开在 {gap:+.2f}% 达标，但它是 {boards_i} 板、"
                                               f"{_where}最高 {boards_i + _gt_i} 板，"
-                                              f"身位差 {_gt_i} 板 —— 后排不做"
+                                              f"比最高板低 {_gt_i} 板 —— 后排不做"
                                               f"（同题材后排 T+1 均 −1.62%、胜率 37.3%）")}
                     continue
         # ⑪d 🌊 独苗高开闸（2026-11-04 用户「独苗高开可以立马设，适合跑路」）
@@ -2303,6 +2394,13 @@ def call_pool(candidates: dict[str, Any] | None,
             "participated": [c for c, v in marks.items()
                              if v.get("view") == "participate"
                              and v.get("rechecked_from_observe")],
+            # 🧬 强基因豁免留痕（2026-11-10）：今天有几只靠股性让开了「须满额量」这条闸，
+            #    其中几只最终真买到了。⛔ 只读诊断，不参与二次裁决。
+            "gene_exempt_enabled": bool(POOL_CALL_GENE_EXEMPT),
+            "gene_exempt": [c for c, v in marks.items() if v.get("gene_exempt")],
+            "gene_exempt_bought": [c for c, v in marks.items()
+                                   if v.get("gene_exempt")
+                                   and v.get("view") == "participate"],
         },
         # 🎯 11-05 用户删除 5% 与红开两条绝对线后的主判据留痕（只读诊断）。
         "expected_gap": {

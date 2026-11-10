@@ -404,7 +404,7 @@ def position_weight(boards: Any, *, theme_max_boards: Any = None,
         if gap_used == 0:
             out["label"] = f"{where}里它就是最高板（自己当锚）→ 仓位收紧"
         else:
-            out["label"] = (f"{where}身位差 {gap_used} 板 → 仓位收紧")
+            out["label"] = (f"{where}比最高板低 {gap_used} 板 → 仓位收紧")
     return out
 
 

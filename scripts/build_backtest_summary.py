@@ -41,8 +41,10 @@ RESEARCH = ROOT / "cache" / "research"
 LEDGER = ROOT / "cache" / "pool_ledger"
 OUT = RESEARCH / "backtest_summary.json"
 
+# 唯一输入：`research_t1_caliber_ab.py` 的产物（三口径 × 五层阶梯都在里面）。
+# ⛔ 2026-11-09 删掉原来的 `LAYER_SRC = new_caliber_ab_bt.json` —— 它从头到尾没被读过，
+#    留着会让人以为阶梯数据来自两个文件，实际只有 T1_SRC 一个源。
 T1_SRC = RESEARCH / "t1_caliber_ab_bt.json"
-LAYER_SRC = RESEARCH / "new_caliber_ab_bt.json"
 
 # 逐层阶梯的展示顺序与文案（⛔ 与 `research_t1_caliber_ab.CONFIGS` 同名）
 LAYER_ORDER = ["L0_v10", "L1_noavoid", "L2_rescue", "L3_gene", "L4_v11"]

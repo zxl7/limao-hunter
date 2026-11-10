@@ -321,10 +321,13 @@ def _next_day(date10: str) -> str:
     return next_a_share_trading_day(date10) or date10
 
 
-def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close: float | None, *, date10: str, regime: str | None = None, sector_support: dict[str, Any] | None = None, ai_decisions: dict[str, dict] | None = None, valve_code: str | None = None, pool_views: dict[str, dict] | None = None) -> dict[str, Any]:
+def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close: float | None, *, date10: str, regime: str | None = None, regime_trusted: bool = True, sector_support: dict[str, Any] | None = None, ai_decisions: dict[str, dict] | None = None, valve_code: str | None = None, pool_views: dict[str, dict] | None = None) -> dict[str, Any]:
     """
     构建单条结算 record（含 performance.open_check / next_day）。
     regime: 情绪体制（P1-6 冰点禁买硬开关·signal_eval 消费）。
+    regime_trusted: 该 regime 是否**当日实时读数**（2026-11-09）。False = 沿用昨收标签，
+      **只标注不禁买**——昨收冰点不该锁掉今早已经判出来的买点（详见 `_resolve_regime`）。
+      signal_eval 侧仍然收到 regime（档位阈值照旧），是否降级 buy→hit 由本函数的闸门决定。
     sector_support: 板块竞价承接力（2026-08-24 用户思想·孤军高开门控）——
       由 cmd_verify 抓同板块成员竞价算好传入；signal_eval 据此将
       「孤军高开+板块0红开」的 buy 降级 pending（防被砸），卡片渲染🧲标注。
@@ -343,7 +346,9 @@ def _build_record(cand: dict[str, Any], quote: dict[str, Any] | None, next_close
     # P1-6 冰点禁买·命中打标（2026-08-19 用户澄清）：regime=ice 时命中判定照算
     # （signal_eval 已正常产出 buy 档），但一律不进场——buy → hit（can_enter=False、
     # 不写持仓），卡片仍展示命中票+禁买标注；pending/reject/unavailable 保持原样。
-    if regime == "ice" and decision == "buy":
+    # ⏱️ `regime_trusted`（2026-11-09）：只有**当日实时读数**判出的 ice 才禁买；
+    #    沿用昨收标签时不禁买（昨收冰点≠今天的冰点，用户「我要买入那一套逻辑」）。
+    if regime == "ice" and regime_trusted and decision == "buy":
         decision = "hit"
         signal = {
             **signal,
@@ -592,14 +597,18 @@ def run_verify(
     date10 = str(candidates.get("date") or "").strip()
     all_cands = (list(candidates.get("relay") or []) + list(candidates.get("watch") or [])
                  + list(candidates.get("low_pool") or []))
-    # P1-6 冰点禁买：regime 从 candidates.environment 读取（eod 时已按 feedback_matrix 判定；
-    # ice=情绪分≤2.0 → signal_eval 全部禁买）。兼容旧文件无 regime 字段（默认 None 不触发）。
-    regime = str((candidates.get("environment") or {}).get("regime") or "").strip() or None
-
     # 🤖 AI 口径（2026-09-14 用户「全量以 AI 为唯一口径！」）：
     # AI 决策在**前一交易日盘后**写死（ai_decisions.jsonl·trade_date=本期执行日），
     # 本函数只做「按 AI 自定上限判定能否成交」，不引入当日新信息。
     trade_date10 = _next_day(date10)
+
+    # P1-6 冰点禁买·**时效闸门**（2026-11-09 用户「我要买入的那一套逻辑，不要禁用的这一套逻辑」）：
+    # 昨收标签（candidates.environment.regime）只当背景，⛔ 不再单独禁掉今天的买；
+    # 只有「今日实时读数」判出的 ice 才禁买。详见 `_resolve_regime` 的时点说明。
+    _regime_eod = str((candidates.get("environment") or {}).get("regime") or "").strip() or None
+    _reg = _resolve_regime(trade_date10, _regime_eod)
+    regime = _reg.get("regime")
+    regime_trusted = bool(_reg.get("trusted"))
     ai_decisions: dict[str, dict] | None = None
     valve: dict[str, Any] | None = None
     pool_res: dict[str, Any] | None = None
@@ -835,6 +844,7 @@ def run_verify(
         q = quotes.get(code)
         nc = (next_close_map or {}).get(code)
         rec = _build_record(cand, q, nc, date10=date10, regime=regime,
+                            regime_trusted=regime_trusted,
                             sector_support=(sector_support_map or {}).get(code),
                             ai_decisions=ai_decisions,
                             valve_code=(valve or {}).get("code"),
@@ -858,9 +868,34 @@ def run_verify(
         # 口径标注（2026-09-14）：ai / mechanical / mechanical_fallback
         "caliber": ("ai" if ai_decisions else
                     ("ai_missing_no_trade" if ai_caliber.AI_CALIBER_ACCOUNT else "mechanical")),
-        # 环境透传（2026-08-16）：feedback 10 分制情绪，供卡片渲染层做规则层风险标记
-        "environment": candidates.get("environment"),
+        # 环境透传（2026-08-16）：feedback 10 分制情绪，供卡片渲染层做规则层风险标记。
+        # ⏱️ 2026-11-09：regime 用**当日实时重判**结果覆盖昨收标签，并带 `regime_trusted`
+        #    让渲染层知道「这个 ice 是不是今天的」——⛔ 不 trusted 的 ice 不得渲染成禁买。
+        "environment": {
+            **(candidates.get("environment") or {}),
+            "regime": regime,
+            "regime_source": _reg.get("source"),
+            "regime_trusted": regime_trusted,
+            "regime_score": _reg.get("score"),
+            "regime_label": _reg.get("label"),
+            "regime_eod": _reg.get("eod_regime"),
+            # 昨收分 = candidates.environment.sentiment_score（盘后写死），⛔ 不读实时文件
+            "regime_eod_score": (candidates.get("environment") or {}).get("sentiment_score"),
+        },
     }
+
+    # 竞价一字 → 方向线索（2026-11-09 用户「先看见」）
+    # ⛔ 纯解释层：不进 records / 不改 can_enter / 不影响 quota。
+    #    数据来自 stock_observations 的 09:15~09:30 段（只读），
+    #    判据见 core/auction_seal.py 文档（「中间没记录 = 价格没变过」）。
+    #    ⚠️ 用执行日 `trade_date10`，⛔ 不是候选日 `date10`。
+    payload["auction_seal"] = _auction_seal_payload(trade_date10)
+
+    # 📉→📈 观察池竞价弱转强（2026-11-09 用户「弱转强写进竞价卡里面」）
+    # ⛔ 同样纯解释层：不进 records / 不改 can_enter / 不影响 quota。
+    #    数据来自 cache/watch_pool/<date>.jsonl 每轮心跳（带时间戳的多次采样），
+    #    心跳缺失才回落 stock_observations；⛔ 两条来源不混算同一段路径。
+    payload["watch_reversal"] = _watch_reversal_payload(trade_date10)
 
     nav_rows = sync_account_nav_ledger(backtest_payload=payload) if (out_nav and persist) else []
     metrics = (
@@ -909,6 +944,171 @@ def run_verify(
         #    渲染层据此标「昨日」并做时点平移；⛔ 不再靠 _narr_basis_label 回退推断。
         #    若 launchd 注入了当日 AI 旁白，cmd_verify 会用当日覆盖本字段（优先级更高）。
         "narrative_date": summary.get("date10"),
+    }
+
+
+def _resolve_regime(date10: str, eod_regime: str | None) -> dict[str, Any]:
+    """冰点闸门的**时效**裁决（2026-11-09 用户「我要买入的那一套逻辑，不要禁用的这一套逻辑」）。
+
+    背景与病灶：
+      `candidates.environment.regime` 是**上一交易日盘后**按当时情绪打的标签。拿昨收的温度
+      去锁今早 09:25 已经逐票判出来的买点，等于用昨天的天气决定今天穿什么。
+      实测 2026-11-09：11-06 收盘 1.8 分（ice）→ 11-09 09:29 已 6.3 分（修复），
+      卡片标题却仍写「市场很冷·不买·空仓」，而正文 AI 实判了阳光照明买入 —— 一卡两结论。
+
+    规则（`VERIFY_REGIME_LIVE=0` 一键回退旧行为：无条件信任昨收标签）：
+      ① `feedback_matrix.date == 今日` → **当日实时读数**重算 regime（唯一权威，trusted=True）
+      ② 昨日标签 / 无读数 → 保留 regime 但 `trusted=False`：**只标注不禁买**
+         （「昨收冰点」是背景信息，不是今天的闸门）
+
+    ⛔ 不新抓行情、不改 signal_eval 的档位阈值：只决定「这个 ice 是不是今天的 ice」。
+    """
+    if os.environ.get("VERIFY_REGIME_LIVE", "1") == "0":
+        return {"regime": eod_regime, "source": "eod_legacy", "score": None,
+                "label": "", "trusted": True, "eod_regime": eod_regime, "eod_score": None}
+
+    out: dict[str, Any] = {
+        "regime": eod_regime, "source": "eod_prev", "score": None, "label": "",
+        "trusted": False, "eod_regime": eod_regime, "eod_score": None,
+    }
+    # ⚠️ 两个 cache 不是一个目录：candidates-*.json 在 `wealth_code/cache/`（ROOT/cache），
+    #    而 feedback_matrix.json / holdings.json 在**项目根** cache/（ROOT.parent/cache）。
+    #    2026-11-09 实测：读 ROOT/cache 拿到 not-exists，静默降级成「昨日标签」。
+    _fb_root = ROOT.parent / "cache"
+    fb_path = _fb_root / "feedback_matrix.json"
+    try:
+        fb = json.loads(fb_path.read_text(encoding="utf-8"))
+    except Exception:
+        return out
+    if not isinstance(fb, dict) or fb.get("error"):
+        return out
+
+    if str(fb.get("date") or "") != str(date10):
+        # 文件还停在上一个交易日 → 昨收标签，不禁买（昨收分由调用方从 candidates 补）
+        return out
+
+    # 当日有读数：用 load_environment 的口径重算（与盘后同一套阈值，⛔ 不另写一份）
+    from adapters.input_zt import load_environment
+    try:
+        env = load_environment(_fb_root)
+    except Exception:
+        return out
+    _reg = str(env.get("regime") or "").strip() or None
+    if _reg:
+        out.update({"regime": _reg, "source": "live_today", "trusted": True,
+                    "score": env.get("sentiment_score"),
+                    "label": str(env.get("sentiment_label") or "")})
+    return out
+
+
+def _auction_seal_payload(trade_date10: str) -> dict[str, Any]:
+    """竞价一字清单 + 方向线索（2026-11-09 用户「先看见」）。
+
+    用户原话：「竞价的时候如果有一字涨停，需要留意他的炒作方向，
+              比如今天的西部材料带动商业航天逻辑！！」
+
+    ⛔ **纯解释层**：不进 `records`、不改 `can_enter`/`view`、不影响 `quota`/名额。
+       一字板的隔壁票不得因此成为买入理由（11-06 实测：虹吸 −1.49%/胜 40.4%）。
+
+    ⛔ 取不到就说取不到（`available=False` + reason），**不写「无一字」**——
+       抓不到 ≠ 没有，这是短线精灵踩过的坑。
+    """
+    try:
+        from common.data_gateway import auction_seal
+    except Exception as exc:                       # pragma: no cover - 层缺失
+        return {"available": False,
+                "reason": f"聚合层不可用: {type(exc).__name__}: {exc}"}
+
+    try:
+        res = auction_seal(trade_date10)
+    except Exception as exc:                       # 只读查询失败不得拖垮竞价卡
+        return {"available": False,
+                "reason": f"读取失败: {type(exc).__name__}: {exc}"}
+
+    if not isinstance(res, dict):
+        return {"available": False, "reason": "返回结构异常"}
+    if res.get("disabled"):
+        return {"available": False, "reason": res.get("reason") or "已关闭"}
+
+    seal = res.get("auction_seal") or {}
+    states = seal.get("states") or {}
+    if not states:
+        return {"available": False, "reason": res.get("reason") or "无竞价观测"}
+
+    return {
+        "available": True,
+        "schema": seal.get("schema"),
+        "date": seal.get("date"),
+        "items": seal.get("items") or [],
+        "themes": seal.get("themes") or [],
+        "states": states,
+        "wobbled_sample": seal.get("wobbled_sample") or [],
+        "meta": seal.get("meta") or {},
+    }
+
+
+def _watch_reversal_payload(trade_date10: str) -> dict[str, Any]:
+    """观察池竞价弱转强（2026-11-09 用户「弱转强写进竞价卡里面」）。
+
+    用户原话：「竞价的时候，昨天涨停，今天开盘竞价跌停，然后慢慢的居然红开了。
+              我靠，这种竞价弱转强，我也是非常想要买的呀」
+              「我们只需要看我们这边昨天准备好的那些票就好了呀。不需要看场外的那些票，
+                只关注我们当天收盘锁定的那些票。」
+              「我们可以根据时间戳来更新嘛，记录一次时间，再记录一次时间，
+                对比一下价格变化，就能看出来它的趋势变化了呀。哪怕没数据也没关系，
+                我们这边做好数据的兼容就好。」
+
+    池子 = 观察池（昨日盘后 `candidates` 的 relay+watch+low_pool，09:25 后并上当日
+    `pool_call`）。⛔ 不扩全市场；⛔ 只看自己锁定的票。
+
+    ⛔ **纯解释层**：不进 `records`、不改 `can_enter`/`view`、不影响 `quota`/名额。
+    ⛔ `pending`（末条早于 09:25）**不得当弱转强**；`no_data` 不等于「没反转」。
+    ⛔ 取不到就写取不到（`available=False` + reason），不写「没有弱转强」。
+    """
+    try:
+        from common import watch_pool
+    except Exception as exc:                       # pragma: no cover - 层缺失
+        return {"available": False,
+                "reason": f"观察池层不可用: {type(exc).__name__}: {exc}"}
+
+    if not getattr(watch_pool, "ENABLE_WATCH_POOL", True):
+        return {"available": False, "reason": "观察池快照已关闭（ENABLE_WATCH_POOL_SNAPSHOT=0）"}
+
+    try:
+        res = watch_pool.auction_paths(date=trade_date10)
+    except Exception as exc:                       # 只读查询失败不得拖垮竞价卡
+        return {"available": False,
+                "reason": f"读取失败: {type(exc).__name__}: {exc}"}
+
+    if not isinstance(res, dict):
+        return {"available": False, "reason": "返回结构异常"}
+
+    items = [it for it in (res.get("items") or []) if isinstance(it, dict)]
+    counts = res.get("counts") or {}
+    if not items:
+        return {"available": False,
+                "reason": "观察池为空（昨日 candidates 与当日 pool_call 都没可用池）",
+                "pool_size": 0}
+
+    # 全部 no_data：一层数据都没取到 —— 这与「没有反转」是两件事，⛔ 不可混。
+    if int(counts.get("no_data") or 0) >= len(items):
+        return {"available": False,
+                "reason": "本轮没抓到观察池行情（快照未覆盖竞价窗口）",
+                "pool_size": len(items), "counts": counts,
+                "rounds": res.get("rounds") or 0}
+
+    return {
+        "available": True,
+        "schema": res.get("schema"),
+        "date": res.get("date"),
+        "source": res.get("source"),
+        "rounds": res.get("rounds") or 0,
+        "global_last_ts": res.get("global_last_ts") or "",
+        "pool_size": len(items),
+        "items": items,
+        "counts": counts,
+        "window": res.get("window"),
+        "deep_pct": res.get("deep_pct"),
     }
 
 

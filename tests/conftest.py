@@ -48,6 +48,9 @@ def legacy_pool_call_rules(monkeypatch):
     """
     from core import ai_caliber, pool_call
 
+    # 2026-11-10 用户「这些票全部都要有可交易的权限」→ 新默认全池可交易；
+    # 本夹具锁的是旧口径，必须同时回退，否则历史断言不成立。
+    monkeypatch.setenv("POOL_CALL_ALL_TRADEABLE", "0")
     monkeypatch.setattr(ai_caliber, "AI_VOLUME_BANDS", False)
     monkeypatch.setattr(pool_call, "POOL_CALL_UNLIMITED_SLOTS", False)
     monkeypatch.setattr(pool_call, "POOL_CALL_EVEN_ALLOCATION", False)

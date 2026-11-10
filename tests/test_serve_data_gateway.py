@@ -74,6 +74,25 @@ def _get(base: str, path: str, headers: dict[str, str] | None = None) -> tuple[i
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
+def test_pool_ledger_route_and_quotes_are_read_only(served, monkeypatch, tmp_path):
+    module, base = served
+    monkeypatch.setattr(module, 'DATA_ROOT', tmp_path)
+    monkeypatch.setattr(module, 'SHARE_PRIVATE', True)
+    folder = tmp_path / 'cache/pool_ledger'
+    folder.mkdir(parents=True)
+    ledger = folder / '2026-11-06.json'
+    original = '{"date":"2026-11-06","rows":[]}'
+    ledger.write_text(original)
+    status, payload = _get(base, '/api/decision/pool-ledger')
+    assert status == 200
+    assert payload == [{'file': ledger.name, 'data': json.loads(original)}]
+    status, quotes = _get(base, '/api/decision/participation-quotes')
+    assert status == 200
+    assert quotes['call_available'] is False
+    assert quotes['quotes'] == {}
+    assert ledger.read_text() == original
+
+
 def test_static_data_archives_are_not_mistaken_for_parameterized_queries(served):
     _, base = served
     for path in ("/api/data/exit-peaks", "/api/data/theme-snapshot", "/api/data/top5-history"):

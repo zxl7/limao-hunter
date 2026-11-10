@@ -18,7 +18,7 @@
   （异动群高频全量 + 正式群复盘卡），开关 enabled=false 一键关；详见下方 mirror_* 函数。
 """
 from __future__ import annotations
-import argparse, glob, json, os, sys
+import argparse, glob, json, os, re, sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional  # 2026-09-30：load_webhook 注解用到，此前靠 __future__ 延迟求值兜住
@@ -204,6 +204,109 @@ def dedup_mark(card: dict) -> None:
         json.dump(db, open(path, "w", encoding="utf-8"), ensure_ascii=False)
     except Exception as e:
         print(f"[dedup] 登记降级（不影响推送）: {e}", file=sys.stderr)
+
+
+# ── 日级发布闸（2026-11-09 · 治「同一张卡当日被推多次」）────────────────────
+# 背景（11-09 复盘卡事故）：内容 hash 去重只能挡「内容一模一样」，改一个字就算新卡
+# ⇒ 复盘卡改一版推一版，正式群 + 客户群各收 3 份。
+# 真正的身份是「卡名 + 业务日期」，与内容无关 ⇒ 同一身份当日已成功推送过，
+# 再推必须显式 --republish "原因"；⛔ --force 不得绕过本闸（--force 只跳 10min 去重）。
+
+PUBLISH_LEDGER_RETAIN_DAYS = 30
+
+
+# 日级闸只管「一天只应有这一张」的卡（复盘类）。
+# ⛔ 绝不能管 limao_card.json（盘中猎手，一天 5~6 次是设计行为）、
+#    card_YYYYMMDD_HHMMSS.json（文件名自带时间戳，天然唯一）。
+ONCE_PER_DAY_PAT = re.compile(r"review|fupan", re.I)
+
+
+def is_once_per_day_card(card_path: str) -> bool:
+    return bool(ONCE_PER_DAY_PAT.search(Path(card_path).name))
+
+
+def _publish_ledger_path() -> str:
+    return str(SCRIPT_DIR.parent / "cache" / "publish_ledger.json")
+
+
+def publish_identity(card_path: str) -> str:
+    """卡身份 = 文件名去掉扩展名（review_2026-11-09.json → review_2026-11-09）。
+
+    ⛔ 刻意不含内容 hash / mtime —— 身份必须跨「改稿」稳定，否则闸形同虚设。
+    """
+    return Path(card_path).stem
+
+
+def _load_publish_ledger() -> dict:
+    try:
+        db = json.load(open(_publish_ledger_path(), encoding="utf-8"))
+        return db if isinstance(db, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_publish_ledger(db: dict) -> None:
+    import time
+    try:
+        cutoff = time.time() - PUBLISH_LEDGER_RETAIN_DAYS * 86400
+        db = {k: v for k, v in db.items()
+              if isinstance(v, dict) and v.get("last_ts", 0) >= cutoff}
+        json.dump(db, open(_publish_ledger_path(), "w", encoding="utf-8"),
+                  ensure_ascii=False, indent=1)
+    except Exception as e:
+        print(f"[publish] 台账写盘降级（不影响已发消息）: {e}", file=sys.stderr)
+
+
+def publish_gate(card_path: str, webhook_key: str,
+                 republish_reason: Optional[str] = None) -> tuple:
+    """【只读检查】同一身份当日是否已成功推送 → (是否放行, 说明)。
+
+    - 只对**复盘类卡**（文件名含 review/fupan）生效 —— 盘中猎手 `limao_card.json`
+      一天多次是设计行为，⛔ 不能拦。
+    - 只对正式群 `feishu_webhook_prod` 生效；测试群/异动群不拦。
+    - 首次推送放行；已推过 + 给了 `--republish "原因"` 放行（原因进台账与审计）。
+    - 已推过 + 没给原因 → **拒绝**。
+    """
+    if webhook_key != "feishu_webhook_prod":
+        return True, ""
+    if not is_once_per_day_card(card_path):
+        return True, ""
+    ident = publish_identity(card_path)
+    rec = _load_publish_ledger().get(ident)
+    if not rec or not rec.get("count"):
+        return True, ""
+    if republish_reason:
+        return True, f"显式重发 #{int(rec['count']) + 1}（原因：{republish_reason}）"
+    return False, (f"「{ident}」今日已推送 {rec.get('count')} 次"
+                   f"（首次 {rec.get('first_at', '?')}）；内容已改须显式 "
+                   f"--republish \"原因\"，--force 不能绕过本闸")
+
+
+def publish_mark(card_path: str, card: dict,
+                 republish_reason: Optional[str] = None) -> None:
+    """【成功后登记】累加该身份当日推送次数与内容 hash（仅复盘类卡 + 主群成功时调用）。"""
+    import time
+    if not is_once_per_day_card(card_path):
+        return
+    try:
+        db = _load_publish_ledger()
+        ident = publish_identity(card_path)
+        rec = db.get(ident) or {
+            "count": 0,
+            "first_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "hashes": [],
+            "republish_reasons": [],
+        }
+        rec["count"] = int(rec.get("count") or 0) + 1
+        rec["last_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        rec["last_ts"] = time.time()
+        rec.setdefault("hashes", []).append(_content_hash(card)[:12])
+        if republish_reason:
+            rec.setdefault("republish_reasons", []).append(republish_reason[:120])
+        db[ident] = rec
+        _save_publish_ledger(db)
+    except Exception as e:
+        print(f"[publish] 台账登记降级（不影响推送）: {e}", file=sys.stderr)
 
 
 def push(card: dict, webhook: str, retries: int = 2):
@@ -402,7 +505,11 @@ def main():
     ap.add_argument("--skip-lint", action="store_true",
                     help="跳过推送前 lint/schema 校验（紧急兜底用，慎用）")
     ap.add_argument("--force", action="store_true",
-                    help="绕过同内容幂等去重，强制推送（测试/重推用）")
+                    help="绕过同内容幂等去重，强制推送（测试/重推用）；⛔ 不能绕过日级发布闸")
+    ap.add_argument("--republish", default=None, metavar="原因",
+                    help="显式重发：同一张卡当日已推过时必填原因，否则拒绝（--force 不能替代）")
+    ap.add_argument("--skip-selfcheck", action="store_true",
+                    help="跳过数字自洽自查（复盘类卡默认强制，C1/C2/C3 任一 FAIL 即阻断）")
     args = ap.parse_args()
 
     # 选群：显式 --webhook > 环境变量/交易日自动判断
@@ -446,6 +553,33 @@ def main():
         print("ERROR: 未能从 config/settings.json 获取 webhook", file=sys.stderr)
         sys.exit(2)
 
+    # ── 数字自洽门禁（2026-11-09）：复盘类卡推送前强制自查 ──
+    # 来历：11-09 复盘卡因主题计数改稿残留连推 3 次，card_lint 只查词汇查不出数字不自洽。
+    if not args.skip_selfcheck and re.search(r"review|fupan", Path(args.card).name):
+        try:
+            import importlib.util as _ilu
+            _spec = _ilu.spec_from_file_location("card_selfcheck", SCRIPT_DIR / "card_selfcheck.py")
+            _sc = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_sc)
+            _ok_sc, _fails, _warns, _ = _sc.selfcheck(args.card)
+            for _w in _warns:
+                if _w["code"] != "C4":
+                    print(f"[selfcheck] ⚠️ {_w['msg']}", file=sys.stderr)
+            for _f in _fails:
+                print(f"[selfcheck] ❌ {_f['msg']}", file=sys.stderr)
+            if not _ok_sc:
+                print("ERROR 推送阻断：数字自洽自查未通过（--skip-selfcheck 仅限已知误报时用）", file=sys.stderr)
+                _audit("push", card=Path(args.card).name, webhook=resolved, result="blocked",
+                       detail="selfcheck: " + "; ".join(f["msg"] for f in _fails)[:280])
+                sys.exit(5)
+        except SystemExit:
+            raise
+        except Exception as e:
+            print(f"[selfcheck] ⚠️ 自查执行异常（不阻断）: {e}", file=sys.stderr)
+
+    # ── 日级发布闸（2026-11-09）：同一张卡当日只许推一次，重推必须显式 --republish ──
+    gate_ok, gate_msg = publish_gate(args.card, resolved, args.republish)
+
     if args.dry_run:
         if args.webhook is not None:
             mode, tag = "显式指定", f"--webhook={args.webhook}"
@@ -458,8 +592,17 @@ def main():
         print(f"[dry-run] msg_type: {card.get('msg_type')} | card keys: {list(card.get('card', {}).keys())}")
         _mt = mirror_targets(Path(args.card).name, resolved, card)
         print(f"[dry-run] 卡标题: {card_title(card) or '(空)'}")
+        print(f"[dry-run] 日级闸: {'✅ 放行' if gate_ok else '❌ 拦截'} {gate_msg}".rstrip())
         print("[dry-run] 镜像目标: " + (", ".join(f"{t['name']}({t['key']})" for t in _mt) if _mt else "无（未命中 client_mirror 规则）"))
         sys.exit(0)
+
+    if not gate_ok:
+        print(f"BLOCKED_PUBLISH {gate_msg}", file=sys.stderr)
+        _audit("push", card=Path(args.card).name, webhook=resolved,
+               result="blocked", detail=gate_msg[:300])
+        sys.exit(4)
+    if gate_msg:
+        print(f"[publish] {gate_msg}", file=sys.stderr)
 
     # ── 幂等去重（P1-⑧ · 2026-08-17）：同内容 10 分钟内已推则跳过，--force 绕过 ──
     if not args.force:
@@ -480,6 +623,7 @@ def main():
         print("OK")
         # ⛔ 2026-09-17 修复：内容 hash 只在**实际推送成功后**登记（失败不登记 → 可重试）
         dedup_mark(card)
+        publish_mark(args.card, card, args.republish)   # 日级身份台账（2026-11-09）
         _audit("push", card=Path(args.card).name, webhook=resolved, result="ok")
         mirror_push(card, mirror_targets(Path(args.card).name, resolved, card), args.card)
         sys.exit(0)

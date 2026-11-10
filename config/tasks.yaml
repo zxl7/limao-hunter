@@ -188,6 +188,28 @@ tasks:
     # → scripts/pool_ledger.py（只读聚合，不重算判据），产物 cache/pool_ledger/<date>.json
     # ⏰ 16:00 选在收盘 K 线落盘之后：11-06 实测 15:19 查无当日 bar、15:32 才有。
     #   缺 bar 脚本直接 exit 2、不写半截文件（这就是 15:19 基线虚报 +13.2%→实际 +2.6% 的那个洞）。
+    # 📏 2026-11-09 加 `--backfill-t1`（默认回补最近 5 个交易日）：
+    #   D 日的 t1_ret 要等 D+1 收盘价才成立，而本任务只跑「当日」⇒ 最新一天永远 T+1 n=0 且不会自动补。
+    #   ⛔ 只填空值、不覆盖已有数字，不碰 au_ret 主口径与任何分档汇总。
+
+  # ---------- 盘后回测快照 + 净值补档（2026-11-09 立项·P2+P3）----------
+  - name: "【盘后】净值补档 + 回测快照"
+    id: "3b870299-985b-41ba-a972-51371f8ff42e"
+    kind: "脚本"
+    rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=16;BYMINUTE=20"
+    webhook: null
+    writeback: null
+    # 2026-11-09 查出两件事，一次解决：
+    # ① `cache/research/backtest_summary.json` 陈旧 2.7 天（停 11-06 21:46），
+    #    终端「财富密码 → 回测」tab 一直显示上周五那份 —— 脚本没问题，是**没人调度它**。
+    # ② `account_nav_history.jsonl` 从 10-21 起结构性停更：写入链 `_finalize_prev_batch`
+    #    只结算「最近一个批次」且要求当天抓到价，抓价失败一次就永久丢（第二天批次换新的）。
+    # 跑三条：
+    #   backfill_account_nav.py    ← 拿台账补缺行（只填空、只补末尾、不覆盖、不冒充 caliber）
+    #   research_t1_caliber_ab.py --json   ← 35 日回放，实测约 23s
+    #   build_backtest_summary.py  ← 合成终端快照
+    # ⏰ 16:20 排在台账 16:00 之后（补档依赖当日台账已落盘）、复盘 17:18 之前。
+    # ⛔ 三套口径并列（策略=当日收盘 / T+1=次日收盘 / T+1 最保守），禁止相加或折算。
 
   # ---------- 盘后长卡/复盘系 ----------
   - name: "【盘后】盘后复盘"

@@ -107,6 +107,19 @@ def recheck_unlock_enabled() -> bool:
     return os.environ.get("POOL_CALL_RECHECK_UNLOCK", "1") != "0"
 
 
+def all_tradeable_enabled() -> bool:
+    """⛔ 2026-11-10 用户「这些票全部都要有可交易的权限」。
+
+    旧口径：观察池 = `observe_only / buyable=False`，09:25 只有 `state` 类能翻案，
+    `restricted`/`hard` 一律「今天只看不买」——等于**盘后身份一票否决今早竞价**。
+    新口径：候选池里每一只都具备交易资格，**买不买只由 09:25 竞价现场的闸门说了算**
+    （价格/量能/顶部空间/封板质量/stance 名额），不再由盘后分组预先剥夺。
+
+    回退：`POOL_CALL_ALL_TRADEABLE=0` → 逐字回到「只有 state 类能翻案」。
+    """
+    return os.environ.get("POOL_CALL_ALL_TRADEABLE", "1") != "0"
+
+
 def rechecked_entry(row: dict | None) -> bool:
     """09:25 竞价复核**翻案票**的唯一判据（冻结件 / 决策行通用）。
 
@@ -117,6 +130,10 @@ def rechecked_entry(row: dict | None) -> bool:
     """
     if not recheck_unlock_enabled() or not isinstance(row, dict):
         return False
+    if all_tradeable_enabled():
+        # 全池可交易：不再要求 recheck_class == "state"
+        return (row.get("rechecked_from_observe") is True
+                and str(row.get("view") or "") == "participate")
     return (row.get("rechecked_from_observe") is True
             and str(row.get("recheck_class") or "") == "state"
             and str(row.get("view") or "") == "participate")

@@ -54,6 +54,21 @@ def f(v, d=None):
         return d
 
 
+def agg(sel: list[float]) -> dict:
+    """一组收益的汇总（n / 均值 / 中位 / 胜率 / 极值）。空列表 → 只有 n=0。
+
+    2026-11-09 从 `build()` 的闭包提到模块级：`--backfill-t1` 也要用它重算 T+1 汇总，
+    两处各留一份就是两套口径。⛔ 语义未改，`build()` 内调用点逐字不变。
+    """
+    if not sel:
+        return {"n": 0}
+    return {"n": len(sel),
+            "avg": round(statistics.mean(sel), 2),
+            "med": round(statistics.median(sel), 2),
+            "win": round(sum(1 for x in sel if x > 0) / len(sel) * 100, 1),
+            "max": round(max(sel), 2), "min": round(min(sel), 2)}
+
+
 def bars(code: str) -> dict[str, dict]:
     d = jl(KLINE / f"{code}.json")
     return {str(b.get("date")): b for b in (d.get("bars") or []) if b.get("date")}
@@ -140,15 +155,7 @@ def build(date: str, allow_missing: bool = False) -> tuple[dict | None, int]:
 
     tr = [r for r in rows if r["tradable"] and r["au_ret"] is not None]
     rets = [r["au_ret"] for r in tr]
-
-    def agg(sel: list[float]) -> dict:
-        if not sel:
-            return {"n": 0}
-        return {"n": len(sel),
-                "avg": round(statistics.mean(sel), 2),
-                "med": round(statistics.median(sel), 2),
-                "win": round(sum(1 for x in sel if x > 0) / len(sel) * 100, 1),
-                "max": round(max(sel), 2), "min": round(min(sel), 2)}
+    # `agg` 已提到模块级（2026-11-09）：`--backfill-t1` 也要用它重算 T+1 汇总。
 
     by_view: dict[str, dict] = {}
     for vname in ("participate", "watch", "skip"):
@@ -272,12 +279,92 @@ def show(led: dict) -> None:
               f"{'、'.join(r['code'] for r in bad[:6])}")
 
 
+def backfill_t1(lookback: int = 5, write: bool = True) -> int:
+    """回补最近 `lookback` 个交易日的 `t1_ret`（竞价买 → **次日**收盘卖）。
+
+    ## 为什么需要它（2026-11-09 查出的 P1）
+
+    16:00 的自动化跑的是「当日」台账，而 D 日的 `t1_ret` 要等 **D+1 的收盘价**才成立。
+    写 D 日台账那一刻 D+1 还没开盘 ⇒ 最新一天必然是 `n=0`，而且**永远不会自动补上**
+    （16:00 只跑当日，不会回头重算昨天）。实测 11-06 一直 `T+1 n=0`，其余天都有人工跑过。
+
+    ## 只填空，不覆盖
+
+    ⛔ 已有数值的 `t1_ret` 一律不动 —— 这是「不改历史已定稿数字」的铁律。
+    本函数**只重算 `t1_ret` / `t1_date` 两个字段和它的汇总**，`au_ret`（主口径）、
+    `by_dev_band`、`by_view` 等一概不碰，避免一次回补把历史口径也带走。
+
+    ## 缺次日 K 线怎么办
+
+    `t1_ret` 留 `None`（⛔ 不填 0、不拿当日收盘顶），并把该日计入「待补」清单打印出来。
+    """
+    days = net_days()
+    if not days:
+        print("⛔ 无冻结件可读")
+        return 3
+
+    targets = days[-lookback:] if lookback > 0 else days
+    filled = 0
+    touched = 0
+    pending: list[str] = []
+    for d in targets:
+        fp = OUT / f"{d}.json"
+        if not fp.exists():
+            continue                      # 该日台账还没生成过，交给正常 build 去写
+        led = jl(fp)
+        rows = led.get("rows") or []
+        hit = 0
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            if r.get("t1_ret") is not None:
+                continue                  # ⛔ 不覆盖已有值
+            au = f(r.get("auction_price"))
+            code = str(r.get("code") or "")
+            if not (au and code):
+                continue
+            nb = _next_bar({}, code, d)
+            nclose = f((nb or {}).get("close"))
+            if not nclose:
+                continue                  # 次日 K 线未落盘 → 保持 None，计入待补
+            r["t1_ret"] = round((nclose / au - 1) * 100, 2)
+            r["t1_date"] = (nb or {}).get("date")
+            hit += 1
+
+        # 重算 T+1 汇总（只统计可成交票，与 build() 同口径）
+        tr_t1 = [x["t1_ret"] for x in rows
+                 if isinstance(x, dict) and x.get("tradable") and x.get("t1_ret") is not None]
+        led.setdefault("summary", {})["auction_buy_next_close_sell"] = agg(tr_t1)
+        still = [x.get("code") for x in rows
+                 if isinstance(x, dict) and x.get("tradable") and x.get("t1_ret") is None]
+        if still:
+            pending.append(f"{d}（{len(still)} 只待次日 K 线）")
+
+        if hit:
+            filled += hit
+            touched += 1
+            led["t1_backfilled_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if write:
+                fp.write_text(json.dumps(led, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"  {d}  补 {hit} 笔 · T+1 n={led['summary']['auction_buy_next_close_sell'].get('n')}"
+              f"{'  ⏳ ' + ', '.join(still[:3]) + ('…' if len(still) > 3 else '') if still else ''}")
+
+    print(f"\n  回补完成：{touched} 个交易日 / {filled} 笔"
+          f"{'（--check 未落盘）' if not write else ''}")
+    if pending:
+        print(f"  ⏳ 仍待补：{'；'.join(pending)}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date")
     ap.add_argument("--days", type=int, default=0)
     ap.add_argument("--check", action="store_true", help="只校验/打印，不写文件")
     ap.add_argument("--allow-missing", action="store_true", help="允许缺当日 K 线（不推荐）")
+    # 📏 T+1 回补（2026-11-09）：不带值 = 回补最近 5 个交易日
+    ap.add_argument("--backfill-t1", nargs="?", type=int, const=5, default=0, metavar="N",
+                    help="回补最近 N 个交易日的 t1_ret（默认 5；只填空不覆盖）")
     a = ap.parse_args()
 
     days = net_days()
@@ -318,6 +405,15 @@ def main() -> int:
             print(f"\n  {len(allr)} 个交易日：日均 {statistics.mean(allr):+.2f}%"
                   f"／日胜率 {wr:.1f}%（日收益>0 的天数占比）"
                   f"／累计 {sum(allr):+.2f}%（算术）")
+    # 📏 T+1 回补放在最后：先把当日台账 build+落盘（缺当日 K 线会 exit 2，不写半截），
+    #    再回头补历史那些「次日 K 线今天才落盘」的日子。两步互不依赖，失败也不互相污染。
+    if a.backfill_t1:
+        print(f"\n{'='*96}")
+        print(f"T+1 回补（最近 {a.backfill_t1} 个交易日 · 只填空不覆盖）")
+        print(f"{'='*96}")
+        bf = backfill_t1(a.backfill_t1, write=not a.check)
+        rc = rc or bf
+
     return rc
 
 

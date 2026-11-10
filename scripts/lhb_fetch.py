@@ -29,7 +29,7 @@ CACHE = ROOT / "cache"
 # 硬编码失效 → 龙虎榜数据源静默失败）。统一走 common/npx_path.find_npx（运行时解析）。
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from common.npx_path import find_npx  # noqa: E402
+from common.npx_path import find_npx, npx_env  # noqa: E402
 
 NPX = find_npx()
 PKG = "westock-data-skillhub@1.0.5"
@@ -45,8 +45,11 @@ def _run(args: list[str], timeout: int = 30) -> str | None:
         print(f"[lhb_fetch] npx 不可用: {NPX!r}")
         return None
     try:
+        # ⛔ 必须带 npx_env()：用户 ~/.npm 权限损坏时，裸调用会 EPERM 静默失效
+        #    （2026-11-09 龙虎榜断更 41 天的直接原因，见 common/npx_path.py）
         r = subprocess.run([NPX, "-y", PKG] + args,
-                           capture_output=True, text=True, timeout=timeout)
+                           capture_output=True, text=True, timeout=timeout,
+                           env=npx_env())
         if r.returncode != 0:
             print(f"[lhb_fetch] npx 失败 rc={r.returncode}: {args[:2]} | {r.stderr.strip()[:160]}")
             return None
@@ -122,10 +125,13 @@ def run(date: str | None = None) -> dict:
     if raw_hot and ("活跃席位" in raw_hot or "席位ID" in raw_hot):
         out["hotmoney"] = _parse_hotmoney(raw_hot)
     out["generated_ts"] = _bj().isoformat(timespec="seconds")
-    if not out["institution"] and not out["hotmoney"]:
+    out["ok"] = bool(out["institution"] or out["hotmoney"])
+    if not out["ok"]:
+        # ⛔ 未披露/接口异常时**不落盘**：写一个空文件会把「数据缺失」伪装成「今天有文件」，
+        #    新鲜度面板与守护脚本就都看不出来了（09-29 起 41 天无人发现的同类盲区）。
         print(f"[lhb] {date} 龙虎榜未披露或接口异常（披露时间约 18:00-20:00）")
-    else:
-        print(f"[lhb] {date} 机构 {len(out['institution'])} 只 / 游资席位 {len(out['hotmoney'])} 家")
+        return out
+    print(f"[lhb] {date} 机构 {len(out['institution'])} 只 / 游资席位 {len(out['hotmoney'])} 家")
     (CACHE / f"lhb_{date.replace('-', '')}.json").write_text(
         json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
     return out
@@ -133,4 +139,6 @@ def run(date: str | None = None) -> dict:
 
 if __name__ == "__main__":
     import sys
-    run(sys.argv[1] if len(sys.argv) > 1 else None)
+    _out = run(sys.argv[1] if len(sys.argv) > 1 else None)
+    # 退出码给调度/守护用：0=已落盘，2=未披露或抓取失败（⛔ 不再「空数据也 exit 0」）
+    raise SystemExit(0 if _out.get("ok") else 2)
