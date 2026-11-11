@@ -251,6 +251,24 @@ def finalize(relay, watch, *, stage):
             r.update(bucket="watch", bucket_label="观察池",
                      participation_eligibility="observe_only", buyable=False)
             anchors.append(r)
+        elif recheck_class(row) == "state":
+            # 🔁 2026-11-11：状态类的「历史连板修复 / 过筛未过」票，**先留在观察池**，
+            #    09:25 由竞价复核决定要不要翻案（11-06 用户「可以放进来」的落地位）。
+            #    ⛔ 身份仍是 observe_only + buyable=False：进池 ≠ 能买。
+            #    ⛔ 只放 state 类；hard（一字/688/ST/薄封）与 restricted 照旧排除。
+            #    回退：`POOL_KEEP_RECHECK_STATE=0`。
+            if os.environ.get("POOL_KEEP_RECHECK_STATE", "1") == "0":
+                excluded.append({"code": row.get("code"), "name": row.get("name"),
+                                 "stage": stage,
+                                 "reason": "不符合两类观察资格且未获有效接力资格",
+                                 "watch_reason": row.get("watch_reason")})
+            else:
+                r = deepcopy(row)
+                r.update(bucket="watch", bucket_label="待复核",
+                         participation_eligibility="observe_only", buyable=False,
+                         watch_only=True, watch_group=row.get("watch_group") or "待复核",
+                         watch_reason=row.get("watch_reason") or "状态类降级，09:25 竞价复核")
+                anchors.append(r)
         else:
             excluded.append({"code": row.get("code"), "name": row.get("name"), "stage": stage,
                              "reason": "不符合两类观察资格且未获有效接力资格", "high_win_gate": row.get("high_win_gate"),

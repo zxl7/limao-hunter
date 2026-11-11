@@ -541,3 +541,33 @@ def test_merge_pools_blocks_readded_zbc_row():
     kept = {r["name"] for r in relay + watch}
     assert "炸九次" not in kept and "炸两次" in kept
     assert any(d.get("dropped_kind") == "zbc" and d.get("name") == "炸九次" for d in dropped)
+
+
+def test_big_line_cap_five():
+    """2026-11-11 用户：「涨停家数大于 3 的，可以考虑前 5、前 6」→ 大家数线放宽到 5。"""
+    relay = [_row(f"60000{i}", f"机器人{i}", 2, 8 - i, f"0930{i}0") for i in range(1, 7)]
+    r, w, diag = pa.admit(relay, [])
+    kept = {x["name"] for x in r + w}
+    assert len(kept) == 5, kept
+    g = next(x for x in diag["groups"] if x.get("mates", 0) >= 4)
+    assert g["cap"] == 5
+
+
+def test_small_line_keeps_three():
+    """小题材（家数 < 4）仍按 3 只，不被大家数放宽连坐。"""
+    relay = [_row("600001", "龙", 2, 5, "093000"), _row("600002", "二", 2, 5, "093100"),
+             _row("600003", "三", 2, 5, "093200")]
+    r, w, diag = pa.admit(relay, [])
+    assert len({x["name"] for x in r + w}) == 3
+
+
+def test_big_line_cap_switch_rolls_back():
+    """回退：POOL_ADMIT_PER_LINE_BIG=3 → 大家数线回到 3 只。"""
+    import os
+    os.environ[pa.BIG_LINE_CAP_ENV] = "3"
+    try:
+        relay = [_row(f"60000{i}", f"机器人{i}", 2, 8 - i, f"0930{i}0") for i in range(1, 7)]
+        r, w, _ = pa.admit(relay, [])
+        assert len({x["name"] for x in r + w}) == 3
+    finally:
+        os.environ.pop(pa.BIG_LINE_CAP_ENV, None)

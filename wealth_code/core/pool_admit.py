@@ -61,6 +61,10 @@ ENABLED_ENV = "POOL_ADMIT_ENABLED"
 PER_LINE_ENV = "POOL_ADMIT_PER_LINE"
 MIN_MATES_ENV = "POOL_ADMIT_MIN_MATES"
 MAX_ZBC_ENV = "POOL_ADMIT_MAX_ZBC"
+# 🎯 2026-11-11 用户「涨停家数大于 3 的，感觉都可以考虑前 5、前 6」：
+#    大家数题材放宽到 5 只（小题材仍按 PER_LINE=3）。回退 `POOL_ADMIT_PER_LINE_BIG=3`。
+BIG_LINE_CAP_ENV = "POOL_ADMIT_PER_LINE_BIG"
+BIG_LINE_MATES_ENV = "POOL_ADMIT_BIG_MATES"
 
 DEFAULT_PER_LINE = 3
 # ↳ 2026-11-11 用户「C 这个可以放宽到三个身位」→ 默认 3（每题材留前 3）。
@@ -99,6 +103,22 @@ def per_line() -> int:
     except (TypeError, ValueError):
         return DEFAULT_PER_LINE
     return n if n >= 0 else 0
+
+
+def big_line_cap() -> int:
+    """大家数题材（家数 ≥ `big_line_mates()`）的每线上限。默认 5。"""
+    try:
+        return max(0, int(str(os.environ.get(BIG_LINE_CAP_ENV, 5)).strip()))
+    except (TypeError, ValueError):
+        return 5
+
+
+def big_line_mates() -> int:
+    """从几家起算「大家数题材」。默认 4（用户「涨停家数大于 3」）。"""
+    try:
+        return max(2, int(str(os.environ.get(BIG_LINE_MATES_ENV, 4)).strip()))
+    except (TypeError, ValueError):
+        return 4
 
 
 def max_zbc() -> float:
@@ -475,6 +495,10 @@ def admit(relay: list[dict[str, Any]],
             group_diag.append({"theme": th, "kept": len(ranked), "dropped": 0,
                                "mates": mates, "note": "small_line"})
             continue
+        # ⛔ 调用方显式给了 per_line_cap 时按它办（测试/回退口径），不再套大家数放宽
+        _cap_here = cap
+        if per_line_cap is None and mates >= big_line_mates() and big_line_cap() > 0:
+            _cap_here = big_line_cap()
         if unlimited:
             # 2026-11-04 用户解除每线两只限制：整条线全留（不再有「线下后排」这一刀）。
             keep.extend(ranked)
@@ -484,13 +508,14 @@ def admit(relay: list[dict[str, Any]],
                 "dropped_names": [], "note": "per_line_unlimited",
             })
             continue
-        keep.extend(ranked[:cap])
-        dropped.extend(ranked[cap:])
+        keep.extend(ranked[:_cap_here])
+        dropped.extend(ranked[_cap_here:])
         group_diag.append({
-            "theme": th, "mates": mates, "kept": min(cap, len(ranked)),
-            "dropped": max(0, len(ranked) - cap),
-            "kept_names": [str(r.get("name") or "") for r in ranked[:cap]],
-            "dropped_names": [str(r.get("name") or "") for r in ranked[cap:]],
+            "theme": th, "mates": mates, "cap": _cap_here,
+            "kept": min(_cap_here, len(ranked)),
+            "dropped": max(0, len(ranked) - _cap_here),
+            "kept_names": [str(r.get("name") or "") for r in ranked[:_cap_here]],
+            "dropped_names": [str(r.get("name") or "") for r in ranked[_cap_here:]],
         })
 
     # ── 收敛后重新分桶（⛔ 不再沿用原 bucket）─────────────────────────────
