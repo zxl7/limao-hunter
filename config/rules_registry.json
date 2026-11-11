@@ -1,0 +1,376 @@
+{
+ "schema": "rules_registry_v1",
+ "updated": "2026-11-11",
+ "note": "判据单一源：新增判据必须先登记；不在表里的判据视为不存在。",
+ "groups": [
+  {
+   "name": "准入闸（决定买不买）",
+   "rules": [
+    {
+     "id": "gate.entry_max_gap",
+     "name": "高开幅度硬线",
+     "kind": "gate",
+     "switch": "USER_ENTRY_MAX_GAP",
+     "default": "5%",
+     "status": "active",
+     "since": "2026-08",
+     "what": "绝对模式下竞价高开超过上限即放弃；relative 模式改按「物理封死线」判。",
+     "source": "用户 2026-08-17「大于区间的都要作为超预期」；11-05 删除绝对 5% 幅度线",
+     "rollback": "USER_ENTRY_MAX_GAP=0"
+    },
+    {
+     "id": "gate.seal_auction",
+     "name": "竞价封死/一字",
+     "kind": "gate",
+     "switch": "—",
+     "default": "—",
+     "status": "active",
+     "since": "2026-08",
+     "what": "竞价已封在涨停附近 → 买不进，skip。",
+     "source": "用户「一字板不参与」",
+     "rollback": "—"
+    },
+    {
+     "id": "gate.gap_room",
+     "name": "顶部空间（离涨停还有几个点）",
+     "kind": "gate",
+     "switch": "POOL_CALL_HIGH_GAP_REJECT",
+     "default": "1",
+     "status": "active",
+     "since": "2026-11-06",
+     "what": "room = 涨停幅度 − 今开幅；不足涨停幅度一半 → 不追（赔率不足）。",
+     "source": "用户 11-06「避开开的特别高又没有资格和行情秒板的票」",
+     "rollback": "POOL_CALL_HIGH_GAP_REJECT=0"
+    },
+    {
+     "id": "gate.volume",
+     "name": "量能门（竞价额 / 需要额）",
+     "kind": "gate",
+     "switch": "—",
+     "default": "—",
+     "status": "active",
+     "since": "2026-08",
+     "what": "竞价额相对昨日成交额的动态下限；档 full/soft/dry。",
+     "source": "",
+     "rollback": "—"
+    },
+    {
+     "id": "gate.expectation",
+     "name": "逐票预期区间 DEV",
+     "kind": "gate",
+     "switch": "—",
+     "default": "—",
+     "status": "active",
+     "since": "2026-08",
+     "what": "今开相对该票自身质量预期的偏离；低于下沿 → 放弃。",
+     "source": "",
+     "rollback": "—"
+    },
+    {
+     "id": "gate.core_first",
+     "name": "龙一闸（同题村核心优先）",
+     "kind": "gate",
+     "switch": "POOL_CALL_CORE_GATE",
+     "default": "1",
+     "status": "active",
+     "since": "2026-09-21",
+     "what": "同真实题材核心不是它 → 只观察。",
+     "source": "用户「推到跟风就是错」",
+     "rollback": "POOL_CALL_CORE_GATE=0"
+    },
+    {
+     "id": "gate.backrow",
+     "name": "后排接力闸",
+     "kind": "gate",
+     "switch": "POOL_CALL_BACKROW_GATE",
+     "default": "1",
+     "status": "active",
+     "since": "2026-10-21",
+     "what": "同线有更靠前的票在 → 后排不占名额。",
+     "source": "用户「后排接力严格要谨慎」",
+     "rollback": "POOL_CALL_BACKROW_GATE=0"
+    },
+    {
+     "id": "gate.anchor",
+     "name": "锚点闸（这条线今天能不能碰）",
+     "kind": "gate",
+     "switch": "POOL_CALL_ANCHOR_GATE",
+     "default": "1",
+     "status": "active",
+     "since": "2026-10-21",
+     "what": "锚点破预期 → 整条线今天先别碰。",
+     "source": "",
+     "rollback": "POOL_CALL_ANCHOR_GATE=0"
+    },
+    {
+     "id": "gate.midboard",
+     "name": "中位股闸（3~5 板两头不靠）",
+     "kind": "gate",
+     "switch": "POOL_CALL_MIDBOARD_GATE",
+     "default": "1",
+     "status": "active",
+     "since": "2026-10-21",
+     "what": "既非最高板、也非低位 → 不做。",
+     "source": "",
+     "rollback": "POOL_CALL_MIDBOARD_GATE=0"
+    },
+    {
+     "id": "gate.defense",
+     "name": "防守闸（派发/抽血/高位/老龙）",
+     "kind": "gate",
+     "switch": "POOL_CALL_DEFENSE_GATE",
+     "default": "1",
+     "status": "active",
+     "since": "2026-10-08",
+     "what": "四类硬伤任一命中即拦。",
+     "source": "",
+     "rollback": "POOL_CALL_DEFENSE_GATE=0"
+    },
+    {
+     "id": "gate.thin_seal",
+     "name": "薄封闸",
+     "kind": "gate",
+     "switch": "POOL_CALL_THIN_SEAL_TOP",
+     "default": "1",
+     "status": "active",
+     "since": "2026-09",
+     "what": "封单/流通过薄 → 不接。",
+     "source": "",
+     "rollback": "POOL_CALL_THIN_SEAL_TOP=0"
+    },
+    {
+     "id": "gate.dragon",
+     "name": "龙一身份闸",
+     "kind": "gate",
+     "switch": "POOL_CALL_DRAGON_GATE",
+     "default": "1",
+     "status": "active",
+     "since": "2026-09",
+     "what": "只有该线龙一/核心可参与名额竞争。",
+     "source": "",
+     "rollback": "POOL_CALL_DRAGON_GATE=0"
+    }
+   ]
+  },
+  {
+   "name": "排序与名额",
+   "rules": [
+    {
+     "id": "rank.leader_key",
+     "name": "同题材身位排序键",
+     "kind": "rank",
+     "switch": "—",
+     "default": "—",
+     "status": "active",
+     "since": "2026-11-04",
+     "what": "板数 → 上一波高度 → 封板时段 → 封单 → 带动 → 首封 → 综合分 → 代码。",
+     "source": "用户 11-04「按照打分来排序」",
+     "rollback": "—"
+    },
+    {
+     "id": "rank.theme_strength",
+     "name": "板块强度（市场级）",
+     "kind": "rank",
+     "switch": "POOL_CALL_MARKET_THEME_RANK",
+     "default": "1",
+     "status": "active",
+     "since": "2026-11-11",
+     "what": "高度/梯队 + 承接质量为主，家数弱辅助；只做展示排序。",
+     "source": "用户 11-11「先看最强/前三强板块」",
+     "rollback": "POOL_CALL_MARKET_THEME_RANK=0"
+    },
+    {
+     "id": "rank.drop_backrow",
+     "name": "后排不进池（身位≥5）",
+     "kind": "rank",
+     "switch": "POOL_CALL_DROP_BACKROW_RANK",
+     "default": "5",
+     "status": "active",
+     "since": "2026-11-10",
+     "what": "同题材身位 ≥5 的候选盘后剔出池。",
+     "source": "用户 11-10 方案 B",
+     "rollback": "POOL_CALL_DROP_BACKROW_RANK=0"
+    },
+    {
+     "id": "rank.single_pool",
+     "name": "单接力池 + 唯一 7 板高度观察",
+     "kind": "rank",
+     "switch": "POOL_SINGLE_POOL",
+     "default": "1",
+     "status": "active",
+     "since": "2026-11-10",
+     "what": "取消两池，全部进接力池；全市场唯一 ≥7 板单独观察。",
+     "source": "用户 11-10「不要观察池和接力池了」",
+     "rollback": "POOL_SINGLE_POOL=0"
+    },
+    {
+     "id": "rank.all_tradeable",
+     "name": "全池可交易",
+     "kind": "rank",
+     "switch": "POOL_CALL_ALL_TRADEABLE",
+     "default": "1",
+     "status": "active",
+     "since": "2026-11-10",
+     "what": "观察票保留 observe_only，但 09:25 走完整裁决链。",
+     "source": "用户 11-10「这些票全部都要有可交易的权限」",
+     "rollback": "POOL_CALL_ALL_TRADEABLE=0"
+    },
+    {
+     "id": "rank.even_allocation",
+     "name": "名额均分 + 单票上限",
+     "kind": "position",
+     "switch": "POOL_CALL_EVEN_ALLOCATION",
+     "default": "1",
+     "status": "active",
+     "since": "2026-10",
+     "what": "N 只参与 → 每票 position_cap = min(50%, 100%/N)。",
+     "source": "",
+     "rollback": "POOL_CALL_EVEN_ALLOCATION=0"
+    }
+   ]
+  },
+  {
+   "name": "数据与语义",
+   "rules": [
+    {
+     "id": "data.intraday_guard",
+     "name": "盘中空池不进链路",
+     "kind": "data",
+     "switch": "—",
+     "default": "—",
+     "status": "active",
+     "since": "2026-11-11",
+     "what": "_read_zt 拒绝 intraday_only / 半成品归档；避免「盘中空池冒充收盘池」→ 全员误判断板。",
+     "source": "11-11 光洋被写「已断板」事故",
+     "rollback": "—"
+    },
+    {
+     "id": "data.broken_semantics",
+     "name": "断板语义 = 上一波已断",
+     "kind": "data",
+     "switch": "—",
+     "default": "—",
+     "status": "active",
+     "since": "2026-11-11",
+     "what": "broken 只表示上一波更高核心已断，不表示今天不在板。",
+     "source": "",
+     "rollback": "—"
+    },
+    {
+     "id": "data.ladder_snapshot",
+     "name": "板块强度 + 同题材身位每日快照",
+     "kind": "data",
+     "switch": "—",
+     "default": "—",
+     "status": "active",
+     "since": "2026-11-11",
+     "what": "theme_strength_<date>.json / ladder_rank_<date>.json（三套排名）。",
+     "source": "",
+     "rollback": "—"
+    },
+    {
+     "id": "data.breadth_snapshot",
+     "name": "竞价广度每日快照",
+     "kind": "data",
+     "switch": "—",
+     "default": "—",
+     "status": "active",
+     "since": "2026-11-11",
+     "what": "auction_breadth_<date>.json：n/水下/深水/中位/前五中位/分化。",
+     "source": "",
+     "rollback": "—"
+    },
+    {
+     "id": "data.momentum_5_20",
+     "name": "5/20 日累计涨幅字段",
+     "kind": "data",
+     "switch": "—",
+     "default": "—",
+     "status": "active",
+     "since": "2026-11-11",
+     "what": "候选行新增 ret_5d_pct / ret_20d_pct（只落字段，不参与判据）。",
+     "source": "",
+     "rollback": "—"
+    },
+    {
+     "id": "data.shadow_rank",
+     "name": "影子排序记录",
+     "kind": "data",
+     "switch": "—",
+     "default": "—",
+     "status": "active",
+     "since": "2026-11-11",
+     "what": "shadow_rank_<date>.json：现行顺序 vs 板块内身位顺序，不参与买入。",
+     "source": "",
+     "rollback": "—"
+    }
+   ]
+  },
+  {
+   "name": "展示与口径",
+   "rules": [
+    {
+     "id": "show.trade_states",
+     "name": "三态输出 A/B/C",
+     "kind": "display",
+     "switch": "—",
+     "default": "—",
+     "status": "active",
+     "since": "2026-11-11",
+     "what": "A 可买 / B 核心在·价不合适（不发替代资格）/ C 核心失效。",
+     "source": "用户 11-11「不能都塞进买或放弃」",
+     "rollback": "—"
+    },
+    {
+     "id": "show.substitute",
+     "name": "替补声明",
+     "kind": "display",
+     "switch": "—",
+     "default": "—",
+     "status": "active",
+     "since": "2026-11-11",
+     "what": "核心没买却买同线另一只 → 必须声明独立依据。",
+     "source": "",
+     "rollback": "—"
+    },
+    {
+     "id": "show.breadth_line",
+     "name": "卡面广度行",
+     "kind": "display",
+     "switch": "POOL_CALL_BREADTH",
+     "default": "1",
+     "status": "active",
+     "since": "2026-11-11",
+     "what": "风向标每条线追加「广度 n 只·水下 x（y%）·中位 z%」；n<8 不判。",
+     "source": "",
+     "rollback": "POOL_CALL_BREADTH=0"
+    },
+    {
+     "id": "show.dip_hint",
+     "name": "低吸提示（不执行）",
+     "kind": "display",
+     "switch": "—",
+     "default": "—",
+     "status": "active",
+     "since": "2026-11-11",
+     "what": "只给龙一/核心/板块龙；参考位=竞价价×0.97；「买不买你定」。",
+     "source": "用户 11-11「我自己来决定低吸不低吸」",
+     "rollback": "—"
+    },
+    {
+     "id": "show.time_scope",
+     "name": "时点边界声明",
+     "kind": "display",
+     "switch": "—",
+     "default": "—",
+     "status": "active",
+     "since": "2026-11-11",
+     "what": "卡面明写「只对 09:25 有效；盘中回落交人工」。",
+     "source": "",
+     "rollback": "—"
+    }
+   ]
+  }
+ ],
+ "count": 29
+}
