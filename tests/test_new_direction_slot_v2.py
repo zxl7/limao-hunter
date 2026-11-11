@@ -113,7 +113,7 @@ def test_early_seal_quality_passes():
 
 
 def test_late_seal_is_rejected():
-    """13:11 才封板的票 = 尾盘偷袭，不进槽（11-11 PCB 板 5 只全在此列）。"""
+    """线里已有早封票时，13:11 才封的票仍不进槽（口子只给「全线晚封」）。"""
     picked, diag = nd.build([cand("600001", "尾盘票", fbt="131100")], optical_line())
     assert picked == []
     assert "晚于" in diag["skipped"][0]["reason"]
@@ -187,3 +187,38 @@ def test_switch_off_returns_empty(monkeypatch):
     monkeypatch.setenv("POOL_NEW_DIRECTION_FIRST_BOARD", "0")
     picked, diag = nd.build([cand("600001", "票")], optical_line())
     assert picked == [] and diag["enabled"] is False
+
+
+def pcb_line(n=5, fbt="134400"):
+    """复刻 11-11：PCB 板 5 家全首板、**全部午后封板**、256 亿。"""
+    return [zt(f"00291{i}", f"PCB{i}", fbt=fbt, cje=50.0, theme="PCB板") for i in range(n)]
+
+
+def test_late_seal_line_gets_one_slot():
+    """2026-11-11 用户「可以留口子」：整条线全晚封时，留 1 只。
+
+    ⛔ 前提：这只票除封板时间外全部合格（过筛/非一字/炸板/身位）。
+    """
+    import os
+    os.environ.pop("POOL_NDFB_LATE_SEAL", None)
+    rows = pcb_line()
+    cands = [cand(r["dm"], r["mc"], theme="PCB板", fbt=r["fbt"], cje=50.0) for r in rows]
+    picked, _diag = nd.build(cands, rows, screened_codes={r["dm"] for r in rows},
+                             drop_backrow_rank=5)
+    late = [r for r in picked if r.get("new_direction_late")]
+    assert len(late) == 1, picked
+    assert late[0]["new_direction_line"] == "PCB板"
+
+
+def test_late_seal_switch_off():
+    """回退：POOL_NDFB_LATE_SEAL=0 → 晚封口子关闭，一只都不留。"""
+    import os
+    os.environ["POOL_NDFB_LATE_SEAL"] = "0"
+    try:
+        rows = pcb_line()
+        cands = [cand(r["dm"], r["mc"], theme="PCB板", fbt=r["fbt"], cje=50.0) for r in rows]
+        picked, _ = nd.build(cands, rows, screened_codes={r["dm"] for r in rows},
+                             drop_backrow_rank=5)
+        assert not [r for r in picked if r.get("new_direction_late")]
+    finally:
+        os.environ.pop("POOL_NDFB_LATE_SEAL", None)

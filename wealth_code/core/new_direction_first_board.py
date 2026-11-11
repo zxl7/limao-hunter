@@ -115,6 +115,18 @@ def max_line_boards() -> int:
     return int(_num_env(MAX_LINE_BOARDS_ENV, DEFAULT_MAX_LINE_BOARDS))
 
 
+LATE_SEAL_ENV = "POOL_NDFB_LATE_SEAL"
+
+
+def late_seal_enabled() -> bool:
+    """线强但全线晚封时，是否留 1 只口子（2026-11-11 用户「可以留口子」）。
+
+    ⛔ 只放「唯一不合格项是封板时间」的票：过筛、非一字、炸板、身位仍须全过。
+    ⛔ 每条线最多 1 只，且只在**整条线没有任何早封票入池**时才启用。
+    """
+    return str(os.environ.get(LATE_SEAL_ENV, "1")).strip().lower() not in ("0", "false", "off", "no")
+
+
 def max_fbt_min() -> int:
     return int(_num_env(MAX_FBT_ENV, DEFAULT_MAX_FBT))
 
@@ -302,6 +314,7 @@ def build(
     cap_row = int(drop_backrow_rank or 0)
 
     by_line: dict[str, list[dict[str, Any]]] = {}
+    late: dict[str, list[dict[str, Any]]] = {}
     for cand in (candidates or []):
         if not isinstance(cand, dict):
             continue
@@ -340,6 +353,10 @@ def build(
             if dr is not None and dr >= cap_row:
                 why.append(f"同线身位第 {int(dr)}")
         if why:
+            # 🕐 只差「封板晚」→ 记入 late 池，线强时留一个口子（2026-11-11 用户「可以留口子」）
+            if late_seal_enabled() and all(("晚于" in w) for w in why):
+                late.setdefault(line, []).append(
+                    {"_cand": cand, "_fbt": f, "_cje": cje, "_late": True})
             diag["skipped"].append({"code": code, "name": name, "line": line,
                                     "reason": "；".join(why)})
             continue
@@ -372,6 +389,40 @@ def build(
                               f" —— 新方向首板，能不能接由明早竞价定"),
             )
             picked.append(row)
+
+    # 🕐 晚封口子：整条线没有早封票入池时，留 1 只「只差封板时间」的最早封板票。
+    _late_rows: list[dict[str, Any]] = []
+    if late_seal_enabled():
+        for line, arr in late.items():
+            if by_line.get(line):
+                continue                     # 这条线已有早封票入池，口子不占位
+            _line_first = lines[line].get("first_fbt_min")
+            if _line_first is None or _line_first <= cap_fbt:
+                # ⛔ 只有「整条线最早封板都晚于门槛」才算全线晚封；线上有早封票就不开口子
+                continue
+            arr.sort(key=lambda x: (x["_fbt"], -x["_cje"]))
+            x = arr[0]
+            c = x["_cand"]
+            row = dict(c)
+            row.update(
+                bucket="new_direction", bucket_label="新方向首板（晚封）",
+                participation_eligibility="relay_candidate", buyable=True, watch_only=False,
+                new_direction_line=line, new_direction_late=True,
+                new_direction_fbt=_hhmm(x["_fbt"]),
+                new_direction_line_members=lines[line]["members"],
+                new_direction_line_amount_yi=lines[line]["amount_yi"],
+                watch_group="新方向首板",
+                watch_reason=(f"{line} 整条线 {lines[line]['members']} 家全首板、"
+                              f"成交额 {lines[line]['amount_yi']:.0f} 亿（线够强），"
+                              f"但全线都是午后封板；本票 {_hhmm(x['_fbt'])} 封板、已过过筛"
+                              f" —— 晚封留一个口子，明日先观察、能不能接由竞价定"),
+            )
+            _late_rows.append(row)
+            diag.setdefault("late_seal_picked", []).append(
+                {"code": row.get("code"), "name": row.get("name"), "line": line,
+                 "fbt": _hhmm(x["_fbt"])})
+    if _late_rows:
+        picked.extend(_late_rows)
 
     # 全局名额：按线成交额（线越硬越先）→ 线内封板时间
     _line_order = {s["line"]: -s["amount_yi"] for s in lines.values()}
