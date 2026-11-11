@@ -1036,7 +1036,21 @@ def main():
     except Exception as e:
         dg_msg = f"dragon_gene ERR:{e}"
 
-    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {arch_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {gg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | {th_msg} | {ld_msg} | {technical_msg} | {sg_msg} | {dg_msg} | pruned={removed}")
+    # 16) 🧭 板块强度 + 同题材身位快照（2026-11-11 用户方案 P0）。
+    #     纯派生数据：只读 zt_history / theme_snapshot / kline_qfq，写两份 cache JSON。
+    #     ⛔ 不参与任何买入判据；失败只降级，不阻断复盘主流程。
+    #     为什么要每天落：板块强度/身位以前算完就丢，没有历史 → 半年后无法回测。
+    try:
+        import subprocess as _sp3
+        _tl = _sp3.run([sys.executable, str(Path(__file__).resolve().parent / "snapshot_theme_ladder.py"),
+                        "--date", today, "--quiet"],
+                       capture_output=True, text=True, timeout=120)
+        tl2_msg = ("theme_ladder ok" if _tl.returncode == 0
+                   else f"ERR:rc={_tl.returncode} {(_tl.stderr or '').strip()[:60]}")
+    except Exception as e:
+        tl2_msg = f"theme_ladder ERR:{e}"
+
+    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {arch_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {gg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | {th_msg} | {ld_msg} | {technical_msg} | {sg_msg} | {dg_msg} | {tl2_msg} | pruned={removed}")
 
 
 if __name__ == "__main__":
