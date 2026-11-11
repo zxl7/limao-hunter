@@ -1824,8 +1824,17 @@ def run_eod(
             _ti = _theme_map_all.get(_zc) if _zc else None
             if _ti and _ti.get("theme"):
                 _z["core_theme"] = _ti.get("theme")
+                # 🏷 归并名（2026-11-11 用户「题材一定要稳住」）：`theme` 是细名
+                #    （创新药/医疗服务/医药…），`theme_base` 是同义归并后的稳定名。
+                #    判「同题材身位/同线关系」时应优先用 base，避免同义换名造成假漂移。
+                _z["theme_base"] = str(_ti.get("theme_base") or _ti.get("theme") or "")
+                # 🏷 题材来源留痕（2026-11-11 用户「题材一定要稳住」）：
+                #    snapshot = 题材库/快照命中（真题材）；sector = 只能拿到行业名兜底。
+                #    卡面必须把「行业兜底」标出来，⛔ 不能让行业名冒充题材。
+                _z["theme_source"] = "snapshot"
             else:
                 _z.setdefault("core_theme", "")
+                _z["theme_source"] = "sector"
     except Exception as _e:
         _theme_meta = {"source": "error", "count": 0, "error": str(_e)}
         pass  # 题材接口失败 → pool 行无 core_theme，回退行业映射（不编造）

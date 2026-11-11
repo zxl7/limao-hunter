@@ -2324,8 +2324,13 @@ def _buy_indicator_lines(r: dict, oc: dict, v: dict) -> list[str]:
     ind = str(r.get("industry_sector") or r.get("sector") or "").strip()
     mates = r.get("theme_mates_cnt")
     p1: list[str] = []
+    # 🏷 2026-11-11 用户「题材一定要稳住」：`theme_source=sector` 表示这只票的「题材」
+    #    其实是**行业兜底**（题材库没覆盖到）。必须标出来，⛔ 不能让它冒充题材——
+    #    否则读卡的人会以为「焦炭Ⅱ」是一条炒作线（它只是行业）。
+    _theme_fallback = str(r.get("theme_source") or "") == "sector"
     if theme and theme not in ("—", "其他"):
-        _t = theme + (f"（{logic}）" if logic and logic not in ("—", theme) else "")
+        _t = theme + ("（行业兜底·未归题材）" if _theme_fallback else "")
+        _t += (f"（{logic}）" if logic and logic not in ("—", theme) else "")
         # 题材是分组前提，不是权重项 → 灰；但值本身要醒目，用加粗
         p1.append(f" <text_tag color='{C_HINT}'>{_t}</text_tag>")
     if ind and ind != theme:
