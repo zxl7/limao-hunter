@@ -1,6 +1,6 @@
 {
  "schema": "skill_drift_baseline_v1",
- "generated_at": "2026-11-11T17:56:28+08:00",
+ "generated_at": "2026-11-11T19:16:49+08:00",
  "note": "技能正文「唯一源词」词频基线（棘轮：只许降不许升）。阈值唯一源 = config/shared_rules.md；要增加副本必须 --update 并说明理由。",
  "scope": [
   "财神-",
