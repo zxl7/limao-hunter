@@ -332,7 +332,14 @@ def test_real_shape_2026_10_20():
         _row("002929", "润建股份", 2, 0, "142000", "AI算力", 4, 37.09),
     ]
     relay, watch = rows[:3], rows[3:]
-    r, w, diag = pa.admit(relay, watch, per_line_cap=2)
+    # 🧬 2026-11-11：股性闸会砍掉这些历史票（现代码里它们没有基因档案以外的依据），
+    #    本用例只锁「每线 2 只」的形状，故显式关闭股性闸。
+    import os as _os
+    _os.environ["POOL_ADMIT_GENE_MIN_ZT"] = "0"
+    try:
+        r, w, diag = pa.admit(relay, watch, per_line_cap=2)
+    finally:
+        _os.environ.pop("POOL_ADMIT_GENE_MIN_ZT", None)
     # ⚠️ 2026-11-03：首板闸上线后 8 → 6。博通集成/南威软件都是 1 板且带动仅 2 家，
     #    按「首板要有带动才算 1进2 候选」被剔；要回到 8 只请设
     #    POOL_ADMIT_FIRST_BOARD_MIN_CARRY=0。
@@ -583,3 +590,49 @@ def test_first_board_observe_only_in_merge():
     tp.update({"participation_eligibility": "relay_candidate", "buyable": True})
     relay, _w, _d, _h = _merge_pools([tp], [], market_rows=[])
     assert [r["name"] for r in relay] == ["二板"]
+
+
+def test_gene_gate_drops_weak_stock():
+    """2026-11-11 用户「股性差的不要推」：涨停少 + 从没连过板 → 不进池。
+
+    用东方创业（600278）真实基因：近一年涨停 2 次、最高 2 连板 → 应被砍。
+    """
+    import json as _json
+    from pathlib import Path as _P
+    from core import pool_admit as _pa
+    real = _P(_pa.__file__).resolve().parents[2] / "cache" / "zt_genes" / "gene_600278.json"
+    if not real.exists():
+        import pytest
+        pytest.skip("缺 600278 基因档案")
+    row = _row("600278", "东方创业", 2, 5, "095757")
+    import os
+    env = os.environ.get(_pa.GENE_MIN_ZT_ENV)
+    os.environ.pop(_pa.GENE_MIN_ZT_ENV, None)
+    try:
+        r, w, diag = _pa.admit([row], [])
+        assert not {x["name"] for x in r + w}
+        assert "东方创业" in diag["gene_dropped"]
+    finally:
+        if env is not None:
+            os.environ[_pa.GENE_MIN_ZT_ENV] = env
+
+
+def test_gene_gate_keeps_strong_stock():
+    """襄阳型（涨停 9 次 / 最高 5 连板）不受股性闸影响。"""
+    from core import pool_admit as _pa
+    row = _row("000678", "襄阳轴承", 1, 5, "095748")
+    r, w, _ = _pa.admit([row], [])
+    assert {x["name"] for x in r + w} == {"襄阳轴承"}
+
+
+def test_gene_gate_switch_off():
+    """回退：POOL_ADMIT_GENE_MIN_ZT=0 → 股性闸关闭。"""
+    import os
+    from core import pool_admit as _pa
+    os.environ[_pa.GENE_MIN_ZT_ENV] = "0"
+    try:
+        row = _row("600278", "东方创业", 2, 5, "095757")
+        r, w, _ = _pa.admit([row], [])
+        assert {x["name"] for x in r + w} == {"东方创业"}
+    finally:
+        os.environ.pop(_pa.GENE_MIN_ZT_ENV, None)

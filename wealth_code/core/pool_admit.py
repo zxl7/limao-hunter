@@ -65,6 +65,12 @@ MAX_ZBC_ENV = "POOL_ADMIT_MAX_ZBC"
 #    大家数题材放宽到 5 只（小题材仍按 PER_LINE=3）。回退 `POOL_ADMIT_PER_LINE_BIG=3`。
 BIG_LINE_CAP_ENV = "POOL_ADMIT_PER_LINE_BIG"
 BIG_LINE_MATES_ENV = "POOL_ADMIT_BIG_MATES"
+# 🧬 股性闸（2026-11-11 用户「股性差的就不要推了，第二天带不走利润」）：
+#    近一年涨停 <3 次 **且** 历史最高连板 ≤2 → 不进池（缺基因档案不判）。
+#    回退：`POOL_ADMIT_GENE_MIN_ZT=0` 关闭。
+GENE_MIN_ZT_ENV = "POOL_ADMIT_GENE_MIN_ZT"
+GENE_MAX_LBC_ENV = "POOL_ADMIT_GENE_MAX_LBC"
+GENE_DIR = "zt_genes"
 
 DEFAULT_PER_LINE = 3
 # ↳ 2026-11-11 用户「C 这个可以放宽到三个身位」→ 默认 3（每题材留前 3）。
@@ -119,6 +125,33 @@ def big_line_mates() -> int:
         return max(2, int(str(os.environ.get(BIG_LINE_MATES_ENV, 4)).strip()))
     except (TypeError, ValueError):
         return 4
+
+
+def gene_min_zt() -> int:
+    """股性闸：近一年涨停次数下限（含）。0 = 关闭该闸。"""
+    try:
+        return max(0, int(str(os.environ.get(GENE_MIN_ZT_ENV, 3)).strip()))
+    except (TypeError, ValueError):
+        return 3
+
+
+def gene_max_lbc() -> int:
+    """股性闸：历史最高连板上限（含）。只有 `zt_n < min` **且** `max_lbc <= 上限` 才砍。"""
+    try:
+        return max(1, int(str(os.environ.get(GENE_MAX_LBC_ENV, 2)).strip()))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _gene_of(code: str) -> dict | None:
+    """读个股基因档案；缺失/损坏 → None（⛔ 缺数据不判，不因此砍票）。"""
+    from pathlib import Path as _P
+    import json as _json
+    root = _P(__file__).resolve().parents[2]
+    try:
+        return _json.loads((root / "cache" / GENE_DIR / f"gene_{code}.json").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def max_zbc() -> float:
@@ -458,6 +491,26 @@ def admit(relay: list[dict[str, Any]],
         _kept.append(r)
     pool = _kept
 
+    # 🧬 股性闸（2026-11-11 用户「股性差的不要推」）：涨停少 + 从没连过板 → 不进池。
+    _g_min, _g_lbc = gene_min_zt(), gene_max_lbc()
+    gene_dropped: list[str] = []
+    if _g_min > 0:
+        _g_keep: list[dict[str, Any]] = []
+        for r in pool:
+            _code = str((r or {}).get("code") or "")
+            _g = _gene_of(_code) if _code else None
+            if isinstance(_g, dict):
+                try:
+                    _zt_n = int(_g.get("zt_n") or 0)
+                    _lbc = int(_g.get("max_lbc") or 0)
+                except (TypeError, ValueError):
+                    _zt_n, _lbc = 10, 10      # 解析失败 → 当正常，不砍
+                if _zt_n < _g_min and _lbc <= _g_lbc:
+                    gene_dropped.append(str((r or {}).get("name") or _code))
+                    continue
+            _g_keep.append(r)
+        pool = _g_keep
+
     groups: dict[str, list[dict[str, Any]]] = {}
     theme_missing: list[str] = []
     for r in pool:
@@ -605,5 +658,8 @@ def admit(relay: list[dict[str, Any]],
         # 🎯 2026-11-11 用户 A：炸板 >5 不进池
         "max_zbc": _zbc_cap,
         "zbc_dropped": zbc_dropped,
+        "gene_min_zt": _g_min,
+        "gene_max_lbc": _g_lbc,
+        "gene_dropped": gene_dropped,
     }
     return new_relay, new_watch, diag
