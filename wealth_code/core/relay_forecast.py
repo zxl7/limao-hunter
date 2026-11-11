@@ -346,8 +346,10 @@ def forecast_one(row: dict, market_max: int, model: dict | None = None, *,
                 f"（只低 1 板那档是 +0.52%/53.4%）")
         elif boards >= CLIFF_BOARDS and (promo_board or 0) < CLIFF_PROMO_MAX:
             verdict = VERDICT_WATCH
-            reasons.append(f"{boards} 板是历史崖位：这档晋级率只有 {promo_board}%"
-                           f"（{CLIFF_BOARDS} 板以上断崖）")
+            # ⛔ 2026-11-11：`promo_board` 没样本时 {promo_board}% 会渲染成「None%」
+            #    卡面出现的正是这个 —— 没数据就实话写「无样本」，不写假数字。
+            _pb = f"晋级率只有 {promo_board}%" if promo_board is not None else "这档暂无晋级样本"
+            reasons.append(f"{boards} 板是历史崖位：{_pb}（{CLIFF_BOARDS} 板以上断崖）")
             if g.get("buy_win") is not None:
                 reasons.append(f"即便买到，这组胜率 {g.get('buy_win')}%、平均 {g.get('buy_avg')}%")
         elif line_gap == 1:
@@ -364,8 +366,10 @@ def forecast_one(row: dict, market_max: int, model: dict | None = None, *,
         # 有开关但算不出题材（行业兜底/数据缺）→ ⛔ 不裁决，不拿全市场差否决
         if boards >= CLIFF_BOARDS and (promo_board or 0) < CLIFF_PROMO_MAX:
             verdict = VERDICT_WATCH
-            reasons.append(f"{boards} 板是历史崖位：这档晋级率只有 {promo_board}%"
-                           f"（{CLIFF_BOARDS} 板以上断崖）")
+            # ⛔ 2026-11-11：`promo_board` 没样本时 {promo_board}% 会渲染成「None%」
+            #    卡面出现的正是这个 —— 没数据就实话写「无样本」，不写假数字。
+            _pb = f"晋级率只有 {promo_board}%" if promo_board is not None else "这档暂无晋级样本"
+            reasons.append(f"{boards} 板是历史崖位：{_pb}（{CLIFF_BOARDS} 板以上断崖）")
         else:
             verdict = VERDICT_WATCH
             reasons.append("缺题材归属（落行业兜底）→ 位置不裁决；"
