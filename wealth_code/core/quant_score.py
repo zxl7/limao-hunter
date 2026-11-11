@@ -911,6 +911,28 @@ def _merge_pools(
             _del = str(src.get("code") or "")
             pool = [r for r in pool if str(r.get("code") or "") != _del]
 
+    # 🎯 炸板闸（2026-11-11 用户 A）：**合并后**再挡一次。
+    #    ⛔ 为什么必须放在这里：`pool_admit` 那一道在建池早期，之后还有
+    #    「昨日在池今日晋级·优先占位」/历史修复/补票会**把被砍的票重新塞回来**
+    #    （11-11 实测：文投控股 炸 9 次，早期已剔，却被占位逻辑重新加回接力池）。
+    from core.pool_admit import max_zbc as _max_zbc
+    _cap_z = _max_zbc()
+    if _cap_z < 99:
+        _z_keep: list[dict[str, Any]] = []
+        for r in pool:
+            try:
+                _z = float(r.get("zbc"))
+            except (TypeError, ValueError):
+                _z = 0.0
+            if _z > _cap_z:
+                d = dict(r)
+                d["dropped_reason"] = f"炸板 {int(_z)} 次（>{int(_cap_z)}）·不进池"
+                d["dropped_kind"] = "zbc"
+                dropped.append(d)
+                continue
+            _z_keep.append(r)
+        pool = _z_keep
+
     # 🚮 资格线（2026-11-11 用户「垃圾票不该进池」）：只有拿到接力资格的票留下。
     #    ⚠️ 位置在「唯一高度观察」之后：高度观察票要能被看见，再走它自己的不可买口径。
     if qualified_only_enabled():

@@ -524,3 +524,20 @@ def test_zbc_gate_can_be_disabled():
         assert {x["name"] for x in r + w} == {"炸十次"}
     finally:
         os.environ.pop(pa.MAX_ZBC_ENV, None)
+
+
+def test_merge_pools_blocks_readded_zbc_row():
+    """⛔ 早期被炸板闸剔掉的票，**占位/补票重新塞回**时必须在合池处再挡一次。
+
+    11-11 实测：文投控股（炸 9 次）在 `pool_admit` 已剔，却被「昨日在池今日晋级」
+    重新加回接力池 → 合池必须二次拦截，否则闸形同虚设。
+    """
+    from core.quant_score import _merge_pools
+    bad = _row("600001", "炸九次", 3, 5, "092500")
+    bad.update({"zbc": 9, "participation_eligibility": "relay_candidate", "buyable": True})
+    ok = _row("600002", "炸两次", 3, 5, "093000")
+    ok.update({"zbc": 2, "participation_eligibility": "relay_candidate", "buyable": True})
+    relay, watch, dropped, _h = _merge_pools([bad, ok], [], market_rows=[])
+    kept = {r["name"] for r in relay + watch}
+    assert "炸九次" not in kept and "炸两次" in kept
+    assert any(d.get("dropped_kind") == "zbc" and d.get("name") == "炸九次" for d in dropped)
