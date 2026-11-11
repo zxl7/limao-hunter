@@ -1771,6 +1771,39 @@ def _rank_and_split(
     return relay, watch, diagnostics
 
 
+# 🇨🇳 首板观察判据（2026-11-11 用户「股性强的票，首板就要关注；二板才看就危险了」）
+# 两条任一即可：
+#   ① 封得干脆：封板 ≤10:00（09:30-10:00 都算）且零炸板；
+#   ② 股性强：近一年涨停 ≥ N 次 ∧ 历史最高连板 ≥2（老妖股的首板才是关注点）。
+# ⛔ 只决定「进不进观察池」，不看买入；⛔ 二板及以上不走这条。
+def first_board_observe_reason(row: dict, gene: dict | None, *,
+                               gene_min_zt: int = 6) -> str | None:
+    if str(row.get("boards")) not in ("1", "1.0"):
+        try:
+            if int(row.get("boards")) != 1:
+                return None
+        except (TypeError, ValueError):
+            return None
+    if row.get("is_one_word") is True:
+        return None
+    fbt = str(row.get("fbt") or "").strip()[:6]
+    try:
+        zbc = float(row.get("zbc") or 0)
+    except (TypeError, ValueError):
+        zbc = 0.0
+    if fbt and fbt <= "100000" and zbc == 0:
+        return f"首板 {fbt[:2]}:{fbt[2:4]} 封板、零炸板"
+    if isinstance(gene, dict):
+        try:
+            zt_n = int(gene.get("zt_n") or 0)
+            max_lbc = int(gene.get("max_lbc") or 0)
+        except (TypeError, ValueError):
+            zt_n, max_lbc = 0, 0
+        if zt_n >= gene_min_zt and max_lbc >= 2:
+            return f"首板·股性强（近一年涨停 {zt_n} 次 / 最高 {max_lbc} 连板）"
+    return None
+
+
 def run_eod(
     cache_dir: Path | None = None,
     *,
@@ -2581,26 +2614,36 @@ def run_eod(
                 continue
             if _c.startswith("688") or "ST" in str(_it.get("name") or "").upper():
                 continue
-            _f = str(_it.get("fbt") or "").strip()[:6]
             try:
-                _z = float(_it.get("zbc") or 0)
-            except (TypeError, ValueError):
-                _z = 0.0
-            if not _f or _f > "093100" or _z > 0:
+                _g = json.loads((ROOT / "cache" / "zt_genes"
+                                 / f"gene_{_c}.json").read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                _g = None
+            _why = first_board_observe_reason(_it, _g)
+            if not _why:
                 continue
-            _fb_obs.append(_it)
-        _fb_obs.sort(key=lambda r: (str(r.get("fbt") or "999999"), -float(r.get("cje_yi") or 0)))
-        for _it in _fb_obs[:6]:
+            _fb_obs.append({**_it, "_observe_why": _why})
+        def _gene_rank(r: dict) -> tuple:
+            try:
+                g = json.loads((ROOT / "cache" / "zt_genes"
+                                / f"gene_{r.get('code')}.json").read_text(encoding="utf-8"))
+                return (-int(g.get("zt_n") or 0), str(r.get("fbt") or "999999"))
+            except Exception:  # noqa: BLE001
+                return (0, str(r.get("fbt") or "999999"))
+
+        _fb_cap = int(os.environ.get("POOL_FIRST_BOARD_OBSERVE_MAX", "8") or 8)
+        _fb_obs.sort(key=_gene_rank)
+        for _it in _fb_obs[:_fb_cap]:
             _row = dict(_it)
             _row.update(bucket="watch", bucket_label="首板观察",
                         participation_eligibility="observe_only", buyable=False,
                         watch_only=True, watch_group="首板观察",
-                        watch_reason=(f"首板 {str(_it.get('fbt') or '')[:6]} 封板、零炸板；"
+                        watch_reason=(f"{_it.get('_observe_why')}；"
                                       "按用户口径「首板只看不买」→ 放观察池，明早竞价再判"))
             watch.append(_row)
-        if _fb_obs[:6]:
+        if _fb_obs[:_fb_cap]:
             print("[EOD] 👀 首板观察入池：" + "、".join(
-                str(r.get("name")) for r in _fb_obs[:6]))
+                str(r.get("name")) for r in _fb_obs[:_fb_cap]))
         # 普通首板（非新方向槽）一律降为观察
         for _r in (relay + watch):
             if (str(_r.get("pool_source_bucket") or "") == "new_direction"
