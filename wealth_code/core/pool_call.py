@@ -2720,7 +2720,15 @@ def call_pool(candidates: dict[str, Any] | None,
     #   仍是单票场景）。观察池 observe_only 只会是 view=watch，天然不计入、不占名额。
     # 落 `single_pick` 标记 + 逐票 `position_cap`：本函数保持纯函数（不写盘），
     #   09:25 冻结后由卡面/账本消费（build_verify_card / ai_ledger）。
-    _participants = [c for c, v in marks.items() if v.get("view") == "participate"]
+    # ⛔ 2026-11-11 修：原来按 `marks` 的插入顺序（＝池子顺序）取参与票，
+    #    而 `quota_rank` 是按「同线优先 / 板数」重排后的序号 —— 两者可能不一致
+    #    （11-11 实测：meta.participate = 600408,600609,603121,001318，
+    #      quota_rank = 600408(1),001318(2),600609(3),603121(4)）。
+    #    台账/名额/卡面都按「名额序」读，所以这里必须与 quota_rank 同序。
+    _participants = sorted(
+        (c for c, v in marks.items() if v.get("view") == "participate"),
+        key=lambda c: (marks[c].get("quota_rank") or 999),
+    )
     _single_pick = len(_participants) == 1
     _single_cap = _rp.single_pick_cap(relay_plan)
     _n_pick = len(_participants)
@@ -2878,6 +2886,9 @@ def call_pool(candidates: dict[str, Any] | None,
         "market_open": open_read or None,
         "pool_size": len(pool),
         "participate": _participants,
+        # 🏷 顺序口径标记（2026-11-11）：旧冻结件没有这个字段、顺序可能不一致，
+        #    终端不变量测试只对带标记的文件强制「participate 与 quota_rank 同序」。
+        "participate_order": "quota",
         # 🔁 观察票竞价复核留痕（11-05 A 方案）：卡片/日志可直接答「今天复核了几只、
         #    几只进了完整裁决、最终几只是靠竞价翻案买到的」，⛔ 不参与二次裁决。
         "recheck": {
