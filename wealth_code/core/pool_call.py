@@ -2806,11 +2806,66 @@ def call_pool(candidates: dict[str, Any] | None,
         for _v in marks.values():
             _v["manual_only"] = _ast.manual_only_of(_v)
 
+    # ── 🚦 三态（2026-11-11 用户：「不能都塞进买或放弃」）──────────────
+    #  ⛔ **只加字段、只上卡面**：`view` 一个都不改、名额/仓位/账本零影响。
+    #    A 可买        = 今天真的买了
+    #    B 核心在·价不合适 = 被顶部空间/高开闸拦下（核心没坏，只是这个价不值得）
+    #    C 核心失效     = 锚点破预期 / 核心不在（这条线今天不该做）
+    _state_of: dict[str, str] = {}
+    for _c, _v in marks.items():
+        if _v.get("view") == "buy":
+            _state_of[_c] = "A"
+        elif _v.get("high_gap_reject"):
+            _state_of[_c] = "B"
+        elif _v.get("anchor_gate") == "break" or _v.get("core_first_gate"):
+            _state_of[_c] = "C"
+        else:
+            _state_of[_c] = ""
+        _v["trade_state"] = _state_of[_c]
+
+    # ── 🧾 替代资格（2026-11-11 用户：「其他票必须有独立成立依据，不能因为核心太贵就获得资格」）
+    #  ⛔ 仍只标记、不拦买：`view` 不动。卡面把「它自己是龙一/板块龙」写出来，
+    #     没有独立依据的替补票必须被读者看见（否则就是这次事故的翻版）。
+    _by_code = {str(c.get("code") or ""): c for c in pool}
+    for _c, _v in marks.items():
+        if _v.get("view") != "buy":
+            continue
+        _cand = _by_code.get(_c) or {}
+        _fam = line_family(_cand) if _cand else ""
+        _lc = line_cores.get(_fam) or {}
+        _core_code = str(_lc.get("code") or "")
+        if not _core_code or _core_code == _c:
+            continue
+        _core_mark = marks.get(_core_code) or {}
+        if _core_mark.get("view") == "buy":
+            continue                      # 核心今天也买了，这不是替补
+        _indep = (_cand.get("dragon_rank") == 1) or bool(_cand.get("is_sector_dragon"))
+        _v["substitute"] = {
+            "core_code": _core_code,
+            "core_name": str(_lc.get("name") or ""),
+            "core_view": _core_mark.get("view") or "",
+            "core_state": _core_mark.get("trade_state") or "",
+            "independent": bool(_indep),
+            "basis": ("该线龙一" if _cand.get("dragon_rank") == 1
+                      else "板块龙" if _cand.get("is_sector_dragon") else ""),
+        }
+
     # 🧮 竞价广度：只在 09:25 有竞价快照时算；失败不影响裁决（卡面少一行）
     try:
         _breadth_lines = load_breadth(_date10, qs, line_cores) if POOL_CALL_BREADTH else {}
     except Exception:
         _breadth_lines = {}
+
+    # 🧮→🚦 广度接入三态（2026-11-11 用户拍板）：整条线竞价偏弱的，
+    #    没买到的票一律记 C（这条线今天不该做）——⛔ 只影响展示态，`view` 不动。
+    for _c, _v in marks.items():
+        if _v.get("trade_state") == "A":
+            continue
+        _cand = _by_code.get(_c) or {}
+        _b = _breadth_lines.get(line_family(_cand)) if _cand else None
+        if isinstance(_b, dict) and _b.get("applicable") and _b.get("level") == "weak":
+            _v["trade_state"] = "C"
+            _v["trade_state_note"] = "这条线竞价广度偏弱（后排大面积水下）"
 
     meta = {
         "caliber": "pool_call_925",
@@ -2962,6 +3017,12 @@ def call_pool(candidates: dict[str, Any] | None,
                 "flat": [c for c, v in marks.items() if v.get("anchor_flat")],
                 "market": _ac2.market_verdict([a.get("attitude") for a in _anchors.values()]),
             },
+            # 🚦 三态留痕（2026-11-11）：只做展示与复盘，⛔ 不参与任何判据
+            "trade_states": {c: v.get("trade_state") for c, v in marks.items()
+                             if v.get("trade_state")},
+            # 🧾 替补留痕：今天买了、但这条线的核心没买
+            "substitutes": {c: v.get("substitute") for c, v in marks.items()
+                            if v.get("substitute")},
             # 🧮 竞价广度（2026-11-11）：这条线昨日全体涨停票今天开在哪
             "breadth": {
                 "enabled": bool(POOL_CALL_BREADTH),
@@ -3031,6 +3092,9 @@ def apply_to_views(pool_result: dict[str, Any], views: dict[str, Any] | None) ->
         cur["linkage_gate"] = bool(m.get("linkage_gate"))
         cur["linkage_discipline"] = m.get("linkage_discipline")
         cur["defense_gate"] = m.get("defense_gate")   # distribution / distribution_thin_late / sector_drain / high_position / old_dragon_rebound
+        # 🚦 2026-11-11 三态与替补：只给卡面/复盘读，⛔ 不进任何判据
+        cur["trade_state"] = m.get("trade_state")
+        cur["substitute"] = m.get("substitute")
         cur["defense_reason"] = (m.get("defense_detail") or {}).get("note") or None
         cur["defense_warn"] = m.get("defense_warn")
         cur["position_warn"] = m.get("position_warn")

@@ -2090,6 +2090,10 @@ def _ai_view_line(it: dict, ai_view: dict, *, compact: bool = False) -> str:
         _tags = [(_hl(f"🤖 今日9:25判：{_label}", color) if str(color or "").strip()
                   else f"<font color='grey'>🤖 今日9:25判：{_label}</font>")]
         txt = "　　" + " ".join(_tags)
+        # 🚦 三态 C（2026-11-11）：这条线的核心/广度已失效 → 明写「今天不做」，
+        #    ⛔ 不写「再看看」这种模糊话，也不发替代资格。
+        if str(v.get("trade_state") or "") == "C" and v.get("trade_state_note"):
+            txt += f" <font color='grey'>· {v['trade_state_note']}</font>"
         txt += "\n" + f"　　<font color='grey'>{_oc.get('pool_reason')}</font>"
         # ⛔ 「同一件事实全卡只说一次」（2026-10-21 用户「早盘内容过于冗余」）：
         #    该票若已有点评且点评含「题材催化」段，则 AI 理由里的依据/上涨逻辑与风险段
@@ -2572,6 +2576,16 @@ def _ai_plan_block(raw: dict, records: list[dict],
                    ("<text_tag color='{C_BUY}'>AI 买入</text_tag>（符合逐票预期）"
                     if _rel else
                     f"<text_tag color='{C_BUY}'>AI 买入</text_tag>（高开{limit:g}%以内）"))
+        # 🧾 替补声明（2026-11-11 用户：「其他票必须有独立成立依据，
+        #    不能因为核心太贵就获得替代资格」）。⛔ 只标注，不改买入。
+        _sub = (v.get("substitute") or {}) if isinstance(v, dict) else {}
+        if _sub:
+            _sub_txt = (f"<font color='grey'>（这条线核心 {_sub.get('core_name') or ''} 今天没买"
+                        f" → 它是替补；依据：{_sub.get('basis')}）</font>"
+                        if _sub.get("independent") else
+                        f"<font color='orange'>（⚠️ 替补：核心 {_sub.get('core_name') or ''} 今天没买，"
+                        f"它本身不是这条线的龙一 —— 必须自己成立才买）</font>")
+            _ok_tag += _sub_txt
         v = views.get(code) or {}
         # 🎨 2026-10-21 用户「主要把要买的这个推得花哨一点，指标打满」：
         #    买入票是全卡唯一用**红底**的票名（`C_BUY`），其余一律降权。

@@ -98,3 +98,18 @@ def test_snapshot_is_idempotent(tmp_path: Path):
     b = build_theme_strength(day, rows)
     a.pop("generated_at"); b.pop("generated_at")
     assert a == b
+
+
+def test_apply_to_views_passes_three_states():
+    """三态/替补字段必须透传到 views（卡面/复盘都靠它读），⛔ 不能只留在 marks。"""
+    from wealth_code.core.pool_call import apply_to_views
+
+    pool_result = {"views": {"000001": {
+        "view": "buy", "trade_state": "A",
+        "substitute": {"core_code": "000002", "core_name": "核心", "independent": False},
+    }}}
+    out = apply_to_views(pool_result, {})
+    v = out["000001"]
+    assert v["trade_state"] == "A"
+    assert v["substitute"]["core_code"] == "000002"
+    assert v["substitute"]["independent"] is False
