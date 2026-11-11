@@ -347,6 +347,14 @@ MECH_LEADER_MIN_TURNOVER_YI = 5.0
 # ⛔ 只拦「核心已断板」这一种：核心**仍在板且仍在池内**时，靠排序（同线核心优先）即可
 #   表达，不必硬拦——否则会误杀正常的低位接力（用户战法本就有 2 进 3 倾斜）。
 POOL_CALL_CORE_GATE = True
+
+# ── 🧮 竞价广度（2026-11-11 用户「前五好看但后排大面积水下，是风险」）────────────
+# 只看身位前五会漏掉整条线的承接质量。广度 = 这条线**昨日全部涨停票**今早的竞价分布。
+# ⛔ 只上卡面一行说明，不进任何判据、不改名额/仓位/账本；无数据就不写（不猜）。
+# 回退：`POOL_CALL_BREADTH=0`。
+POOL_CALL_BREADTH = os.environ.get("POOL_CALL_BREADTH", "1") != "0"
+BREADTH_MIN_SIZE = 8          # 少于这个家数的线不判广度（百分比无意义）
+BREADTH_DIVERGE_UNDER = 0.40  # 水下占比 ≥40% → 分化
 CORE_GATE_MIN_GAP = 2
 # ── 归并一致性守卫（2026-10-12 传媒事故结构性兜底）────────────────────────────
 # 跟风闸拦票前，校验候选 `core_theme` 归线 与 `sector` 归线是否**矛盾**——
@@ -657,6 +665,82 @@ def _zt_rows(z: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 LINE_CORE_THEME_KEY_ENV = "ENABLE_LINE_CORE_THEME_KEY"
+
+
+
+def load_breadth(date10: str, quotes: dict[str, Any], line_cores: dict | None = None,
+                 *, root: Path | None = None) -> dict[str, dict]:
+    """最近**完整收盘**归档 → 按「题材」算竞价广度，并挂到各线族名下（卡面说明用）。
+
+    ⛔ 为什么按题材而不是按线族：线族是把题材再归并（机器人 29 只可能被拆成
+       机器人/人形机器人几族），用户要看的是「机器人这条线 30 个票开在哪」。
+       所以先用题材算广度，再用 `line_cores[fam].code` 反查它属于哪个题材，
+       把该题材的广度挂到这条线下 —— 口径与用户口语一致。
+
+    ⛔ 只读、失败返回 {}（卡面少一行，不影响裁决）。
+    """
+    if not POOL_CALL_BREADTH or not quotes:
+        return {}
+    d = _zt_dir(root)
+    try:
+        files = sorted(d.glob("zt_*.json"))
+    except Exception:
+        return {}
+    rows: list[dict[str, Any]] | None = None
+    day = ""
+    for f in reversed(files):
+        cand = f.stem[3:]
+        if len(cand) != 10 or cand > str(date10):
+            continue
+        z = _read_zt(f)
+        if z is None:                       # 盘中档/半成品 → 跳过，继续往前找
+            continue
+        rows = _zt_rows(z)
+        day = cand
+        break
+    if not rows or not day:
+        return {}
+
+    from core.auction_breadth import theme_breadth
+    from core.theme_strength import theme_of_factory
+
+    theme_of, _src = theme_of_factory(day)
+    groups: dict[str, list[dict[str, Any]]] = {}
+    theme_by_code: dict[str, str] = {}
+    for r in rows:
+        code = str(r.get("code") or "").strip()
+        if not code:
+            continue
+        th = theme_of(code, r)
+        theme_by_code[code] = th
+        groups.setdefault(th, []).append(r)
+
+    def _b(row: dict[str, Any]) -> int:
+        for k in ("boards", "lbc", "lianban"):
+            v = row.get(k)
+            if v not in (None, ""):
+                try:
+                    return int(v)
+                except (TypeError, ValueError):
+                    pass
+        return 0
+
+    theme_b: dict[str, dict] = {}
+    for th, arr in groups.items():
+        front = [str(x.get("code") or "") for x in sorted(
+            arr, key=lambda x: (-_b(x), str(x.get("fbt") or "999999"),
+                                str(x.get("code") or "")))[:5]]
+        theme_b[th] = theme_breadth(arr, quotes, front)
+
+    # 线族 → 它核心所属的题材 → 该题材的广度
+    out: dict[str, dict] = {}
+    for fam, lc in (line_cores or {}).items():
+        if not isinstance(lc, dict):
+            continue
+        th = theme_by_code.get(str(lc.get("code") or ""))
+        if th and th in theme_b:
+            out[fam] = theme_b[th]
+    return out
 
 
 def line_core_theme_key_enabled() -> bool:
@@ -1883,6 +1967,10 @@ def call_pool(candidates: dict[str, Any] | None,
         #     ⛔ 与 `gap_weight` 的区别：那是「买多重（降到 0.2 仓）」，这是「不买」。
         #     ⚠️ 放在 ③ 预案回避之前：这是**幅度事实**，先于盘后预案例外判断留痕，
         #        与 ② 竞价封死同级（都属于「买不进/不该买」的物理与赔率事实）。
+        _lc_now = line_cores.get(line_family(c)) or {}
+        _core_alive = bool(_lc_now) and (_lc_now.get("in_pool")
+                                         if _lc_now.get("in_pool") is not None
+                                         else not _lc_now.get("broken"))
         if POOL_CALL_HIGH_GAP_REJECT and isinstance(gap, (int, float)):
             _lim = float(_ac.limit_up_pct(bool(c.get("is_20cm"))))
             _room = _lim - float(gap)
@@ -1893,6 +1981,10 @@ def call_pool(candidates: dict[str, Any] | None,
                                "high_gap_reject": True,
                                "reason": (f"今开 {gap:+.2f}%，离涨停只剩 {_room:.2f} 个点"
                                           f"（上限 {_lim:.0f}%）→ 上方空间不够，不追"
+                                          # 🅱️ 三态（2026-11-11）：核心还在，只是这个价格不合适
+                                          #    → 明写「可以不做」，⛔ 不发替代资格
+                                          + ("；核心仍在，只是价格不合适——今天可以不做"
+                                             if _core_alive else "")
                                           + _dip_hint(q, c, is_core=is_core))}
                 continue
         # ③ 盘后预案＝回避（2026-11-06 用户「盘后预案这个功能关了，全系统关闭」）
@@ -2714,6 +2806,12 @@ def call_pool(candidates: dict[str, Any] | None,
         for _v in marks.values():
             _v["manual_only"] = _ast.manual_only_of(_v)
 
+    # 🧮 竞价广度：只在 09:25 有竞价快照时算；失败不影响裁决（卡面少一行）
+    try:
+        _breadth_lines = load_breadth(_date10, qs, line_cores) if POOL_CALL_BREADTH else {}
+    except Exception:
+        _breadth_lines = {}
+
     meta = {
         "caliber": "pool_call_925",
         "stance": _stance,
@@ -2863,6 +2961,12 @@ def call_pool(candidates: dict[str, Any] | None,
                 "blocked": [c for c, v in marks.items() if v.get("anchor_gate")],
                 "flat": [c for c, v in marks.items() if v.get("anchor_flat")],
                 "market": _ac2.market_verdict([a.get("attitude") for a in _anchors.values()]),
+            },
+            # 🧮 竞价广度（2026-11-11）：这条线昨日全体涨停票今天开在哪
+            "breadth": {
+                "enabled": bool(POOL_CALL_BREADTH),
+                "min_size": BREADTH_MIN_SIZE,
+                "lines": _breadth_lines,
             },
             # 🎯 中位股留痕（2026-10-21）：拦了谁 + 参照的市场高度
             "midboard": {

@@ -3573,6 +3573,10 @@ def _beacon_block(pool_meta: dict | None) -> list[dict]:
     meta = pool_meta if isinstance(pool_meta, dict) else {}
     defense = meta.get("defense") if isinstance(meta.get("defense"), dict) else {}
     anchor = defense.get("anchor") if isinstance(defense.get("anchor"), dict) else {}
+    # 🧮 竞价广度：这条线**昨日全部涨停票**今天开在哪（2026-11-11 用户
+    #    「前五好看但后排大面积水下，是风险」）。⛔ 只读注入，不读盘、不裁决。
+    _breadth = ((defense.get("breadth") or {}).get("lines") or {})
+    _bmin = int((defense.get("breadth") or {}).get("min_size") or 8)
     lines = anchor.get("lines") if isinstance(anchor.get("lines"), dict) else {}
     if not lines:
         return []
@@ -3607,6 +3611,19 @@ def _beacon_block(pool_meta: dict | None) -> list[dict]:
         line = f"　{name}（{bd}·{fam}） {label} {gap_txt}"
         if act:
             line += f" → {act}"
+        # 🧮 广度只挂在这条线的第一行（家数够才算；不够不写百分比，⛔ 不拿 1 只票吓人）
+        _b = _breadth.get(fam) if isinstance(_breadth, dict) else None
+        if isinstance(_b, dict) and _b.get("applicable"):
+            _u = int(_b.get("underwater") or 0)
+            _r = float(_b.get("under_ratio") or 0) * 100
+            _med = _b.get("median_gap")
+            _tail = ("⚠️分化" if _b.get("level") == "divergent"
+                     else "⚠️偏弱" if _b.get("level") == "weak" else "")
+            line += (f"｜广度 {_b.get('n')} 只·水下 {_u}（{_r:.0f}%）"
+                     f"·中位 {float(_med):+.1f}%" if isinstance(_med, (int, float))
+                     else f"｜广度 {_b.get('n')} 只·水下 {_u}（{_r:.0f}%）")
+            if _tail:
+                line += f" {_tail}"
         rows.append((att, bnum, line))
     # 排序：**高度优先**（4板/2板的线才是真风向标，1板新线排后）→ 同高度看态度。
     # ⚠️ `_ATT_RANK` 里 `deep_low` 已排 3（可打），⛔ 别让它按旧 rank 掉到「弱」那堆。
