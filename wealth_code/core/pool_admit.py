@@ -60,13 +60,19 @@ from typing import Any
 ENABLED_ENV = "POOL_ADMIT_ENABLED"
 PER_LINE_ENV = "POOL_ADMIT_PER_LINE"
 MIN_MATES_ENV = "POOL_ADMIT_MIN_MATES"
+MAX_ZBC_ENV = "POOL_ADMIT_MAX_ZBC"
 
-DEFAULT_PER_LINE = 0
-# ↳ 2026-11-04 用户「解除每一个题材保留两只的限制吧，解除掉」→ 默认 0 = 不限。
-#   回退：`POOL_ADMIT_PER_LINE=2`（旧口径：每线只留龙头+次排）。
+DEFAULT_PER_LINE = 3
+# ↳ 2026-11-11 用户「C 这个可以放宽到三个身位」→ 默认 3（每题材留前 3）。
+#   历史：11-04「解除每线两只」成 0=不限；11-11 收紧到 3（仍比最初的 2 宽）。
+#   回退：`POOL_ADMIT_PER_LINE=0`（不限）或 `=2`（旧口径：龙头+次排）。
+# ⛔ 0 仍表示**不限**（不是「一只都不留」）。
 #   ⛔ 解除的是「进池只数」，不是「买入资格」——后排仍由 pool_call 的身位闸/龙一闸拦。
 # 涨停池同题材 < 2 家 → 当作「没有成线」，不参与组内淘汰（1 家的"线"没有后排可言）
 DEFAULT_MIN_MATES = 2
+# 🎯 2026-11-11 用户：「A 炸板 >5 确实可以丢出去」——炸板次数 > 5 的票不进池。
+#    ⛔ 是「>5」不是「≥5」：5 次仍保留。回退 `POOL_ADMIT_MAX_ZBC=99`。
+DEFAULT_MAX_ZBC = 5
 
 # ⛔ 无题材的占位值（东财/选股宝抓不到时会出现）
 _THEME_EMPTY = {"", "—", "-", "其他", "无", "未知", "none", "null"}
@@ -93,6 +99,14 @@ def per_line() -> int:
     except (TypeError, ValueError):
         return DEFAULT_PER_LINE
     return n if n >= 0 else 0
+
+
+def max_zbc() -> float:
+    """炸板次数上限（**严格大于**才剔除）。99 = 关闭该闸。"""
+    try:
+        return float(str(os.environ.get(MAX_ZBC_ENV, DEFAULT_MAX_ZBC)).strip())
+    except (TypeError, ValueError):
+        return float(DEFAULT_MAX_ZBC)
 
 
 def min_mates() -> int:
@@ -409,6 +423,21 @@ def admit(relay: list[dict[str, Any]],
         order[code] = i
         pool.append(r)
 
+    # 🎯 炸板闸（2026-11-11 用户 A）：炸板次数 > 上限 → 直接不进池。
+    _zbc_cap = max_zbc()
+    zbc_dropped: list[str] = []
+    _kept: list[dict[str, Any]] = []
+    for r in pool:
+        try:
+            _z = float((r or {}).get("zbc"))
+        except (TypeError, ValueError):
+            _z = 0.0
+        if _z > _zbc_cap:
+            zbc_dropped.append(str((r or {}).get("name") or (r or {}).get("code") or ""))
+            continue
+        _kept.append(r)
+    pool = _kept
+
     groups: dict[str, list[dict[str, Any]]] = {}
     theme_missing: list[str] = []
     for r in pool:
@@ -548,5 +577,8 @@ def admit(relay: list[dict[str, Any]],
         "first_board_min_carry": first_board_min_carry(),
         "groups": group_diag,
         "theme_missing": len(theme_missing),
+        # 🎯 2026-11-11 用户 A：炸板 >5 不进池
+        "max_zbc": _zbc_cap,
+        "zbc_dropped": zbc_dropped,
     }
     return new_relay, new_watch, diag

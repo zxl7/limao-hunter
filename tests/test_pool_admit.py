@@ -87,13 +87,13 @@ def test_historical_repair_retained_without_promoting_plain_first_board(monkeypa
 
 
 # ── ① 默认值 ───────────────────────────────────────────────────────────
-def test_default_per_line_is_unlimited():
-    """2026-11-04 用户「解除每一个题材保留两只的限制」→ 默认 0 = 不限。
+def test_default_per_line_is_three():
+    """2026-11-11 用户「C 放宽到三个身位」→ 默认 3（每线留前 3）。
 
-    回退口径：`POOL_ADMIT_PER_LINE=2` 回到「每线龙头+次排两只」。
+    回退口径：`POOL_ADMIT_PER_LINE=0` 不限；`=2` 回到「龙头+次排」。
     """
-    assert pa.DEFAULT_PER_LINE == 0
-    assert pa.per_line() == 0
+    assert pa.DEFAULT_PER_LINE == 3
+    assert pa.per_line() == 3
     import os
     os.environ[pa.PER_LINE_ENV] = "2"
     try:
@@ -108,15 +108,15 @@ def test_per_line_zero_means_unlimited_not_empty():
     os.environ[pa.PER_LINE_ENV] = "0"
     try:
         assert pa.per_line() == 0
+        relay = [_row("600001", "机器人龙", 3, 5, "093000"),
+                 _row("600002", "机器人二", 2, 7, "093445"),
+                 _row("600003", "机器人三", 2, 6, "094409")]
+        r, w, diag = pa.admit(relay, [])
+        assert {x["name"] for x in r + w} == {"机器人龙", "机器人二", "机器人三"}
+        assert diag["dropped"] == 0
+        assert any(g.get("note") == "per_line_unlimited" for g in diag["groups"])
     finally:
         os.environ.pop(pa.PER_LINE_ENV, None)
-    relay = [_row("600001", "机器人龙", 3, 5, "093000"),
-             _row("600002", "机器人二", 2, 7, "093445"),
-             _row("600003", "机器人三", 2, 6, "094409")]
-    r, w, diag = pa.admit(relay, [])
-    assert {x["name"] for x in r + w} == {"机器人龙", "机器人二", "机器人三"}
-    assert diag["dropped"] == 0
-    assert any(g.get("note") == "per_line_unlimited" for g in diag["groups"])
 
 
 def test_per_line_negative_falls_back_to_unlimited():
@@ -144,15 +144,20 @@ def test_same_line_keeps_top_two_only():
 
 
 def test_same_line_keeps_all_when_unlimited():
-    """2026-11-04 默认解除：同线 5 只全部留池（买不买另由 09:25 各闸判）。"""
-    relay = [_row("600001", "机器人龙", 3, 5, "093000"),
-             _row("600002", "机器人二", 2, 7, "093445"),
-             _row("600003", "机器人三", 2, 6, "094409"),
-             _row("600004", "机器人四", 2, 7, "095109"),
-             _row("600005", "机器人五", 2, 7, "100302")]
-    r, w, diag = pa.admit(relay, [])
-    assert len({x["name"] for x in r + w}) == 5, [x["name"] for x in r + w]
-    assert diag["dropped"] == 0
+    """显式 `POOL_ADMIT_PER_LINE=0` 时同线 5 只全留（0 的语义是「不限」）。"""
+    import os
+    os.environ[pa.PER_LINE_ENV] = "0"
+    try:
+        relay = [_row("600001", "机器人龙", 3, 5, "093000"),
+                 _row("600002", "机器人二", 2, 7, "093445"),
+                 _row("600003", "机器人三", 2, 6, "094409"),
+                 _row("600004", "机器人四", 2, 7, "095109"),
+                 _row("600005", "机器人五", 2, 7, "100302")]
+        r, w, diag = pa.admit(relay, [])
+        assert len({x["name"] for x in r + w}) == 5, [x["name"] for x in r + w]
+        assert diag["dropped"] == 0
+    finally:
+        os.environ.pop(pa.PER_LINE_ENV, None)
 
 
 def test_strength_order_boards_first_then_carry():
@@ -489,3 +494,33 @@ def test_card_badge_does_not_explain_mechanism():
                              "line_top": 3, "line_tops": ["甲", "乙"]})
     for banned in ("它是后排", "池内没有", "准入", "校验"):
         assert banned not in got, banned
+
+
+def test_zbc_over_limit_dropped():
+    """2026-11-11 用户 A：炸板 **>5** 才丢；5 次仍保留。"""
+    relay = [_row("600001", "炸九次", 3, 5, "093000"),
+             _row("600002", "炸六次", 2, 5, "093100"),
+             _row("600003", "炸五次", 2, 5, "093200"),
+             _row("600004", "没炸", 2, 5, "093300")]
+    relay[0]["zbc"] = 9
+    relay[1]["zbc"] = 6
+    relay[2]["zbc"] = 5
+    relay[3]["zbc"] = 0
+    r, w, diag = pa.admit(relay, [])
+    kept = {x["name"] for x in r + w}
+    assert "炸九次" not in kept and "炸六次" not in kept
+    assert "炸五次" in kept and "没炸" in kept
+    assert set(diag["zbc_dropped"]) == {"炸九次", "炸六次"}
+
+
+def test_zbc_gate_can_be_disabled():
+    """回退开关：POOL_ADMIT_MAX_ZBC=99 → 闸关闭。"""
+    import os
+    os.environ[pa.MAX_ZBC_ENV] = "99"
+    try:
+        relay = [_row("600001", "炸十次", 3, 5, "093000")]
+        relay[0]["zbc"] = 10
+        r, w, diag = pa.admit(relay, [])
+        assert {x["name"] for x in r + w} == {"炸十次"}
+    finally:
+        os.environ.pop(pa.MAX_ZBC_ENV, None)
