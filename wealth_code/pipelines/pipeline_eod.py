@@ -2557,6 +2557,67 @@ def run_eod(
         print(f"[EOD] 🌱 新方向首板槽降级（不影响主链）：{_e}")
         new_direction_first_board = []
 
+    # ══════════════════════════════════════════════════════════════════════
+    # 👀 首板观察（2026-11-11 用户「首板可以进观察池；尽量还是从 2 板开始看」）
+    # ══════════════════════════════════════════════════════════════════════
+    # 用户原话：「没问题，首板不解决，首板可以进观察池。尽量还是从 2 版开始看，因为 1 版看不太懂。」
+    #
+    # 两件事（都只动观察身份，⛔ 不碰任何买入判据）：
+    #   ① 普通首板（非新方向槽）→ 一律 observe_only：**能看、不能买**；
+    #   ② 首板里「封得早（≤09:30）且零炸板」但没过既有资格的 → 补进观察池（最多 6 只）。
+    # ⛔ 2 板及以上不受影响。回退：`POOL_FIRST_BOARD_OBSERVE=0`。
+    if os.environ.get("POOL_FIRST_BOARD_OBSERVE", "1") != "0":
+        _in_pool = {str(r.get("code") or "") for r in (relay + watch)}
+        _fb_obs: list[dict[str, Any]] = []
+        for _it in (_scored_all or []):
+            _c = str(_it.get("code") or "")
+            if not _c or _c in _in_pool:
+                continue
+            try:
+                _b = int(_it.get("boards"))
+            except (TypeError, ValueError):
+                continue
+            if _b != 1 or _it.get("is_one_word") is True:
+                continue
+            if _c.startswith("688") or "ST" in str(_it.get("name") or "").upper():
+                continue
+            _f = str(_it.get("fbt") or "").strip()[:6]
+            try:
+                _z = float(_it.get("zbc") or 0)
+            except (TypeError, ValueError):
+                _z = 0.0
+            if not _f or _f > "093100" or _z > 0:
+                continue
+            _fb_obs.append(_it)
+        _fb_obs.sort(key=lambda r: (str(r.get("fbt") or "999999"), -float(r.get("cje_yi") or 0)))
+        for _it in _fb_obs[:6]:
+            _row = dict(_it)
+            _row.update(bucket="watch", bucket_label="首板观察",
+                        participation_eligibility="observe_only", buyable=False,
+                        watch_only=True, watch_group="首板观察",
+                        watch_reason=(f"首板 {str(_it.get('fbt') or '')[:6]} 封板、零炸板；"
+                                      "按用户口径「首板只看不买」→ 放观察池，明早竞价再判"))
+            watch.append(_row)
+        if _fb_obs[:6]:
+            print("[EOD] 👀 首板观察入池：" + "、".join(
+                str(r.get("name")) for r in _fb_obs[:6]))
+        # 普通首板（非新方向槽）一律降为观察
+        for _r in (relay + watch):
+            if (str(_r.get("pool_source_bucket") or "") == "new_direction"
+                    or str(_r.get("bucket") or "") == "new_direction"
+                    or _r.get("new_direction_line")):
+                continue
+            try:
+                _b = int(_r.get("boards"))
+            except (TypeError, ValueError):
+                continue
+            if _b != 1:
+                continue
+            _r.update(participation_eligibility="observe_only", buyable=False,
+                      watch_only=True, watch_group=_r.get("watch_group") or "首板观察",
+                      watch_reason=_r.get("watch_reason")
+                      or "首板只看不买（用户 2026-11-11）")
+
     # 所有降级与补票完成后才迁移展示身份；不把 observe_only 改成 relay_candidate。
     # ⚠️ 位置必须在「准入闸 → 各降级闸 → 历史修复/补票 → two_pool.finalize」之后，
     #    否则后补的票会绕过「龙5及以后不进池」；仍早于所有纯回填（不动交易资格）。

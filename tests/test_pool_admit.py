@@ -571,3 +571,15 @@ def test_big_line_cap_switch_rolls_back():
         assert len({x["name"] for x in r + w}) == 3
     finally:
         os.environ.pop(pa.BIG_LINE_CAP_ENV, None)
+
+
+def test_first_board_observe_only_in_merge():
+    """2026-11-11 用户「首板可以进观察池；尽量从 2 板开始看」：
+    普通首板（非新方向）即使进了池，也只能是 observe_only。"""
+    from core.quant_score import _merge_pools
+    fb = _row("600001", "普通首板", 1, 5, "093000")
+    fb.update({"participation_eligibility": "relay_candidate", "buyable": True})
+    tp = _row("600002", "二板", 2, 5, "093000")
+    tp.update({"participation_eligibility": "relay_candidate", "buyable": True})
+    relay, _w, _d, _h = _merge_pools([tp], [], market_rows=[])
+    assert [r["name"] for r in relay] == ["二板"]
