@@ -76,10 +76,17 @@ def build(day: str, *, names: Mapping[str, str] | None = None,
         if not isinstance(v, dict) or str(v.get("view")) == "participate":
             continue
         r = next_ret(code, day, kline_dir)
+        # 🐉 龙头被拦（2026-11-11 用户选 A：保留 room 闸，但把「错过龙头」记进复盘）
+        #    判据：这条线第 1 身位（line_rank==1 / line_is_core）或它是板块龙
+        _is_leader = bool(v.get("line_is_core")) or v.get("line_rank") == 1 \
+            or v.get("dragon_rank") == 1
         rows.append({
             "code": code,
             "name": str(v.get("name") or ""),
             "view": v.get("view"),
+            "boards": v.get("boards"),
+            "gap_pct": v.get("gap_pct"),
+            "is_line_leader": _is_leader,
             "reason": str(v.get("reason") or "")[:120],
             "rules": attribute(v),
             "next_ret_pct": r,
@@ -103,6 +110,18 @@ def build(day: str, *, names: Mapping[str, str] | None = None,
         })
     summary.sort(key=lambda x: -x["avg_pct"])
 
+    # 龙头被拦单独汇总：这批票最值得复盘（错过的是最强的，不是随便一只）
+    _leaders = [x for x in rows if x["is_line_leader"] and not x["pending"]]
+    leader_blocked = {
+        "n": len([x for x in rows if x["is_line_leader"]]),
+        "settled": len(_leaders),
+        "avg_pct": (round(sum(x["next_ret_pct"] for x in _leaders) / len(_leaders), 2)
+                    if _leaders else None),
+        "win_pct": (round(100 * sum(1 for x in _leaders if x["next_ret_pct"] > 0) / len(_leaders), 1)
+                    if _leaders else None),
+        "codes": [x["code"] for x in _leaders],
+    }
+
     return {
         "schema": SCHEMA,
         "date": day,
@@ -111,5 +130,6 @@ def build(day: str, *, names: Mapping[str, str] | None = None,
         "settled": sum(1 for r in rows if not r["pending"]),
         "note": "只统计次日收盘；pending 表示次日行情还没落盘",
         "by_rule": summary,
+        "leader_blocked": leader_blocked,
         "rows": sorted(rows, key=lambda r: (r["pending"], -(r["next_ret_pct"] or 0))),
     }

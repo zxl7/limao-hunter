@@ -70,6 +70,14 @@ def main(argv=None) -> int:
                  if worst else ""))
     else:
         print(f"[missed] {day} · 被拦 {miss['total_blocked']} 只，次日行情未到，暂不统计")
+    lb = miss.get("leader_blocked") or {}
+    if lb.get("n"):
+        if lb.get("settled"):
+            print(f"  🐉 龙头被拦 {lb['n']} 只（已结算 {lb['settled']}）："
+                  f"次日均 {lb['avg_pct']:+.2f}%、胜 {lb['win_pct']:.0f}%"
+                  f"｜{'、'.join(lb['codes'][:6])}")
+        else:
+            print(f"  🐉 龙头被拦 {lb['n']} 只（次日行情未到）")
     return 0
 
 
