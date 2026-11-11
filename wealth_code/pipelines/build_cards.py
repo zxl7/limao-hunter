@@ -2636,8 +2636,11 @@ def _ai_plan_block(raw: dict, records: list[dict],
                              f" → 买的是隔壁·{_lc_name}一开板就走）</font>")
         elif isinstance(oc.get("line_core"), dict) and (oc["line_core"] or {}).get("name"):
             _lc = oc["line_core"]
+            # ⛔ 2026-11-11 文案：`broken` 只表示「这条线上一波更高的核心已断」，
+            #    **不表示今天在不在板**。写成「已断板」会被读成「今天也断了」
+            #    （11-11 光洋 09:44 就封上 7 板，卡面却写它已断板）。
             _core_tag = (f"<font color='grey'>（这条线最高板是 {_lc.get('name')}"
-                         f"{'·已断板' if _lc.get('broken') else ''}）</font>")
+                         f"{'·上一波已断，今天在不在板另看' if _lc.get('broken') else ''}）</font>")
         blocks.append(_div(
             f"**{name_txt}{_boards_txt(r)}** {gap_txt} → {tag}{_core_tag}"))
         # 🎯 指标打满（2026-10-21 用户「指标打满」）：买入票是全卡唯一的行动项，
@@ -4792,6 +4795,10 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
     except Exception as _e:                       # 诚实降级·绝不阻断出卡
         print(f"[verify_card] 动态仓位块跳过：{_e}")
 
+    # 🕘 时点声明（2026-11-11 用户：「不能把竞价的强势结论原封不动带到下跌后」）
+    #    ⛔ 只声明边界，不加功能：系统确实是 09:25 一次裁决，盘中机会交人工。
+    blocks.append(_note("🕘 以上判定只对 09:25 有效；开盘后的回落/走强是另一套判断，"
+                        "系统不做盘中二次买入 · 交人工"))
     blocks += _footer(hhmm)
     # 🎨 卡头颜色（2026-10-22 08:59 用户「竞价卡的标题颜色变为紫色！」）：
     #   ⛔ 这是**整卡标题条**的颜色（飞书 card header template），与正文里
