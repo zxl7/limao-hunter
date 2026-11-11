@@ -364,6 +364,10 @@ POOL_CALL_LEADER_IGNORE_ROOM = os.environ.get("POOL_CALL_LEADER_IGNORE_ROOM", "0
 AI_TILT_MODE = os.environ.get("AI_TILT_MODE", "shadow").strip().lower()
 AI_TILT_ABSTAIN = os.environ.get("AI_TILT_ABSTAIN", "0") == "1"
 AI_TILT_ABSTAIN_P = float(os.environ.get("AI_TILT_ABSTAIN_P", "0.28") or 0.28)
+# 🧪 2026-11-11 用户「挑着做题材催化强度」：LLM 只给题材催化分，⛔ 不给买卖结论。
+#    shadow（默认）= 只记录每只参与票所属题材的催化等级；live = 低于门槛不做。
+CATALYST_MODE = os.environ.get("CATALYST_MODE", "shadow").strip().lower()
+CATALYST_MIN_LEVEL = os.environ.get("CATALYST_MIN_LEVEL", "normal").strip().lower()
 BREADTH_MIN_SIZE = 8          # 少于这个家数的线不判广度（百分比无意义）
 BREADTH_DIVERGE_UNDER = 0.40  # 水下占比 ≥40% → 分化
 CORE_GATE_MIN_GAP = 2
@@ -1188,6 +1192,7 @@ def call_pool(candidates: dict[str, Any] | None,
              code_theme: dict[str, str] | None = None,
              theme_momentum: dict[str, dict[str, Any]] | None = None,
              advice: dict[str, Any] | None = None,
+             catalyst: dict[str, Any] | None = None,
              enabled: bool | None = None) -> dict[str, Any]:
     """9:25 池内裁决 → 今天买哪只（**唯一判据源**）。
 
@@ -2741,6 +2746,21 @@ def call_pool(candidates: dict[str, Any] | None,
         # 🎯 2026-11-05：允许买时**不按名额数字截断**——达标几只买几只。
         #    ⛔ effective_quota == 0 已在上面短路（全池观察），此处不改变空仓语义。
         _unlimited = POOL_CALL_UNLIMITED_SLOTS and effective_quota >= 1
+        # 🧪 题材催化强度（LLM）：shadow 只记录；live 且等级不足 → 不做。
+        _cat_level = None
+        if catalyst and CATALYST_MODE in ("shadow", "live"):
+            try:
+                from core import ai_advice as _aa
+                _th = str(e.get("theme_name") or e.get("core_theme") or "")
+                _cat_level = _aa.level_of(catalyst, _th)
+            except Exception:  # noqa: BLE001
+                _cat_level = None
+            if (CATALYST_MODE == "live" and _cat_level is not None
+                    and _cat_level not in ("strong", "normal", "unknown")
+                    and CATALYST_MIN_LEVEL in ("strong", "normal")):
+                marks[code] = {**e, "view": "watch", "catalyst_level": _cat_level,
+                               "reason": f"这条线催化强度 {_cat_level} → 今天不做"}
+                continue
         if e.get("ai_abstain"):
             marks[code] = {**e, "view": "watch",
                            "reason": (f"今天开在 {e['gap_pct']:+.2f}%，本来达标；"
@@ -2769,6 +2789,7 @@ def call_pool(candidates: dict[str, Any] | None,
                 # 🕳️ 深低开豁免：⛔ 不能说「符合预期」（它明显低于预期），要说清是**被砸出的错杀**
                 _zone_reason = "比它自己的预期低得多，属于被砸下来的错杀档 → 买入"
             marks[code] = {**e, "view": "participate", "quota_rank": i + 1,
+                           **({"catalyst_level": _cat_level} if _cat_level else {}),
                            "reason": (f"今天开在 {e['gap_pct']:+.2f}%，"
                                       f"{_zone_reason}"
                                       + _band_note
@@ -3106,7 +3127,18 @@ def call_pool(candidates: dict[str, Any] | None,
                 "market": _ac2.market_verdict([a.get("attitude") for a in _anchors.values()]),
             },
             # 🧠 智能层留痕（2026-11-11）：两套名单 + 分数 + 是否改序
-            # 🚦 三态留痕（2026-11-11）：只做展示与复盘，⛔ 不参与任何判据
+            # 🧪 题材催化强度（LLM）：shadow 只留痕
+        "catalyst": (None if catalyst is None else {
+            "mode": CATALYST_MODE,
+            "min_level": CATALYST_MIN_LEVEL,
+            "source": catalyst.get("source"),
+            "model": catalyst.get("model"),
+            "levels": {str(k): (v or {}).get("level") for k, v in
+                       (catalyst.get("themes") or {}).items()},
+            "by_pick": {c: v.get("catalyst_level") for c, v in marks.items()
+                        if v.get("catalyst_level")},
+        }),
+        # 🚦 三态留痕（2026-11-11）：只做展示与复盘，⛔ 不参与任何判据
             "trade_states": {c: v.get("trade_state") for c, v in marks.items()
                              if v.get("trade_state")},
             # 🧾 替补留痕：今天买了、但这条线的核心没买
