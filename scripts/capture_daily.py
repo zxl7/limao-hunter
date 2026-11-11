@@ -1063,7 +1063,19 @@ def main():
     except Exception as e:
         sh_msg = f"shadow ERR:{e}"
 
-    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {arch_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {gg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | {th_msg} | {ld_msg} | {technical_msg} | {sg_msg} | {dg_msg} | {tl2_msg} | {sh_msg} | pruned={removed}")
+    # 18) 📊 判据日报 + 错杀清单（2026-11-11 · 只读）：每条判据今天命中几次、
+    #     被它拦下的票次日涨没涨。⛔ 不改任何结论；失败只降级。
+    try:
+        import subprocess as _sp5
+        _rr = _sp5.run([sys.executable, str(Path(__file__).resolve().parent / "rules_report.py"),
+                        "--date", today],
+                       capture_output=True, text=True, timeout=120)
+        rr_msg = ("rules_report ok" if _rr.returncode == 0
+                  else f"ERR:rc={_rr.returncode} {(_rr.stderr or '').strip()[:60]}")
+    except Exception as e:
+        rr_msg = f"rules_report ERR:{e}"
+
+    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {arch_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {gg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | {th_msg} | {ld_msg} | {technical_msg} | {sg_msg} | {dg_msg} | {tl2_msg} | {sh_msg} | {rr_msg} | pruned={removed}")
 
 
 if __name__ == "__main__":
