@@ -1057,9 +1057,11 @@ def _dip_hint(q: dict[str, Any] | None, c: dict[str, Any], *, is_core: bool = Fa
     except (TypeError, ValueError):
         ap = None
     if ap and ap > 0:
-        return (f"｜💡 够强可等杀跌低吸：回踩到 {ap * 0.97:.2f}（今开 −3%）附近再看，"
-                "买不买你定")
-    return "｜💡 够强可等杀跌低吸（买不买你定）"
+        # 🐉 2026-11-11 用户：「可以写一个留意光洋的买入机会」。⛔ 不要写成
+        #    「今天不做/没机会」——那读起来像退出信号，实际是**等价格**。
+        return (f"｜🐉 留意买入机会：高开不追，回踩到 {ap * 0.97:.2f}"
+                "（今开 −3%）附近再看（买不买你定）")
+    return "｜🐉 留意买入机会：高开不追，等回踩再看（买不买你定）"
 
 
 def _bias_of(plan: dict | None, code: str) -> str:
@@ -1992,7 +1994,9 @@ def call_pool(candidates: dict[str, Any] | None,
                                           f"（上限 {_lim:.0f}%）→ 上方空间不够，不追"
                                           # 🅱️ 三态（2026-11-11）：核心还在，只是这个价格不合适
                                           #    → 明写「可以不做」，⛔ 不发替代资格
-                                          + ("；核心仍在，只是价格不合适——今天可以不做"
+                                          # 只陈述事实；「留意买入机会」由 `_dip_hint` 给（带价格），
+                                          # ⛔ 两处都写会变成复读。
+                                          + ("；核心仍在，只是这个价不值"
                                              if _core_alive else "")
                                           + _dip_hint(q, c, is_core=is_core))}
                 continue

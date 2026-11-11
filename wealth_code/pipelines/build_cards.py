@@ -2658,8 +2658,15 @@ def _ai_plan_block(raw: dict, records: list[dict],
             # ⛔ 2026-11-11 文案：`broken` 只表示「这条线上一波更高的核心已断」，
             #    **不表示今天在不在板**。写成「已断板」会被读成「今天也断了」
             #    （11-11 光洋 09:44 就封上 7 板，卡面却写它已断板）。
+            # ⛔ 2026-11-11 用户：「不要说什么光洋断板这种错误的消息」。
+            #    `in_pool=True` 说明它**今天就在涨停池里**，此时一个字都不该提「断」；
+            #    只有 `in_pool` 明确为 False 时才提示「上一波已断」。
+            _in_pool = _lc.get("in_pool")
+            _broken_txt = ""
+            if _in_pool is False and _lc.get("broken"):
+                _broken_txt = "·上一波已断（今天不在板）"
             _core_tag = (f"<font color='grey'>（这条线最高板是 {_lc.get('name')}"
-                         f"{'·上一波已断，今天在不在板另看' if _lc.get('broken') else ''}）</font>")
+                         f"{_broken_txt}）</font>")
         blocks.append(_div(
             f"**{name_txt}{_boards_txt(r)}** {gap_txt} → {tag}{_core_tag}"))
         # 🎯 指标打满（2026-10-21 用户「指标打满」）：买入票是全卡唯一的行动项，
@@ -5796,7 +5803,8 @@ def build_ambush_card(data: dict | None = None) -> dict:
             f"（规则筛选 {_n} 只 · 实时数据核验）"
             # ⛔ 仓位口径单一源：个股点评是 AI 写的，曾出现「不超三成」与系统 50% 打架。
             #    卡面在这里钉死优先级，⛔ 不复述数字（数字只在「风险」段出现一次）。
-            "\n<font color='grey'>仓位只以本卡「风险」段为准；个股点评里出现的仓位百分比不生效。</font>"
+            # ⛔ 配色铁律：飞书不渲染 <font>（本卡 self-check 直接拒推），灰字用 text_tag/neutral。
+            "\n<text_tag color='neutral'>仓位只以本卡「风险」段为准；个股点评里出现的仓位百分比不生效。</text_tag>"
         )]
         for p in picks:
             theme = str(p.get("theme") or "")
