@@ -715,8 +715,23 @@ def run_verify(
                         _stance_why = _st.get("reason")
                     except Exception as _e:      # 诚实降级：定调失败 → 不裁决
                         _stance_in, _stance_why = None, f"机械定调跳过：{_e}"
+                # AI_TILT: 2026-11-11 intelligent scoring layer (advice only)
+                _tilt_advice = None
+                try:
+                    _mode = str(getattr(pool_call, 'AI_TILT_MODE', 'off') or 'off').lower()
+                    if _mode in ('shadow', 'live'):
+                        from core import ai_tilt as _at
+                        _m = _at.load_model()
+                        if _m:
+                            _pool_rows = [*(candidates.get('relay') or []),
+                                          *(candidates.get('watch') or [])]
+                            _tilt_advice = _at.advice_payload(_m, _pool_rows, mode=_mode)
+                except Exception as _e:
+                    print(f'[VERIFY] ai_tilt skipped: {_e}')
+                    _tilt_advice = None
                 pool_res = pool_call.call_pool(
                     candidates, quotes, plan=_plan_in,
+                    advice=_tilt_advice,
                     stance=_stance_in,
                     market_open=market_open_read,
                     # 🌊 2026-11-04 独苗高开闸：要**昨日完整涨停池**算「同板块其余票红开率」。

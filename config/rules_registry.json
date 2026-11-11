@@ -370,7 +370,48 @@
      "rollback": "—"
     }
    ]
+  },
+  {
+   "name": "智能层（2026-11-11）",
+   "rules": [
+    {
+     "id": "ai.layer",
+     "name": "智能评分层",
+     "kind": "rank",
+     "switch": "AI_TILT_MODE",
+     "default": "shadow",
+     "status": "active",
+     "since": "2026-11-11",
+     "what": "在机械允许集内提供 p_win：off=不加载 / shadow=只记录两套名单 / live=应用 tie-break。⛔ 不碰硬闸、不改名额。",
+     "source": "用户「给机械逻辑叠加智能层，1+1>2」",
+     "rollback": "AI_TILT_MODE=off"
+    },
+    {
+     "id": "ai.abstain",
+     "name": "智能弃权",
+     "kind": "gate",
+     "switch": "AI_TILT_ABSTAIN",
+     "default": "0",
+     "status": "off",
+     "since": "2026-11-11",
+     "what": "p_win ≤ 阈值时把已达标的买入降为观察，⛔ 只能减少不能增加。回放显示当前无正贡献，默认关。",
+     "source": "",
+     "rollback": "AI_TILT_ABSTAIN=off"
+    },
+    {
+     "id": "ai.model",
+     "name": "模型文件",
+     "kind": "data",
+     "switch": "AI_TILT_MODEL",
+     "default": "config/models/ai_tilt_v2.json",
+     "status": "active",
+     "since": "2026-11-11",
+     "what": "L2 逻辑回归（≤9 维，强正则），walk-forward 验证 AUC≥0.52 才产出；版本/维度不符拒绝加载。",
+     "source": "",
+     "rollback": "AI_TILT_MODEL=off"
+    }
+   ]
   }
  ],
- "count": 29
+ "count": 32
 }

@@ -357,6 +357,13 @@ POOL_CALL_BREADTH = os.environ.get("POOL_CALL_BREADTH", "1") != "0"
 #    开启后：**龙一/这条线核心**不适用「顶部空间不足就放弃」——高开也买，
 #    只有竞价封死/一字（物理买不到）才放弃。⛔ 默认关，先跑回放再决定。
 POOL_CALL_LEADER_IGNORE_ROOM = os.environ.get("POOL_CALL_LEADER_IGNORE_ROOM", "0") == "1"
+# 🧠 智能评分层（2026-11-11 计划 P2）：只在**机械允许集内**做排序微调/弃权。
+#    off    = 完全不加载（逐字节回退旧行为）
+#    shadow = 只记录「如果听了会怎样」，⛔ 不改任何 view / 顺序
+#    live   = 应用 tie-break（仅同键组内）；弃权另受 AI_TILT_ABSTAIN 控制
+AI_TILT_MODE = os.environ.get("AI_TILT_MODE", "shadow").strip().lower()
+AI_TILT_ABSTAIN = os.environ.get("AI_TILT_ABSTAIN", "0") == "1"
+AI_TILT_ABSTAIN_P = float(os.environ.get("AI_TILT_ABSTAIN_P", "0.28") or 0.28)
 BREADTH_MIN_SIZE = 8          # 少于这个家数的线不判广度（百分比无意义）
 BREADTH_DIVERGE_UNDER = 0.40  # 水下占比 ≥40% → 分化
 CORE_GATE_MIN_GAP = 2
@@ -1180,6 +1187,7 @@ def call_pool(candidates: dict[str, Any] | None,
              sector_gap: dict[str, dict[str, Any]] | None = None,
              code_theme: dict[str, str] | None = None,
              theme_momentum: dict[str, dict[str, Any]] | None = None,
+             advice: dict[str, Any] | None = None,
              enabled: bool | None = None) -> dict[str, Any]:
     """9:25 池内裁决 → 今天买哪只（**唯一判据源**）。
 
@@ -2674,6 +2682,38 @@ def call_pool(candidates: dict[str, Any] | None,
         for entry in entries:
             entry["status_rank"] = marks[entry["code"]]["status_rank"]
     entries.sort(key=_key, reverse=True)
+
+    # 🧠 智能评分层：p_win 只作为**最后一位 tie-break**（前面的机械键一个不动），
+    #    shadow 模式只记录两套名单，⛔ 不改任何 view / 顺序。
+    _ai_info: dict[str, Any] | None = None
+    if advice and AI_TILT_MODE in ("shadow", "live"):
+        _scores = {str(k): float(v) for k, v in (advice.get("scores") or {}).items()
+                   if isinstance(v, (int, float))}
+        _base = [e["code"] for e in entries]
+        if _scores:
+            _ranked = sorted(entries, key=lambda e: (_key(e), _scores.get(e["code"], 0.5)),
+                             reverse=True)
+        else:
+            _ranked = list(entries)
+        _ma = [e["code"] for e in _ranked]
+        _abstain = [c for c in _ma if _scores.get(c, 1.0) <= AI_TILT_ABSTAIN_P]
+        _ai_info = {
+            "mode": AI_TILT_MODE,
+            "model": advice.get("model"),
+            "abstain_enabled": bool(AI_TILT_ABSTAIN),
+            "abstain_threshold": AI_TILT_ABSTAIN_P,
+            "scores": {c: _scores[c] for c in _ma if c in _scores},
+            "arms": {"M": _base, "MA": _ma},
+            "abstained": _abstain,
+            "changed": _base != _ma,
+        }
+        if AI_TILT_MODE == "live":
+            entries = _ranked                    # 只在同键组内改变先后
+            if AI_TILT_ABSTAIN:
+                for e in entries:
+                    if e["code"] in _abstain:
+                        e["ai_abstain"] = True
+
     for i, e in enumerate(entries):
         code = e["code"]
         if effective_quota <= 0:
@@ -2701,6 +2741,13 @@ def call_pool(candidates: dict[str, Any] | None,
         # 🎯 2026-11-05：允许买时**不按名额数字截断**——达标几只买几只。
         #    ⛔ effective_quota == 0 已在上面短路（全池观察），此处不改变空仓语义。
         _unlimited = POOL_CALL_UNLIMITED_SLOTS and effective_quota >= 1
+        if e.get("ai_abstain"):
+            marks[code] = {**e, "view": "watch",
+                           "reason": (f"今天开在 {e['gap_pct']:+.2f}%，本来达标；"
+                                      "但智能层判该档历史胜率极低 → 放弃")
+                           if isinstance(e.get("gap_pct"), (int, float))
+                           else "智能层判该档历史胜率极低 → 放弃"}
+            continue
         if _unlimited or i < effective_quota:
             _open_note = "（昨涨停今早整体转强，空仓日只试这一只）" if open_relief else ""
             # 🔮 2026-11-02：把「开在这个幅度、历史上赚不赚」直接写进买入理由——
@@ -3058,6 +3105,7 @@ def call_pool(candidates: dict[str, Any] | None,
                 "flat": [c for c, v in marks.items() if v.get("anchor_flat")],
                 "market": _ac2.market_verdict([a.get("attitude") for a in _anchors.values()]),
             },
+            # 🧠 智能层留痕（2026-11-11）：两套名单 + 分数 + 是否改序
             # 🚦 三态留痕（2026-11-11）：只做展示与复盘，⛔ 不参与任何判据
             "trade_states": {c: v.get("trade_state") for c, v in marks.items()
                              if v.get("trade_state")},
@@ -3093,6 +3141,8 @@ def call_pool(candidates: dict[str, Any] | None,
             # 🎯 单票场景上限（2026-11-04）：与卡面/账本同源，禁在下游另算
             "single_pick_cap": _single_cap,
         }),
+        # 🧠 智能层留痕（顶层）：两套名单 + p_win + 是否改序
+        **({"ai_layer": _ai_info} if _ai_info is not None else {}),
         "call_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         # 🌊 周期位置留痕（2026-10-21 P1）：**只记录、不参与裁决**。
         #    写进 meta 是为了让决策日志/复盘能回答「当时是什么周期位置、所以这么判」；
