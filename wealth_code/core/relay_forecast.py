@@ -322,6 +322,18 @@ def forecast_one(row: dict, market_max: int, model: dict | None = None, *,
 
     promo_board = ((model.get("by_boards") or {}).get(boards) or {}).get("promo")
     reasons: list[str] = []
+    # 档位统计只写一次（列表头/图例用），⛔ 不再逐行复读
+    stat_note = ""
+    # 🐉 2026-11-11 用户「龙一/龙二信息全没了」：把**同题材身位**写回行内。
+    #    之前改预测话术时把 龙1/龙2 换成了整段档位统计，读者只看到重复的大道理、
+    #    看不到「它在这么线里排第几」——那才是选股要的信息。
+    _dr = row.get("dragon_rank")
+    _role = str(row.get("leader_role") or "").strip()
+    _rank_txt = ""
+    if isinstance(_dr, (int, float)) and _dr:
+        _rank_txt = f"·本方向第{int(_dr)}"
+    if _role:
+        _rank_txt += f"·{_role}"
     pos_basis = "line" if (use_line and line_gap is not None) else "market"
 
     if pos_basis == "line":
@@ -340,14 +352,14 @@ def forecast_one(row: dict, market_max: int, model: dict | None = None, *,
                 reasons.append(f"即便买到，这组胜率 {g.get('buy_win')}%、平均 {g.get('buy_avg')}%")
         elif line_gap == 1:
             verdict = VERDICT_WAIT
-            reasons.append(
-                f"本题材最高 {theme_max} 板、它 {boards} 板＝只差 1 板（最快的一档）；"
-                f"这档 35 日实测 +0.52%、胜 53.4%，是这几档里最好的一档")
+            # ⛔ 2026-11-11 用户「这话术是重复的，重复率没有意义」：
+            #    行内只留**这只票特有**的事实；档位统计挪到 `stat_note`，由列表头/图例显示一次。
+            reasons.append(f"本题材最高 {theme_max} 板、它 {boards} 板＝只差 1 板{_rank_txt}")
+            stat_note = "差 1 板这档 35 日实测 +0.52%、胜 53.4%，是这几档里最好的一档"
         else:                                   # line_gap == 0：自己就是这条线的锚
             verdict = VERDICT_WATCH
-            reasons.append(
-                f"它自己就是本题材最高板（{boards} 板）：这档 35 日实测 −1.10%、胜 40.1%，"
-                f"不是不好，是没有「差 1 板」那档的确定性 → 先看不动")
+            reasons.append(f"它就是本题材最高板（{boards} 板{_rank_txt}）")
+            stat_note = "最高板这档 35 日实测 −1.10%、胜 40.1%，没有「差 1 板」那档的确定性 → 先看不动"
     elif use_line:
         # 有开关但算不出题材（行业兜底/数据缺）→ ⛔ 不裁决，不拿全市场差否决
         if boards >= CLIFF_BOARDS and (promo_board or 0) < CLIFF_PROMO_MAX:
@@ -404,6 +416,8 @@ def forecast_one(row: dict, market_max: int, model: dict | None = None, *,
         "by_band": g.get("by_band") or {},
         "verdict": verdict,
         "reasons": reasons,
+        # 🧾 档位统计（同一档的所有票**共用同一句**）→ UI 显示一次，⛔ 不要逐行重复
+        "stat_note": stat_note,
         # 🎯 11-05 用户纠偏：同一模型里再挂一份「按昨日封板质量，今天该开多少」。
         #    `gap_median` 是「身位×封板强弱」分组的历史开幅中位数（会到 9.98%，
         #    与 >5% 不买冲突）；`expected_gap_pct` 是六质量因子的收缩加性点估计，
