@@ -143,20 +143,24 @@ def run_config(day: dict, cfg: str) -> dict:
     saved = (pool_call.POOL_CALL_TOP_BOARD_PRIORITY,
              pool_call.POOL_CALL_LOW_OPEN_TOP_EXCEPTION,
              pool_call.POOL_CALL_VOLUME_SOFT,
-             pool_call.POOL_CALL_LEADER_ONLY)
+             pool_call.POOL_CALL_LEADER_ONLY,
+             getattr(pool_call, "POOL_CALL_LEADER_IGNORE_ROOM", False))
     flags = {
-        "old":     (False, False, False, False),
-        "new":     (True,  False, False, False),
-        "low":     (True,  True,  False, False),
-        "vol":     (True,  False, True,  False),
-        "leader":  (True,  False, False, True),
-        "new_all": (True,  True,  True,  True),
+        "old":     (False, False, False, False, False),
+        "new":     (True,  False, False, False, False),
+        "low":     (True,  True,  False, False, False),
+        "vol":     (True,  False, True,  False, False),
+        "leader":  (True,  False, False, True,  False),
+        # 🐉 2026-11-11 用户口径：龙一可买即买（免顶部空间闸）+ 后排不买
+        "leader_buy": (True, False, False, True, True),
+        "new_all": (True,  True,  True,  True,  False),
     }[cfg]
     try:
         (pool_call.POOL_CALL_TOP_BOARD_PRIORITY,
          pool_call.POOL_CALL_LOW_OPEN_TOP_EXCEPTION,
          pool_call.POOL_CALL_VOLUME_SOFT,
-         pool_call.POOL_CALL_LEADER_ONLY) = flags
+         pool_call.POOL_CALL_LEADER_ONLY,
+         pool_call.POOL_CALL_LEADER_IGNORE_ROOM) = flags
         res = pool_call.call_pool(day["cands"], day["quotes"], **day["kw"])
     except Exception as e:                                       # noqa: BLE001
         return {"error": str(e), "picks": []}
@@ -164,7 +168,8 @@ def run_config(day: dict, cfg: str) -> dict:
         (pool_call.POOL_CALL_TOP_BOARD_PRIORITY,
          pool_call.POOL_CALL_LOW_OPEN_TOP_EXCEPTION,
          pool_call.POOL_CALL_VOLUME_SOFT,
-         pool_call.POOL_CALL_LEADER_ONLY) = saved
+         pool_call.POOL_CALL_LEADER_ONLY,
+         pool_call.POOL_CALL_LEADER_IGNORE_ROOM) = saved
 
     views = _views_of(res)
     picks = []
@@ -214,13 +219,14 @@ def analyze(verbose: bool = False) -> dict:
                      "low": run_config(day, "low"),
                      "vol": run_config(day, "vol"),
                      "leader": run_config(day, "leader"),
+                     "leader_buy": run_config(day, "leader_buy"),
                      "new_all": run_config(day, "new_all")})
 
     def names(cfg): return [{p["code"]: p["name"] for p in r[cfg]["picks"]} for r in rows]
 
     base_names = names("old")
     diff = {}
-    for cfg in ("new", "low", "vol", "leader", "new_all"):
+    for cfg in ("new", "low", "vol", "leader", "leader_buy", "new_all"):
         diff[cfg] = [r["date"] for r, a, b in zip(rows, base_names, names(cfg)) if a != b]
 
     out = {
@@ -231,6 +237,7 @@ def analyze(verbose: bool = False) -> dict:
         "low": summarize([r["low"]["picks"] for r in rows]),
         "vol": summarize([r["vol"]["picks"] for r in rows]),
         "leader": summarize([r["leader"]["picks"] for r in rows]),
+        "leader_buy": summarize([r["leader_buy"]["picks"] for r in rows]),
         "new_all": summarize([r["new_all"]["picks"] for r in rows]),
         "diff_days": diff,
         "rows": rows,
@@ -260,6 +267,7 @@ def render(a: dict) -> None:
                        ("low", "C 身位优先 + 低开例外"),
                        ("vol", "D 身位优先 + 量能软化"),
                        ("leader", "F 身位优先 + 身位闸（后排不做）"),
+                       ("leader_buy", "G 龙一可买即买（免顶部空间闸）"),
                        ("new_all", "E 三项全开")):
         st = a[key]
         if not st.get("days"):

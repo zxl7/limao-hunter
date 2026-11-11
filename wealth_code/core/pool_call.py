@@ -353,6 +353,10 @@ POOL_CALL_CORE_GATE = True
 # ⛔ 只上卡面一行说明，不进任何判据、不改名额/仓位/账本；无数据就不写（不猜）。
 # 回退：`POOL_CALL_BREADTH=0`。
 POOL_CALL_BREADTH = os.environ.get("POOL_CALL_BREADTH", "1") != "0"
+# 🐉 2026-11-11 晚 用户：「应当直接买入龙头股，仅当它直接高开涨停时才放弃」。
+#    开启后：**龙一/这条线核心**不适用「顶部空间不足就放弃」——高开也买，
+#    只有竞价封死/一字（物理买不到）才放弃。⛔ 默认关，先跑回放再决定。
+POOL_CALL_LEADER_IGNORE_ROOM = os.environ.get("POOL_CALL_LEADER_IGNORE_ROOM", "0") == "1"
 BREADTH_MIN_SIZE = 8          # 少于这个家数的线不判广度（百分比无意义）
 BREADTH_DIVERGE_UNDER = 0.40  # 水下占比 ≥40% → 分化
 CORE_GATE_MIN_GAP = 2
@@ -1973,7 +1977,10 @@ def call_pool(candidates: dict[str, Any] | None,
         _core_alive = bool(_lc_now) and (_lc_now.get("in_pool")
                                          if _lc_now.get("in_pool") is not None
                                          else not _lc_now.get("broken"))
-        if POOL_CALL_HIGH_GAP_REJECT and isinstance(gap, (int, float)):
+        # 🐉 龙一免「顶部空间」闸（2026-11-11 用户口径）：买最强的，别因为「贵」下移身位
+        _leader_buy = bool(POOL_CALL_LEADER_IGNORE_ROOM and (
+            is_core or c.get("dragon_rank") == 1 or c.get("is_sector_dragon")))
+        if POOL_CALL_HIGH_GAP_REJECT and isinstance(gap, (int, float)) and not _leader_buy:
             _lim = float(_ac.limit_up_pct(bool(c.get("is_20cm"))))
             _room = _lim - float(gap)
             base["gap_room_pct"] = round(_room, 2)
