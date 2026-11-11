@@ -15,8 +15,12 @@
 旧规则「DEV < −2 一律放弃」把最差档和最好档一起砍。故改成**带豁免的带**：
 
     DEV ≤ DEEP_LOW_OPEN_DEV(−6)         → 放行（`deep_low_rescue`），不按走弱处理
-    DEEP_LOW_OPEN_DEV < DEV < −2        → 仍放弃（那才是真走弱）
+    DEEP_LOW_OPEN_DEV < DEV < −2        → 11-11 之前：放弃；**11-11 起：低开放行（`low_open_buy`）**
     DEV ≥ −2                            → 照旧
+
+⚠️ 11-11 那一条是用户拍板的**政策改动**（「可以在低开的时候买」），⛔ 不是数据结论：
+    上表 −4~−2 档 n=65、−0.92%、胜 35% 是全表最差。故只给半仓、不额外占名额、
+    `POOL_CALL_LOW_OPEN_BUY=0` 一键回退。
 
 全隔离：不读真实 cache、不落盘、不触网。
 """
@@ -83,16 +87,51 @@ def test_rescued_reason_does_not_claim_meets_expectation(monkeypatch):
     assert "符合这只票的预期" not in reason
 
 
-# ── ② 中间档仍然放弃 ─────────────────────────────────────────────────
-def test_middle_band_still_rejected():
-    """开 −3%、该开 +1% → DEV −4（−6 ~ −2 之间）→ 仍放弃。"""
+# ── ② 中间档：默认按 11-11 新口径放行（半仓），关开关才回到放弃 ──────────
+def test_middle_band_released_half_position():
+    """开 −3%、该开 +1% → DEV −4（−6 ~ −2 之间）→ 11-11 起放行，半仓。"""
+    res = _call({"relay": [_cand("000001", "甲票")], "watch": []},
+                {"000001": _q(10.0, -3.0)},
+                expected_gaps={"000001": 1.0})
+    v = res["views"]["000001"]
+    assert v["view"] == "participate"
+    assert v["zone"] == "below"                 # 原始判定仍如实标「低于预期」
+    assert v["low_open_buy"]["dev"] == pytest.approx(-4.0)
+    assert v["position_cap"] == pytest.approx(0.5)
+    assert "deep_low_rescue" not in v
+
+
+def test_middle_band_reason_does_not_claim_meets_expectation():
+    """放行是**政策**放行，⛔ 不能写成「符合预期」——它确实低于预期。"""
+    res = _call({"relay": [_cand("000001", "甲票")], "watch": []},
+                {"000001": _q(10.0, -3.0)},
+                expected_gaps={"000001": 1.0})
+    reason = res["views"]["000001"]["reason"]
+    assert "低开" in reason
+    assert "符合这只票的预期" not in reason
+
+
+def test_middle_band_still_rejected_when_switch_off(monkeypatch):
+    """`POOL_CALL_LOW_OPEN_BUY=0` → 逐字回退 11-11 之前：中间档放弃。"""
+    monkeypatch.setattr(pc, "POOL_CALL_LOW_OPEN_BUY", False)
     res = _call({"relay": [_cand("000001", "甲票")], "watch": []},
                 {"000001": _q(10.0, -3.0)},
                 expected_gaps={"000001": 1.0})
     v = res["views"]["000001"]
     assert v["view"] == "skip"
     assert v["zone"] == "below"
-    assert "deep_low_rescue" not in v
+    assert "low_open_buy" not in v
+
+
+def test_red_open_not_marked_as_low_open_buy():
+    """高开（DEV 仍 < −2）不属于低开放行，⛔ 不得被打上 low_open_buy。"""
+    res = _call({"relay": [_cand("000001", "甲票")], "watch": []},
+                {"000001": _q(10.0, 1.0)},
+                expected_gaps={"000001": 6.0})
+    v = res["views"]["000001"]
+    assert v["zone"] == "below"
+    assert v["view"] == "skip"
+    assert "low_open_buy" not in v
 
 
 def test_boundary_exactly_at_threshold_is_rescued(monkeypatch):
@@ -107,17 +146,22 @@ def test_boundary_exactly_at_threshold_is_rescued(monkeypatch):
 
 
 def test_just_inside_middle_band_not_rescued(monkeypatch):
-    """DEV = −5.9 落在中间档 → 仍放弃（阈值不能有毛边）。"""
+    """DEV = −5.9 落在中间档 → ⛔ 不算错杀豁免（阈值不能有毛边），只走低开放行。"""
     monkeypatch.setattr(pc, "POOL_CALL_DEEP_LOW_RESCUE", True)
     res = _call({"relay": [_cand("000001", "甲票")], "watch": []},
                 {"000001": _q(10.0, -4.9)},
                 expected_gaps={"000001": 1.0})
-    assert res["views"]["000001"]["view"] == "skip"
+    v = res["views"]["000001"]
+    assert "deep_low_rescue" not in v
+    assert v["view"] == "participate"
+    assert v["low_open_buy"]["dev"] == pytest.approx(-5.9)
 
 
 # ── ③ 可逆开关 ───────────────────────────────────────────────────────
 def test_switch_off_reverts_to_hard_reject(monkeypatch):
+    """两道开关全关 → 逐字回到 11-06 之前的硬拒。"""
     monkeypatch.setattr(pc, "POOL_CALL_DEEP_LOW_RESCUE", False)
+    monkeypatch.setattr(pc, "POOL_CALL_LOW_OPEN_BUY", False)
     res = _call({"relay": [_cand("000001", "甲票")], "watch": []},
                 {"000001": _q(10.0, -8.0)},
                 expected_gaps={"000001": 1.0})
@@ -127,13 +171,15 @@ def test_switch_off_reverts_to_hard_reject(monkeypatch):
 
 
 def test_threshold_is_tunable(monkeypatch):
-    """`DEEP_LOW_OPEN_DEV` 调到 −8 时，DEV −6 就回到中间档（放弃）。"""
+    """`DEEP_LOW_OPEN_DEV` 调到 −8 时，DEV −6 不再算错杀（退回中间档）。"""
     monkeypatch.setattr(pc, "POOL_CALL_DEEP_LOW_RESCUE", True)
     monkeypatch.setattr(pc, "DEEP_LOW_OPEN_DEV", -8.0)
     res = _call({"relay": [_cand("000001", "甲票")], "watch": []},
                 {"000001": _q(10.0, -5.0)},
                 expected_gaps={"000001": 1.0})
-    assert res["views"]["000001"]["view"] == "skip"
+    v = res["views"]["000001"]
+    assert "deep_low_rescue" not in v
+    assert v["low_open_buy"]["dev"] == pytest.approx(-6.0)
 
 
 # ── ④ 不越权：物理买不进 / absolute 回退 / 缺数据 ─────────────────────

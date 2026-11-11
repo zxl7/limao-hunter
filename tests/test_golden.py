@@ -1036,9 +1036,12 @@ def test_carry_timing():
     cand2 = [{"dm": "600011", "mc": "深中华A", "hy": "饰品", "sector": "饰品", "fbt": "092500", "core_theme": "饰品"}]
     r2 = ss.annotate_carry(cand2, pool=pool2)
     assert r2[0]["carry_cnt"] == 0, "孤军竞价封死应带动 0 家"
-    # 液冷系桥接：液冷散热/半导体散热 同归 AI算力
-    assert ss._theme_key({"core_theme": "液冷散热"}) == "AI算力"
-    assert ss._theme_key({"core_theme": "半导体散热"}) == "AI算力"
+    # 液冷系聚合（2026-11-11 改口径）：液冷散热/半导体散热 仍归**同一条线**，
+    #   但线名从「AI算力」收准为「液冷」—— AI算力 只是它们的大方向（`big_line`）。
+    #   ⛔ 别再断言等于 AI算力：正是这种「细分→AI算力」的桥接把光通信 10 家首板整条线吞掉。
+    assert ss._theme_key({"core_theme": "液冷散热"}) == "液冷"
+    assert ss._theme_key({"core_theme": "半导体散热"}) == "液冷"
+    assert ss.big_line({"core_theme": "液冷散热"}) == "AI算力"
 
 
 def test_carrier_track(monkeypatch, tmp_path):

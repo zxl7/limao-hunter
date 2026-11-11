@@ -199,10 +199,21 @@ def test_unknown_rank_is_not_judged() -> None:
 
 
 # ────────────────── 4. 量能 ──────────────────
-def test_thin_turnover_demoted() -> None:
-    """4 板票常规门槛 5 亿，且不属高度层（market_max=8）→ 3.02 亿不够。"""
+# 📌 2026-11-11 用户「这个 5 亿的限制把它 pass 掉吧 不要了 全系统清除这个限制」：
+#    成交额从**准入门槛**降级为**数据防呆线**（`MIN_TURNOVER_YI = 0.05`）。
+#    因此 3 亿这种「旧口径下的薄量」不再构成量能缺陷，只有跌破防呆线（疑似字段异常）才拦。
+def test_thin_turnover_no_longer_demoted() -> None:
+    """4 板票 3.02 亿（旧口径 5 亿要剔）→ 现在放行，不再打「量能」标。"""
     relay, watch, _ = pe.apply_high_win_gate(
         [_row(cje_yi=3.02)], [], _env(), market_max_boards=8)
+    assert len(relay) == 1 and not watch
+    assert "high_win_gate" not in relay[0]
+
+
+def test_below_data_sanity_line_demoted() -> None:
+    """跌破数据防呆线（0.05 亿）＝ 疑似字段异常 → 仍打「量能」标，与流动性无关。"""
+    relay, watch, _ = pe.apply_high_win_gate(
+        [_row(cje_yi=0.01)], [], _env(), market_max_boards=8)
     assert relay == [] and watch[0]["high_win_gate"] == ["量能"]
 
 
@@ -247,8 +258,18 @@ def test_missing_ladder_does_not_judge() -> None:
 
 # ────────────────── 6. 多条同时缺 → 全列出来 ──────────────────
 def test_multiple_missing_listed() -> None:
+    """1.0 亿已不算缺陷（5 亿门槛清除）→ 只剩题材龙/情绪/梯队三条。"""
     relay, watch, _ = pe.apply_high_win_gate(
         [_row(dragon_rank=3, cje_yi=1.0, ladder_health=1.0, ladder_has_complete=False)],
+        [], _env("ice"), market_max_boards=8)
+    assert relay == []
+    assert watch[0]["high_win_gate"] == ["题材龙", "情绪", "梯队"]
+
+
+def test_multiple_missing_includes_volume_on_bad_data() -> None:
+    """字段异常（<0.05 亿）时四条仍会同时列出来。"""
+    relay, watch, _ = pe.apply_high_win_gate(
+        [_row(dragon_rank=3, cje_yi=0.01, ladder_health=1.0, ladder_has_complete=False)],
         [], _env("ice"), market_max_boards=8)
     assert relay == []
     assert watch[0]["high_win_gate"] == ["题材龙", "情绪", "量能", "梯队"]

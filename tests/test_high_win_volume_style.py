@@ -1,33 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""四条件闸·量能按封板形态分档（2026-11-04 用户「必须补齐」）。
+"""四条件闸·量能这一条（2026-11-11 用户「5 亿的限制 pass 掉·全系统清除」后重写）。
 
-用户原话：「要考虑它是不是一字涨停。昨天龙版一字涨停，这个时候缩量是很正常的，
-          除非你是换手，换手的话量能太低就肯定说不过去，比如说今天的紫竹。」
+## 口径变更（别再把 5 亿加回来）
 
-## 锁什么
+11-04 曾按封板形态给量能分档：一字板放行（封死→成交额天然小）、换手板 1~2 板守 5 亿
+（「换手还缩量=少数资金对倒」）。11-11 用户明确推翻：
 
-1. **一字板不因缩量被判量能缺陷**（封死 → 成交额天然小，是结构必然）。
-2. **换手板 1~2 板守 5 亿**，即使成交额超过旧的 1.5 亿档位也要拦。
-3. **形态未知时不猜**：走原门槛，既不没收也不放宽。
-4. **不复用进场闸的豁免结论**：热题材/强封放行进池 ≠ 量能达标，
-   ⛔ 否则「换手板缩量」会从后门溜过四条件闸。
-5. 开关 `ENABLE_HIGH_WIN_VOLUME_BY_STYLE=0` 逐字回退旧纯数值口径。
+> 「这个 5 亿的限制把它 pass 掉吧 不要了 **全系统清除这个限制**」
 
-## 真实锚点（2026-11-03 候选库 → 11-04 竞价）
+直接证据（同日盘后）：光通信 10 家全首板、成交额 222.6 亿，其中
+**青山纸业 3.29 亿（换手 4.6%）、华脉科技 1.55 亿（换手 5.7%）被 5 亿线误杀** ——
+它们是缩量锁筹（筹码没人卖才能缩量封板），不是流动性缺陷。
+晋级率与成交额甚至单调负相关（≤1.5 亿 27.5% → ≥10 亿 8.1%），
+拿成交额当硬门槛等于系统性地扔掉晋级率最高的那一档。
 
-| 票 | 形态 | 换手 | 成交额 | 新判 |
-|---|---|---|---|---|
-| 大晟文化 600892 | 一字 | 1.26% | 0.34 亿 | 量能 PASS |
-| 龙版传媒 605577 | 一字 | 0.85% | 0.54 亿 | 量能 PASS |
-| 紫竹高科 002058 | 换手 | 8.70% | 2.54 亿 | **缺量能** |
+## 现在锁什么
+
+1. **量能这一条只剩「数据防呆」**：跌破 `DATA_SANITY_MIN_YI`（0.05 亿）才拦，
+   挡的是 NaN/0/字段错乱，⛔ 不是流动性判据。
+2. 一字 / 换手 / 形态未知 **一律不再因成交额被拦**。
+3. 热题材/强封的进场豁免不再需要「防后门」——因为量能本身已不设成交额线。
+4. 其余三条（情绪 / 题材龙 / 梯队）判定完全不变。
+5. 开关仍在（`ENABLE_HIGH_WIN_VOLUME_BY_STYLE`），但两种口径下都不再卡成交额。
+
+⚠️ 若日后要恢复「量能」这条的区分力，**必须换一个不是成交额的量**（换手率/量比/封单比）
+并先做 A/B，⛔ 不许把 5 亿线悄悄加回来。
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-
-import pytest
 
 BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE / "wealth_code"))
@@ -45,7 +48,6 @@ def _row(**kw):
         "sector_has_mates": True, "theme_mates_cnt": 6,
         "sector_is_lone": False, "theme_is_lone": False,
         "ladder_health": 10.0, "ladder_has_complete": True,
-        # 封板画像（用于 seal_gate 打分，任一用例可按需覆盖）
         "fbt": "092500", "seal_amt": 2.0, "lt_mktcap": 50.0, "zbc": 0,
     }
     base.update(kw)
@@ -55,96 +57,74 @@ def _row(**kw):
 _ENV = {"regime": "risk_on", "relay_feedback": {"pressure": False}}
 
 
-# ── ① 一字板：缩量不判缺陷 ───────────────────────────────────────────────
+# ── ① 成交额不再产生「缺量能」────────────────────────────────────────────
 def test_yizi_small_turnover_passes_volume():
     """一字板 0.34 亿（大晟文化真实值）→ 量能 PASS。"""
     r = _row(cje_yi=0.34, is_one_word=True, hs=1.26)
     assert "量能" not in pe.high_win_missing(r, _ENV, 4)
 
 
-def test_yizi_small_turnover_passes_volume_longban():
-    """一字板 0.54 亿（龙版传媒真实值）→ 量能 PASS。"""
-    r = _row(cje_yi=0.54, is_one_word=True, hs=0.85)
-    assert "量能" not in pe.high_win_missing(r, _ENV, 4)
+def test_turnover_board_small_turnover_also_passes():
+    """换手板 2.54 亿（紫竹高科真实值）→ **量能 PASS**（11-11 起不再卡 5 亿）。
 
-
-def test_yizi_still_guards_data_sanity_line():
-    """⛔ 一字不是「无门槛」：跌破数据防呆线仍拦（挡字段异常，不是流动性判据）。"""
-    r = _row(cje_yi=0.01, is_one_word=True)
-    assert "量能" in pe.high_win_missing(r, _ENV, 4)
-
-
-# ── ② 换手板：1~2 板守 5 亿 ──────────────────────────────────────────────
-def test_turnover_board_low_volume_blocked():
-    """换手板 2.54 亿（紫竹高科真实值）→ 缺量能（旧口径会误判 PASS）。"""
+    ⛔ 这条是回归锁：哪天有人把 5 亿线加回来，它会立刻变红。
+    """
     r = _row(cje_yi=2.54, is_one_word=False, hs=8.70, fbt="094848")
-    assert "量能" in pe.high_win_missing(r, _ENV, 4)
-
-
-def test_turnover_board_enough_volume_passes():
-    """换手板 7.88 亿（东方海洋真实值）→ 量能 PASS。"""
-    r = _row(cje_yi=7.88, is_one_word=False, hs=14.58, boards=4)
     assert "量能" not in pe.high_win_missing(r, _ENV, 4)
 
 
-def test_turnover_board_threshold_is_five_yi_not_one_point_five():
-    """卡在旧 1.5 亿与 5 亿之间（3 亿）→ 换手板仍缺量能，一字板放行。"""
-    assert "量能" in pe.high_win_missing(
-        _row(cje_yi=3.0, is_one_word=False), _ENV, 4)
+def test_shrink_seal_stocks_pass_volume():
+    """11-11 光通信被误杀的两只：青山纸业 3.29 亿 / 华脉科技 1.55 亿 → 量能 PASS。"""
     assert "量能" not in pe.high_win_missing(
-        _row(cje_yi=3.0, is_one_word=True), _ENV, 4)
+        _row(cje_yi=3.29, is_one_word=False, hs=4.6), _ENV, 4)
+    assert "量能" not in pe.high_win_missing(
+        _row(cje_yi=1.55, is_one_word=False, hs=5.7), _ENV, 4)
 
 
-# ── ③ 形态未知：不猜 ────────────────────────────────────────────────────
-def test_unknown_style_uses_original_floor():
-    """无 `is_one_word` 字段（旧候选）→ 走原档位门槛，不按一字放行。"""
-    r = _row(cje_yi=0.54)                    # 1~2 板原门槛 1.5 亿
+def test_data_sanity_line_still_blocks():
+    """⛔ 防呆线还在：0.01 亿（疑似字段异常）→ 仍算缺量能。"""
+    assert "量能" in pe.high_win_missing(_row(cje_yi=0.01), _ENV, 4)
+    assert "量能" in pe.high_win_missing(_row(cje_yi=0.01, is_one_word=True), _ENV, 4)
+
+
+def test_unknown_style_not_blocked_by_turnover():
+    """无 `is_one_word` 字段（旧候选）→ 也不再因成交额被拦。"""
+    r = _row(cje_yi=0.54)
     r.pop("is_one_word", None)
     assert sg.board_style(r) == "unknown"
-    assert "量能" in pe.high_win_missing(r, _ENV, 4)
+    assert "量能" not in pe.high_win_missing(r, _ENV, 4)
 
 
-def test_unknown_style_high_volume_still_passes():
+def test_theme_hot_and_strong_seal_no_longer_need_backdoor_guard():
+    """热题材/强封的进场豁免不需要「防后门」了 —— 量能本身不设成交额线。"""
+    assert "量能" not in pe.high_win_missing(
+        _row(cje_yi=1.0, boards=4, is_one_word=False, theme_mates_cnt=17,
+             seal_gate={"source": "theme_hot"}), _ENV, 8)
+    assert "量能" not in pe.high_win_missing(
+        _row(cje_yi=1.0, boards=4, is_one_word=False,
+             seal_gate={"source": "strong"}), _ENV, 8)
+
+
+def test_high_volume_still_passes():
     r = _row(cje_yi=8.0)
     r.pop("is_one_word", None)
     assert "量能" not in pe.high_win_missing(r, _ENV, 4)
 
 
-# ── ④ 不复用进场闸豁免结论（防后门）────────────────────────────────────
-def test_theme_hot_exemption_does_not_bypass_volume_gate():
-    """⛔ 热题材（17 家）让票进了池，但换手板缩量仍要在四条件闸被拦。
-
-    这正是「同一事实只判一次」的反面教材：强封/厚封/热题材豁免的理由是
-    封板质量与题材家数，**不是「成交额够」**，拿它当量能达标会让缩量换手板溜过。
-    """
-    r = _row(cje_yi=1.0, boards=4, is_one_word=False, theme_mates_cnt=17,
-             seal_gate={"source": "theme_hot"})
-    assert "量能" in pe.high_win_missing(r, _ENV, 8)
-
-
-def test_strong_seal_exemption_does_not_bypass_volume_gate():
-    """强封放行进池 ≠ 量能达标：换手板 1 亿仍缺量能；一字板则放行。"""
-    assert "量能" in pe.high_win_missing(
-        _row(cje_yi=1.0, boards=4, is_one_word=False,
-             seal_gate={"source": "strong"}), _ENV, 8)
-    assert "量能" not in pe.high_win_missing(
-        _row(cje_yi=1.0, boards=4, is_one_word=True,
-             seal_gate={"source": "strong"}), _ENV, 8)
-
-
-# ── ⑤ 开关可逆 ──────────────────────────────────────────────────────────
-def test_switch_off_restores_pure_numeric(monkeypatch):
-    """`=0` → 逐字回到「cje < 档位门槛」旧口径：一字板缩量重新被判缺量能。"""
-    r = _row(cje_yi=0.54, is_one_word=True)
+# ── ② 开关仍在，但两种口径都不卡成交额 ───────────────────────────────────
+def test_switch_off_also_does_not_block(monkeypatch):
+    """`=0` 回到纯数值口径 —— 纯数值门槛已是防呆线，故同样不拦。"""
     monkeypatch.setenv(pe.HIGH_WIN_VOLUME_BY_STYLE_ENV, "0")
-    assert "量能" in pe.high_win_missing(r, _ENV, 4)
+    assert "量能" not in pe.high_win_missing(_row(cje_yi=0.54, is_one_word=True), _ENV, 4)
+    assert "量能" not in pe.high_win_missing(_row(cje_yi=2.54, is_one_word=False), _ENV, 4)
+    assert "量能" in pe.high_win_missing(_row(cje_yi=0.01), _ENV, 4)
 
 
 def test_switch_default_on():
     assert pe.high_win_volume_by_style() is True
 
 
-# ── ⑥ 不误伤其它三条 ────────────────────────────────────────────────────
+# ── ③ 不误伤其它三条 ────────────────────────────────────────────────────
 def test_other_conditions_unaffected_by_volume_style():
     """量能放行后，情绪/题材龙/梯队的判定完全不变。"""
     assert pe.high_win_missing(

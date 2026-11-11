@@ -237,8 +237,11 @@ _VIEW_TO_BIAS = {"participate": "focus", "watch": "normal", "skip": "avoid"}
 #   ⛔ 不改写 AI 的 `reason` 原文（显示层照旧保留 AI 说了什么）；
 #   ⛔ 取不到候选文件（缺席/字段缺）→ 视为「无硬伤信息」→ **不降级**（宁松不误伤）。
 ENABLE_BIAS_AVOID_GUARD = True
-# 四类硬伤里的「成交额过小」阈值（与 pipeline_eod.MIN_TURNOVER_YI 同口径：5 亿）
-HARD_FLAW_MIN_TURNOVER_YI = 5.0
+# 四类硬伤里的「成交额过小」阈值
+# 🔴 2026-11-11 用户「5 亿的限制全系统清除」→ 成交额不再是 `avoid` 的硬伤理由。
+#    保留常量只为可逆回退（`HARD_FLAW_MIN_TURNOVER_YI=5.0` 即可恢复旧口径）。
+#    ⛔ 现在只剩三件真硬伤：一字板买不到 / ST / 纯跟风无带动。
+HARD_FLAW_MIN_TURNOVER_YI = 0.05
 # 机械「强龙」证据阈值：首封 ≤ **09:30** 才算真秒板（开盘即封）
 # ⛔ 不用 relay_score 的 ≤10:00 档：实证 09-21 候选 16 只里 09:31~09:56 封板的有 8 只，
 #    用 ≤10:00 会把它们全标成"秒板" → 告警退化为噪声（同「全他妈打上孤军」的教训）。
@@ -509,7 +512,7 @@ def cmd_record(args) -> int:
             if _bias == "avoid" and ENABLE_BIAS_AVOID_GUARD and _candidate:
                 if not _mech_hard_flaws(_candidate):
                     _bias = "normal"
-                    _bias_warning = ("AI 原判 avoid，但候选无四类硬伤（一字/ST/成交额<5亿/纯跟风）"
+                    _bias_warning = ("AI 原判 avoid，但候选无真硬伤（一字买不到/ST/纯跟风无带动）"
                                      "→ 已降级 normal（avoid 会在 09:25 直接否决买入）")
                     print(f"  ⚠️ bias=avoid 无硬伤 → 降级 normal：{code} {pk.get('name') or ''}",
                           file=sys.stderr)

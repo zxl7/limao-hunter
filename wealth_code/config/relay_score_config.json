@@ -81,7 +81,7 @@
     "watch_min": 50.0
   },
   "gates": {
-    "min_turnover_yi": 5.0,
+    "min_turnover_yi": 0.05,
     "min_boards": 1,
     "exclude_st": true,
     "exclude_one_word": true,

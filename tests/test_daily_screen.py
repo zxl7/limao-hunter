@@ -105,10 +105,14 @@ def test_raw_and_standard_turnover_shapes_are_equivalent(tmp_path, cje):
                                  theme_members={"电池": 3}, **kwargs)
     assert raw_one == standard_one
     assert raw_one["facts"]["cje_yi"] == cje
-    assert raw_one["facts"]["floor_yi"] == 5.0
+    # 仅留痕「本档原门槛」（2 板及以下 base_floor=1.5），⛔ 已不作否决
+    assert raw_one["facts"]["floor_yi"] == 1.5
     assert ("成交额缺失" in raw_one["unknown"]) is (cje is None)
-    assert any("换手板成交额" in r for r in raw_one["rejects"]) is (
-        cje is not None and cje < 5.0)
+    # 🔴 2026-11-11 用户「5 亿的限制 pass 掉，全系统清除」：成交额**不再产生 reject**
+    assert not any("成交额" in r for r in raw_one["rejects"]), raw_one["rejects"]
+    # 小额只写提示（缩量锁筹＝筹码锁死，不是流动性硬伤）
+    assert any("已不作门槛" in s for s in raw_one["supports"]) is (
+        cje is not None and cje < 1.5)
     assert DS.screen_pool([raw], **kwargs) == DS.screen_pool([standard], **kwargs)
     assert json.dumps([raw, standard], sort_keys=True) == before
 
@@ -139,11 +143,14 @@ def test_is_one_word_none_when_missing(tmp_path):
 
 
 # ── ③ 紫竹真实案例：必须 reject，理由是量能 ────────────────────────────────
-def test_zizhu_real_case_rejected_by_turnover(tmp_path):
+def test_zizhu_real_case_not_rejected_by_turnover(tmp_path):
     """002058 紫竹高科（2026-11-03）：2 板换手、2.54 亿、封板晚、封单薄。
 
-    这不是复述历史结论——是把它放进**全量过筛**里跑一遍，
-    确认它会在过筛阶段被 pass 掉，而不是等 09:25 靠「情绪」闸碰巧拦下。
+    🔴 2026-11-11 改口径（用户「这个 5 亿的限制 pass 掉，全系统清除」）：
+    它**不再因为成交额 2.54 亿被拒**。成交额只是「量小」的事实提示，
+    真正该拦它的是封板质量/身位这类可证伪的判据（本用例只锁「成交额不再否决」）。
+    ⛔ 反向也锁死：不许哪天悄悄把 5 亿线加回来 —— 那会再次误杀
+       青山纸业（3.29 亿·换手 4.6%）、华脉科技（1.55 亿）这类缩量锁筹票。
     """
     g = gene_dir(tmp_path, "002058")
     _write_kline(tmp_path, "002058", "2026-11-03", 19.26, 21.13, 19.10, 21.13)  # 换手板
@@ -154,10 +161,8 @@ def test_zizhu_real_case_rejected_by_turnover(tmp_path):
     ]
     res = DS.screen_pool(rows, gene_cache=g, trade_date="2026-11-03", root=tmp_path)
     z = next(s for s in res["screened"] if s["code"] == "002058")
-    assert z["verdict"] == "reject"
-    joined = " ".join(z["rejects"])
-    assert "换手板成交额" in joined, z["rejects"]
-    # 股性不该是 reject 理由（它晋级率 57.1%，是连板龙）
+    assert not any("成交额" in r for r in z["rejects"]), z["rejects"]
+    # 股性仍被看到（晋级率 57.1%·连板龙）—— 股性才是它的正面证据
     assert any("连板龙" in s for s in z["supports"]), z["supports"]
 
 

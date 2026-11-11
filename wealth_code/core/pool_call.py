@@ -333,7 +333,7 @@ LINE_CORE_LOOKBACK_DAYS = 4
 ENABLE_MECH_LEADER_FUSION = True
 MECH_LEADER_SECOND_BOARD_MAX_FBT = 930
 MECH_LEADER_MIN_CARRY = 4
-MECH_LEADER_MIN_TURNOVER_YI = 5.0
+MECH_LEADER_MIN_TURNOVER_YI = 0.05   # 🔴 2026-11-11 用户「5 亿全系统清除」→ 仅留数据防呆（原 5.0）
 
 # ── 跟风闸（2026-09-21 用户当场抓包·最高优先级）──────────────────────────────
 # 用户原话：「它也是风电，明显就是闽东电力的跟风。它虽然涨得多，但是它依然是小弟的地位，
@@ -368,6 +368,9 @@ AI_TILT_ABSTAIN_P = float(os.environ.get("AI_TILT_ABSTAIN_P", "0.28") or 0.28)
 #    shadow（默认）= 只记录每只参与票所属题材的催化等级；live = 低于门槛不做。
 CATALYST_MODE = os.environ.get("CATALYST_MODE", "shadow").strip().lower()
 CATALYST_MIN_LEVEL = os.environ.get("CATALYST_MIN_LEVEL", "normal").strip().lower()
+# 🧊 2026-11-11 用户 D：一字板允许进接力池，但「没有换手」→ 明天买点要观察 + 降权。
+#    shadow 只标注；live（默认开）在分配仓位时**减半**并写进理由。
+POOL_CALL_ONE_WORD_DISCOUNT = os.environ.get("POOL_CALL_ONE_WORD_DISCOUNT", "1") == "1"
 BREADTH_MIN_SIZE = 8          # 少于这个家数的线不判广度（百分比无意义）
 BREADTH_DIVERGE_UNDER = 0.40  # 水下占比 ≥40% → 分化
 CORE_GATE_MIN_GAP = 2
@@ -590,6 +593,17 @@ VOLUME_SOFT_POSITION = 0.5         # 量能不足时的仓位上限
 #   ⛔ 与 `POOL_CALL_LOW_OPEN_TOP_EXCEPTION`（最高板低开半仓试错）互不依赖。
 POOL_CALL_LOW_OPEN_GUARD = os.environ.get("POOL_CALL_LOW_OPEN_GUARD", "0") == "1"
 LOW_OPEN_GUARD_MAX_GAP = 0.0
+
+# 🐾 低开买入口径（2026-11-11 用户「可以在低开的时候买」）。
+#   放开的是**中间档**：`−6 < DEV < −2`（开得比它自己的质量预期低 2~6 个点）。
+#   · 砸穿档 `DEV ≤ −6` 早已由 `POOL_CALL_DEEP_LOW_RESCUE` 放行，本开关与它不重叠；
+#   · 低开但仍在自身质量预期内（DEV ≥ −2）本来就可买，本开关也不涉及。
+#   ⚠️ 已知冲突：35 日 / 366 票次实测该档 **n=65 均 −0.92%、胜率 35%，是全表最差**；
+#      11-11 局部复跑（n=10，其中 5 胜 5 负、均值 +2.40% 几乎全来自同一只票两天）不足以推翻。
+#      ⇒ 只作**受控试验**：半仓、不额外占名额、量能/一字/题材/身位门全部照旧。
+#   ⛔ 回退：`POOL_CALL_LOW_OPEN_BUY=0` → 逐字恢复 11-11 之前「中间档一律放弃」。
+POOL_CALL_LOW_OPEN_BUY = os.environ.get("POOL_CALL_LOW_OPEN_BUY", "1") == "1"
+LOW_OPEN_BUY_POSITION = 0.5        # 中间档低开的仓位上限（受控试验，不满仓）
 
 MISSING = "—"
 
@@ -2069,7 +2083,30 @@ def call_pool(candidates: dict[str, Any] | None,
                 "note": (f"开 {gap:+.2f}% 比它自己的预期低 {abs(float(_dev_val)):.1f} 个点，"
                          "属于被砸下来的错杀档 → 不按走弱处理"),
             }
-        if zone == "below" and not _lo_top and not _deep_rescued:
+        # 🐾 中间档低开放行（2026-11-11 用户「可以在低开的时候买」）。
+        #    `zone=below` 且 gap<0、又没到深低开豁免线 → 这才是「低开被一票否决」的全部来源。
+        #    ⛔ 不覆盖竞价封死（zone=above 在这一步之前就短路了）、⛔ 不改 gap_zone 判定、
+        #       ⛔ 不额外占名额（仍然走后面的量能/身位/名额链），只把仓位压到半仓。
+        _low_open_buy = bool(
+            zone == "below"
+            and POOL_CALL_LOW_OPEN_BUY
+            and _ac.relative_mode()
+            and isinstance(gap, (int, float))
+            and float(gap) < 0
+            and not _lo_top
+            and not _deep_rescued
+        )
+        if _low_open_buy:
+            base["low_open_buy"] = {
+                "gap": round(float(gap), 2),
+                "dev": (round(float(_dev_val), 2)
+                        if isinstance(_dev_val, (int, float)) else None),
+                "position_cap": LOW_OPEN_BUY_POSITION,
+                "note": "低开也买（11-11 新口径）→ 半仓参与；⛔ 回退 POOL_CALL_LOW_OPEN_BUY=0",
+            }
+            base["position_cap"] = min(float(base.get("position_cap") or 1.0),
+                                       LOW_OPEN_BUY_POSITION)
+        if zone == "below" and not _lo_top and not _deep_rescued and not _low_open_buy:
             _e_show = base.get("expected_gap_pct")
             if _ac.relative_mode() and isinstance(_e_show, (int, float)):
                 _why = (f"今天开 {gap:+.2f}%，按昨日质量该开 {float(_e_show):+.2f}% "
@@ -2788,6 +2825,9 @@ def call_pool(candidates: dict[str, Any] | None,
             if isinstance(e.get("deep_low_rescue"), dict):
                 # 🕳️ 深低开豁免：⛔ 不能说「符合预期」（它明显低于预期），要说清是**被砸出的错杀**
                 _zone_reason = "比它自己的预期低得多，属于被砸下来的错杀档 → 买入"
+            elif isinstance(e.get("low_open_buy"), dict):
+                # 🐾 中间档低开：⛔ 同样不能说「符合预期」——它确实低于预期，是**政策放行**
+                _zone_reason = "低开、比它自己的预期低，但低开也买 → 半仓参与"
             marks[code] = {**e, "view": "participate", "quota_rank": i + 1,
                            **({"catalyst_level": _cat_level} if _cat_level else {}),
                            "reason": (f"今天开在 {e['gap_pct']:+.2f}%，"
@@ -2859,6 +2899,10 @@ def call_pool(candidates: dict[str, Any] | None,
                 if isinstance(_pw, (int, float)) and 0 < float(_pw) < 1:
                     _scale = min(_scale, float(_pw))
             _cap = round(_even_cap * _scale, 4)
+            # 🧊 一字板无换手：仓位减半（2026-11-11 用户 D）
+            _one_word = bool(_v.get("is_one_word")) and POOL_CALL_ONE_WORD_DISCOUNT
+            if _one_word:
+                _cap = round(_cap * 0.5, 4)
             _prev_cap = _v.get("position_cap")
             if isinstance(_prev_cap, (int, float)) and _prev_cap > 0:
                 _cap = round(min(_cap, float(_prev_cap)), 4)
@@ -2883,7 +2927,9 @@ def call_pool(candidates: dict[str, Any] | None,
             _alloc_note = "" if (_gw_active or _pw_active) else (
                 f"（今日仅1只·单票上限 {_rl.pct_of(_cap)}）" if _single_pick
                 else f"（{_n_pick}只均分·每只上限 {_rl.pct_of(_cap)}）")
-            _v["reason"] = ((_v.get("reason") or "") + _alloc_note + _gw_note + _pw_note)
+            _ow_note = ("（一字板无换手，先观察能否开板换手，仓位减半）"
+                        if _one_word else "")
+            _v["reason"] = ((_v.get("reason") or "") + _alloc_note + _gw_note + _pw_note + _ow_note)
     elif _single_pick and isinstance(_single_cap, (int, float)) and _single_cap > 0:
         _code = _participants[0]
         _v = marks[_code]
@@ -2895,6 +2941,10 @@ def call_pool(candidates: dict[str, Any] | None,
             _pw1 = _v.get("position_weight")
             if isinstance(_pw1, (int, float)) and 0 < float(_pw1) < 1:
                 _cap = min(_cap, round(float(_single_cap) * float(_pw1), 4))
+        if bool(_v.get("is_one_word")) and POOL_CALL_ONE_WORD_DISCOUNT:
+            _cap = round(float(_cap) * 0.5, 4)
+            _v["reason"] = ((_v.get("reason") or "")
+                            + "（一字板无换手，先观察能否开板换手，仓位减半）")
         _v["position_cap"] = round(_cap, 4)
         _v["single_pick"] = True
         # 交易纪律同步：竞价理由直说「今天只有这一只 + 单票上限」，与卡面/账本同值。
@@ -3013,6 +3063,14 @@ def call_pool(candidates: dict[str, Any] | None,
                            "竞价封死(>=涨停-0.2pct)→买不进; 缺E→不裁决; "
                            "⛔ 无5%高开线、无必须红开线"),
             "low_open_guard": bool(POOL_CALL_LOW_OPEN_GUARD),
+            # 🐾 中间档低开放行（11-11）：开关 + 今天真被放行/真买到的分别是哪几只。
+            "low_open_buy": {
+                "enabled": bool(POOL_CALL_LOW_OPEN_BUY),
+                "position_cap": LOW_OPEN_BUY_POSITION,
+                "released": [c for c, v in marks.items() if v.get("low_open_buy")],
+                "bought": [c for c, v in marks.items()
+                           if v.get("low_open_buy") and v.get("view") == "participate"],
+            },
             "low_open_expected": sum(1 for v in marks.values()
                                      if v.get("low_open_expected")),
             "zones": {k: sum(1 for v in marks.values() if v.get("zone") == k)

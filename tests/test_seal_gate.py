@@ -308,13 +308,14 @@ def test_board_style_missing_field_is_unknown():
 
 
 @pytest.mark.parametrize("boards,cje,one_word,base_floor,expect_floor", [
-    (2, 2.54, False, 1.5, 5.0),     # 换手板 2 板 → 从 1.5 提到 5 亿
-    (2, 2.54, True, 1.5, 1.5),      # 一字板 2 板 → 原门槛（量小是封死的结果）
+    (2, 2.54, False, 1.5, 1.5),     # 🔴 2026-11-11：换手板**不再**提到 5 亿
+    (2, 2.54, True, 1.5, 1.5),      # 一字板 2 板 → 原门槛
     (2, 2.54, None, 1.5, 1.5),      # 缺字段 → 不收紧
-    (3, 2.54, False, 5.0, 5.0),     # ≥3 板本就传 5 亿，本闸不重复改
-    (1, 0.9, False, 1.5, 5.0),      # 首板换手同样收紧
+    (3, 2.54, False, 5.0, 5.0),     # 调用方传多少就是多少，本闸不重复改
+    (1, 0.9, False, 1.5, 1.5),      # 首板换手同样不收紧
 ])
 def test_style_floor(boards, cje, one_word, base_floor, expect_floor):
+    """分档闸已关（2026-11-11 用户「5 亿限制全系统清除」）→ 一律返回调用方门槛。"""
     row = _row(boards=boards, cje_yi=cje, is_one_word=one_word)
     assert SG.style_floor(row, base_floor) == expect_floor
 
@@ -327,23 +328,25 @@ def test_style_floor_switch_off_restores_old(monkeypatch):
     assert SG.admit(row, 1.5)["keep"] is True
 
 
-def test_zizhu_real_case_now_blocked():
-    """真实案例 002058 紫竹高科（2026-11-03）：2 板·换手·2.54 亿 → 必须挡住。
+def test_zizhu_real_case_now_passes_on_turnover():
+    """真实案例 002058 紫竹高科（2026-11-03）：2 板·换手·2.54 亿 → **不再因成交额被挡**。
 
-    它原来靠 1.5 亿低位门槛直通（source=enough），还因缩量多拿 1 分。
-    现在换手板门槛 5 亿 + 缩量不给分 → keep=False。
-    ⛔ 挡它的理由是**成交额与封板形态**，不是身位。
+    🔴 2026-11-11 用户「这个 5 亿的限制 pass 掉，全系统清除」。
+    缩量表（shrink=0 / grade=normal）这些**封板质量**事实照旧留痕，
+    但成交额不再产生否决 —— 否则青山纸业（3.29 亿·换手 4.6%）这类
+    缩量锁筹票会被同一把尺子误杀。
+    ⛔ 回归锁：哪天把 5 亿线加回来，本条立刻变红。
     """
     row = _row(code="002058", name="紫竹高科", boards=2, fbt="094848", zbc=0,
                cje_yi=2.54, seal_amt=0.73327439, lt_mktcap=30.2932, is_one_word=False)
     prof = SG.seal_profile(row)
-    assert prof["parts"]["shrink"] == 0          # 换手板缩量不给分
+    assert prof["parts"]["shrink"] == 0          # 换手板缩量不给分（质量事实保留）
     assert prof["grade"] == "normal"
     res = SG.admit(row, 1.5, theme_mates=7)
-    assert res["keep"] is False
+    assert res["keep"] is True
     assert res["style"] == "turnover"
-    assert res["floor_used"] == SG.TURNOVER_BOARD_FLOOR_YI
-    assert "换手板" in res["reason"]
+    assert res["floor_used"] == 1.5          # 调用方门槛，闸不再往上抬
+    assert "换手板" not in res["reason"]
 
 
 def test_dongfang_real_case_still_passes():

@@ -172,6 +172,52 @@ def single_pool_enabled() -> bool:
     }
 
 
+# ============================================================================
+# 🚮 池子只收**已获接力资格**的票（2026-11-11 用户「从源头上解决，这些垃圾票
+#    就不应该进入我们的池子」·最高优先级）
+#
+# 【治什么】11-11 实测：原「单池合并」= `relay + watch` 全量倒进接力池，
+#   当日 `pre_single_pool={"relay":1,"watch":25}` —— 真正通过接力资格的只有 1 只，
+#   池子里 22 只**全部**是观察票（一字买不到 / 容量核心 / 封单过薄 / 过筛未过
+#   的孤军与小额换手板 / 历史连板没确认）。它们卡面写着「不参与」，
+#   09:25 却照样被当正常候选裁决（11-11 实买 4 只全部 `buyable=False`，平均 −1.58%）。
+#
+# 【做法】合并时先过**资格线**，只留：
+#   `participation_eligibility ∈ {relay_candidate, conditional}` 或 `buyable is True`。
+#   其余一律**不进池**，只写 `diagnostics.unqualified_dropped` 留痕（可审计、不可买）。
+#   ⛔ 空池合法：合格 0 只就推空池，不允许拿观察票凑数。
+#   ⛔ 不改任何买入判据（价格/量能/顶部空间/名额/仓位原样）。
+#   回退：`POOL_QUALIFIED_ONLY=0` → 逐字回到「观察票也并入接力池」的旧口径。
+# ============================================================================
+_QUALIFIED_ELIGIBILITY = {"relay_candidate", "conditional"}
+
+
+def qualified_only_enabled() -> bool:
+    return (os.environ.get("POOL_QUALIFIED_ONLY") or "1").strip().lower() not in {
+        "0", "false", "off", "no", ""
+    }
+
+
+def _relay_qualified(row: dict[str, Any]) -> bool:
+    """是否已获接力资格（= 明天真可能买的票）。⛔ 不看 bucket，只看资格字段。"""
+    if row.get("height_observe") is True:
+        return False
+    if str(row.get("participation_eligibility") or "") in _QUALIFIED_ELIGIBILITY:
+        return True
+    return row.get("buyable") is True
+
+
+def _unqualified_reason(row: dict[str, Any]) -> str:
+    """未获资格的一句话原因（优先取过筛拒因，其次观察分组）。"""
+    rej = [str(x) for x in (row.get("screen_reject") or []) if str(x).strip()]
+    if rej:
+        return "；".join(rej)
+    grp = str(row.get("watch_group") or "").strip()
+    if grp:
+        return grp
+    return "未通过接力资格"
+
+
 def height_obs_min() -> int:
     """从几板起算「高度观察」（且必须是**全市场唯一**的那个高度）。
 
@@ -829,6 +875,7 @@ def _merge_pools(
                 if dr is not None and dr >= lim:
                     d = dict(r)
                     d["dropped_reason"] = f"同题材身位第 {dr}（≥{lim}）·后排不进池"
+                    d["dropped_kind"] = "backrow"
                     drop.append(d)
                 else:
                     keep.append(r)
@@ -864,6 +911,20 @@ def _merge_pools(
             _del = str(src.get("code") or "")
             pool = [r for r in pool if str(r.get("code") or "") != _del]
 
+    # 🚮 资格线（2026-11-11 用户「垃圾票不该进池」）：只有拿到接力资格的票留下。
+    #    ⚠️ 位置在「唯一高度观察」之后：高度观察票要能被看见，再走它自己的不可买口径。
+    if qualified_only_enabled():
+        _kept: list[dict[str, Any]] = []
+        for r in pool:
+            if _relay_qualified(r):
+                _kept.append(r)
+                continue
+            d = dict(r)
+            d["dropped_reason"] = "未获接力资格（" + _unqualified_reason(r) + "）·不进池"
+            d["dropped_kind"] = "unqualified"
+            dropped.append(d)
+        pool = _kept
+
     for i, r in enumerate(pool, start=1):
         r["bucket"] = "relay"
         r["bucket_label"] = "接力池"
@@ -879,16 +940,32 @@ def pool_policy_diag(dropped: list[dict[str, Any]], height: dict[str, Any] | Non
 
     与 `select_relay_watch(apply_pool_policy=True)` / `pipeline_eod` 共用同一份口径，
     避免一处写摘要、一处写完整候选 dict。
+
+    `dropped` 里两类票分开统计（2026-11-11）：
+      · `backrow`      同题材身位 ≥ N 的后排；
+      · `unqualified`  没过接力资格（一字买不到 / 容量核心 / 封单过薄 / 孤军 / 成交额不足 /
+                       历史连板未确认）—— 以前它们会被倒进接力池，现在一律不进池。
     """
+    backrow = [d for d in dropped if d.get("dropped_kind") != "unqualified"]
+    unqualified = [d for d in dropped if d.get("dropped_kind") == "unqualified"]
     return {
         "single_pool": bool(single_pool_enabled()),
+        "qualified_only": bool(qualified_only_enabled()),
         "backrow_dropped": [
             {"code": d.get("code"), "name": d.get("name"),
              "boards": d.get("boards"), "dragon_rank": d.get("dragon_rank"),
              "reason": d.get("dropped_reason")}
-            for d in dropped
+            for d in backrow
         ],
-        "backrow_dropped_count": len(dropped),
+        "backrow_dropped_count": len(backrow),
+        "unqualified_dropped": [
+            {"code": d.get("code"), "name": d.get("name"),
+             "boards": d.get("boards"),
+             "watch_group": d.get("watch_group"),
+             "reason": d.get("dropped_reason")}
+            for d in unqualified
+        ],
+        "unqualified_dropped_count": len(unqualified),
         "height_observe": (
             None if height is None else
             {"code": height.get("code"), "name": height.get("name"),

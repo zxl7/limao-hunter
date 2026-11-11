@@ -106,48 +106,49 @@ CAPACITY_WEIGHT = 0.10
 # 这一项直接惩罚"孤龙/纯广度无梯队"的题材，强化"真主线 vs 量化铺广度"的判别。
 LADDER_WEIGHT = 8.0
 LADDER_DRAGON_BONUS = 3.0
-# 成交额门控（用户纪律 2026-08-13）：成交额<5亿 的票流动性/辨识度不足，一律不进池。
-# 须在板块梯队计算(_attach_sector_ladder)之前过滤，避免低流动性票污染梯队/龙一归属。
-MIN_TURNOVER_YI = 5.0
-# ── 成交额门槛按板数分阶段（2026-10-22 用户拍板·可逆开关）──────────────────
-# 用户原话：「前期成交额不高是很正常的，因为资金筹码没有什么抛压，所以成交额很低但能封板
-#   是很正常的。我们要重点观察，因为它的量能是一步步放大的。」
-# 判据依据（实证）：大业股份启动前一路缩量到 1.58 亿 → 首板放量 4.89 亿 → 2/3 板缩到
-#   1.01/0.74 亿仍封住＝筹码锁死；而同为缩量的大业能连 5 板。反之高位巨量不缩
-#   （冰山冷热 20 亿/日）才是倒货。故：**低位缩量封板＝筹码锁定（放行），高位缩量＝真硬伤**。
-# ⛔ 只放宽「进场门槛」，不动「池外高辨识度名单」的只展示不买入铁律。
-MIN_TURNOVER_YI_LOW_BOARD = 1.5   # 低位（1~2 板）放行线·亿
-# 📌 2026-11-03 用户「重新定量」：3.0 → 1.5。
-#   依据（33 个交易日 ≈3000 个首板样本回测·次日晋级率）：
-#     ≤1.5亿 27.5% ｜ 1.5-3亿 16.0% ｜ 3-5亿 13.1% ｜ 5-10亿 13.9% ｜ ≥10亿 8.1%
-#   → 成交额与晋级率**单调负相关**，原来的 3 亿/5 亿门槛方向是反的。
-#   触发事件（11-03 传媒）：昨日短剧 9 只首板，5 只成交额 1.5~2.8 亿被 3 亿门槛全剔，
-#   今日 5/5 全封（4 只 9:25 竞价一字）；唯一进池的文投控股（8.74 亿）反而没封。
-#   ⛔ 不能直接取消门槛：降到 1.5 亿放回 21 只（可控），取消则昨日放回 59 只（占涨停 47%，池子会被淹）。
-#   📌 2026-11-03 用户「A 拆掉下限」：seal_gate 的 0.5 亿绝对下限已拆，
-#      改由「封单/流通 ≥5%」承接（薄封单+弱形态仍拦）。此处 1.5 亿是**常规门槛**，
-#      低于它仍可走 强封/厚封单/热题材/高度层 四条豁免进池。
+# 🚫 成交额硬门槛已全系统清除（2026-11-11 用户「这个 5 亿的限制把它 pass 掉吧，
+#    不要了，全系统清除这个限制」）。
+#
+# 为什么拆：用户原话「前期成交额不高很正常，资金筹码没什么抛压，成交额很低但能封板
+#   是很正常的」。11-11 实证——光通信 10 只首板里质量最好的两只正是被这条线砍掉的：
+#     青山纸业 600103（72.6 亿流通·换手仅 4.6%·成交 3.29 亿·9:35 封板·炸 1 次）
+#     华脉科技 603042（28 亿流通·换手 5.7%·成交 1.55 亿·9:36 封板·零炸板）
+#   两者的「量小」是**筹码锁死**，不是没人接。用绝对成交额一刀切，等于系统性惩罚
+#   「封得好、卖盘少」的票，与「低位缩量封板＝筹码锁定」的既定原则直接矛盾。
+#   晋级率侧也一直反向：≤1.5亿 27.5% > 1.5~3亿 16.0% > 3~5亿 13.1% > 5~10亿 13.9%
+#   > ≥10亿 8.1%（33 日 ≈3000 个首板样本）——门槛方向本来就是反的。
+#
+# ⛔ 只保留一根**数据防呆线**（0.05 亿 = 500 万）：那不是流动性判据，
+#   只挡 amount 字段异常（把 0.000 或字符串当成交额）。⛔ 不许再把它当门槛往上加。
+# ⛔ 回退：`ENABLE_TURNOVER_FLOOR=1` + `MIN_TURNOVER_YI` 恢复旧口径。
+MIN_TURNOVER_YI = 0.05            # 数据防呆线（原 5.0 已清除）
+MIN_TURNOVER_YI_LOW_BOARD = 0.05  # 同上（原 1.5 已清除）
+MIN_TURNOVER_YI_LEGACY = 5.0           # 仅 ENABLE_TURNOVER_FLOOR=1 回退时生效
+MIN_TURNOVER_YI_LOW_BOARD_LEGACY = 1.5  # 同上
 LOW_BOARD_CEIL = 2                # 「低位」上界（含）＝首板 / 2 板
-ENABLE_TURNOVER_BY_STAGE = "1"    # 2026-10-22 用户拍板开启（低位 1.5 亿 / 高位 5 亿）。
-                                  # 📌 历史：1.0 亿时实测池子 8→5（低成交额票涌入→题材分组重排→
-                                  #    哈空调/出版传媒/海量数据被挤出）；3.0 亿则误杀缩量强封；
-                                  #    1.5 亿 + seal_gate 双豁免 = 两头兼顾。
+ENABLE_TURNOVER_BY_STAGE = "0"    # 分阶段门槛已停用（0 = 两档都走防呆线）
+ENABLE_TURNOVER_FLOOR = "0"       # 0 = 成交额不作准入判据（默认）；1 = 回退旧门槛
 
 
 def turnover_floor(boards: Any) -> float:
-    """该板数档位下的成交额门槛（亿）：低位（≤LOW_BOARD_CEIL 板）放宽，高位仍守 5 亿。
+    """该板数档位下的成交额**防呆线**（亿）。
 
-    板数缺失/非法 → 按高位处理（⛔ 不猜、不给不存在的票开后门）。
+    📌 2026-11-11：成交额已从准入门槛降级为数据防呆 —— 恒返回 `MIN_TURNOVER_YI`。
+    保留 `boards` 形参是为了不改动全部调用方签名；⛔ 不再按板数分档。
     """
+    if os.environ.get("ENABLE_TURNOVER_FLOOR", ENABLE_TURNOVER_FLOOR) not in ("1", "true", "True"):
+        return MIN_TURNOVER_YI          # 默认：只做数据防呆，不判成交额
+    # ── 以下仅回退模式（ENABLE_TURNOVER_FLOOR=1）才会走到 ──
     if os.environ.get("ENABLE_TURNOVER_BY_STAGE", ENABLE_TURNOVER_BY_STAGE) in ("0", "false", "False", ""):
-        return MIN_TURNOVER_YI
+        return MIN_TURNOVER_YI_LEGACY
     try:
         b = int(boards)
     except (TypeError, ValueError):
-        return MIN_TURNOVER_YI
-    if b <= 0:                       # 板数缺失/0 → 按高位守 5 亿（⛔ 不给缺数据的票开后门）
-        return MIN_TURNOVER_YI
-    return MIN_TURNOVER_YI_LOW_BOARD if b <= LOW_BOARD_CEIL else MIN_TURNOVER_YI
+        return MIN_TURNOVER_YI_LEGACY
+    if b <= 0:
+        return MIN_TURNOVER_YI_LEGACY
+    return (MIN_TURNOVER_YI_LOW_BOARD_LEGACY if b <= LOW_BOARD_CEIL
+            else MIN_TURNOVER_YI_LEGACY)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -164,7 +165,7 @@ def turnover_floor(boards: Any) -> float:
 #   ⛔ 不是无门槛（1.5 亿以下仍剔，防极端失真）。
 # 为什么按「板数层」而不是按「题材分组」判龙头：题材映射存在跨线误归（实证 line_family
 #   把多伦科技归到「AI算力」），拿它定龙头会把豁免发错人；板数层是当日客观事实，无映射风险。
-MIN_TURNOVER_YI_LEADER = 1.5       # 高度层（龙头层）放行线·亿
+MIN_TURNOVER_YI_LEADER = MIN_TURNOVER_YI   # 高度层也是防呆线（原 1.5 已清除·2026-11-11）
 LEADER_EXEMPT_MIN_BOARDS = 3       # 豁免只给 ≥3 板的高度层（1~2 板交给 gene_radar / 低池）
 ENABLE_LEADER_TURNOVER_EXEMPT = "1"
 
@@ -307,7 +308,7 @@ def _capacity_score(cje_yi: float, zsz_yi: float, hs_pct: float, zbc: int, fbt: 
 #   ② 门槛：1~2 板 ∧ 成交额 ≥ GENE_RADAR_MIN_TURNOVER_YI 亿 ∧ 股性档＝**连板龙**（严格档，
 #      「连板龙·次数少/历史短」不进——样本不够就不是「它一直能连」的证据）；
 #   ③ 排除已在池内的票（池里已有就别重复占版面）、688（无权限）、ST（铁律不看）。
-GENE_RADAR_MIN_TURNOVER_YI = 1.0   # 雷达的成交额下限：低于这个连买卖都困难，看了也白看
+GENE_RADAR_MIN_TURNOVER_YI = 0.05  # 仅数据防呆（原 1.0 已清除·2026-11-11 全系统拆成交额门槛）
 GENE_RADAR_MAX_BOARDS = 2          # 只盯低位（首板 / 2 板）
 GENE_RADAR_TOPN = 6                # 名单上限（防刷屏）
 
@@ -2506,6 +2507,56 @@ def run_eod(
         low_pool = []
         new_direction_first_board = []
 
+    # ══════════════════════════════════════════════════════════════════════
+    # 🌱 新方向首板槽（2026-11-11 用户「这条线必须打开·优秀的票明早能交易」）
+    # ══════════════════════════════════════════════════════════════════════
+    # 用户原话：「新方向首板观察槽这个也要的啊！像今天这种非常优秀的、晋级率比较高的票，
+    #   也都要拿出来放在我们的观察池里面，明天早上可以进入交易的。」
+    #
+    # 为什么必须新写一块：旧槽判据是 `题材家数 ≤ 3`，光通信有 10 家 → 家数越多越进不来，
+    #   与「这条线强不强」恰好相反；且旧槽被 `not two_pool.enabled()` 硬关，生产环境
+    #   （ENABLE_TWO_POOL_CONTRACT=1）里**一次都没跑过**。11-11 实证：光通信 10 家全首板、
+    #   成交额 222.6 亿（全市场第二），接力池只漏进 1 只；PCB板 5 家全首板、255.8 亿，
+    #   一只都没进池。
+    #
+    # 判据见 `core/new_direction_first_board.py` 文件头（「新方向」= **整条线零连板**，
+    #   不是「家数少」）。⛔ 位置必须在所有降级闸与 finalize 之后、`_merge_pools` 之前：
+    #   · 之前 —— 它就绕过了后排过滤/龙一闸/四条件闸（那几闸是给接力票设计的）；
+    #   · `_merge_pools` 之前 —— 只有并进 watch 才能被资格线校验并进入最终池，
+    #     09:25 才真的会拿它去裁决（「可交易」= 能进裁决，不是保证买）。
+    try:
+        from core import new_direction_first_board as _ndfb
+        from core.quant_score import drop_backrow_rank as _dbr
+        _nd_rows, _nd_diag = _ndfb.build(
+            _scored_all, zt.get("ztgc") or [],
+            exclude_codes={str(r.get("code") or "") for r in (relay + watch)},
+            # 质量单一源 = 当日过筛（股性/题材线/封板形态）；槽只补「线是新方向 + 早盘封板」
+            screened_codes={str(r.get("code") or "") for r in scored if r.get("code")},
+            drop_backrow_rank=_dbr(),
+        )
+        diagnostics["new_direction"] = _nd_diag
+        if _nd_rows:
+            watch.extend(_nd_rows)
+            new_direction_first_board = _nd_rows
+            _by_line: dict[str, list[str]] = {}
+            for _r in _nd_rows:
+                _by_line.setdefault(str(_r.get("new_direction_line") or ""), []).append(
+                    str(_r.get("name") or ""))
+            print("[EOD] 🌱 新方向首板入池（整条线零连板·可进 09:25 裁决）：" +
+                  "；".join(f"{_l} {len(_n)} 只（{'、'.join(_n)}）"
+                            for _l, _n in _by_line.items()))
+        else:
+            new_direction_first_board = []
+        for _l in (_nd_diag.get("lines") or []):
+            print(f"[EOD] 🌱 新方向线：{_l['line']} {_l['members']} 家全首板 · "
+                  f"{_l['amount_yi']:.0f} 亿 · 最早 {_l['first_seal']}")
+        if _nd_diag.get("skipped"):
+            print("[EOD] 🌱 线内未入池：" + "；".join(
+                f"{x['name']}（{x['reason']}）" for x in _nd_diag["skipped"][:8]))
+    except Exception as _e:  # noqa: BLE001
+        print(f"[EOD] 🌱 新方向首板槽降级（不影响主链）：{_e}")
+        new_direction_first_board = []
+
     # 所有降级与补票完成后才迁移展示身份；不把 observe_only 改成 relay_candidate。
     # ⚠️ 位置必须在「准入闸 → 各降级闸 → 历史修复/补票 → two_pool.finalize」之后，
     #    否则后补的票会绕过「龙5及以后不进池」；仍早于所有纯回填（不动交易资格）。
@@ -2516,6 +2567,12 @@ def run_eod(
             relay, watch, market_rows=zt.get("ztgc") or [])
         diagnostics.update(pool_policy_diag(_dropped, _height),
                            relay_count=len(relay), watch_count=len(watch))
+        _unq = diagnostics.get("unqualified_dropped") or []
+        if _unq:
+            print(f"[EOD] 🚮 未获接力资格·不进池 {len(_unq)} 只"
+                  f"（接力池剩 {len(relay)} 只）："
+                  + "、".join(str(x.get("name")) for x in _unq[:12])
+                  + ("…" if len(_unq) > 12 else ""))
 
     # 🧭 市场级题材强度（2026-11-11 用户拍板 B）：回答「昨天整个市场哪几条线真强」。
     #    ⛔ 只写 diagnostics + 展示字段 theme_rank/theme_metrics；不改 relay_rank、
@@ -2754,8 +2811,9 @@ def run_eod(
         #    板数天然最低 → 排后面，只有前排被防守闸拦掉/名额空出来时才轮到。
         # ⛔ 关 `ENABLE_LOW_POOL=0` 即退回旧行为（这些票只剩 gene_radar 的「只看不买」）。
         "low_pool": low_pool,
-        # P2（2026-10-18）：新方向首板独立观察槽（不占 relay/watch 名额·纯观察）。
-        # 治「复盘点名的新方向首板（万丰奥威这类）在选股里被 watch 8 位挤没了」。
+        # 🌱（2026-11-11 改口径）：新方向首板槽 —— **已并进 watch 并过资格线**，
+        #    09:25 走完整裁决（不是「只看不买」）。卡面只用它做线级摘要。
+        #    判据/边界见 `core/new_direction_first_board.py` 文件头。
         "new_direction_first_board": new_direction_first_board,
         # P3（2026-10-18）：复盘推演（原文 + 今日命中/落空核对）。
         # 卡面用它解释"复盘说的高度/新方向，今天兑现了没有"，⛔ 不作买入依据。
@@ -2775,7 +2833,10 @@ def run_eod(
         "global_narrative": global_narrative,
     }
     if two_pool.enabled():
-        for _key in ("offpool_high_ident", "gene_radar", "low_pool", "new_direction_first_board", "early_ambush"):
+        # ⛔ 2026-11-11：`new_direction_first_board` 不再随两池契约被清空 ——
+        #    它已改成**真入池**（并进 watch → 过 `_merge_pools` 资格线），
+        #    卡面靠它做「新方向哪几条线、入池了谁」的线级摘要。其余四桶照旧清掉。
+        for _key in ("offpool_high_ident", "gene_radar", "low_pool", "early_ambush"):
             payload.pop(_key, None)
         _final_codes = {str(r.get("code")) for r in relay + watch}
         _selected_diag = {str(r.get("code")): r for r in diagnostics.get("two_pool_selection", {}).get("excluded", [])}

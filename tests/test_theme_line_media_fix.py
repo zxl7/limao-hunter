@@ -70,7 +70,33 @@ def test_media_not_merged_with_consumer():
 
 
 def test_real_ai_compute_line_intact():
-    """真算力票仍归 AI算力（回归：半导体/PCB 不受影响）。"""
+    """真算力票仍归 AI算力（回归：删泛规则不得误伤真算力）。
+
+    ⚠️ 2026-11-11 改口径（双层线）：`半导体` / `PCB` **不再**桥接成 AI算力 ——
+    它们是各自独立的炒作线（催化/资金/产业链环节都不同），只共用「AI算力」这个
+    大方向名。见 `core/sector_support.py` 文件头「细分方向独立成线」。
+    ⛔ 本条锁的是「真算力词仍归 AI算力」，不是「所有电子票都归 AI算力」。
+    """
     assert ss._theme_key({"core_theme": "AI算力"}) == "AI算力"
-    assert ss._theme_key({"sector": "半导体"}) == "AI算力"
-    assert ss._theme_key({"core_theme": "PCB"}) == "AI算力"   # 经 EM_THEME_BRIDGE
+    assert ss._theme_key({"core_theme": "算力"}) == "AI算力"          # EM_THEME_BRIDGE 保留的大词
+    # 细分线各自独立，但大方向一致
+    assert ss._theme_key({"sector": "半导体"}) == "半导体"
+    assert ss._theme_key({"core_theme": "PCB"}) == "PCB板"
+    for _k in ("半导体", "PCB板", "光通信", "液冷", "存储", "服务器"):
+        assert ss.big_line({"core_theme": _k}) == "AI算力", f"{_k} 的大方向应是 AI算力"
+
+
+def test_optical_comm_is_its_own_line():
+    """2026-11-11 事故锁：光通信 10 家首板必须**独立成线**，不许被吞进 AI算力。
+
+    病灶：`EM_THEME_BRIDGE` 把 光通信/CPO/PCB/半导体/液冷 全压成「AI算力」→
+    系统里根本没有「光通信」这条线，龙一/身位/跟风闸全按 17 家混算。
+    """
+    for name in ("光通信", "CPO", "CPO光模块", "光模块", "光纤", "光纤光缆", "光芯片"):
+        assert ss._theme_key({"core_theme": name}) == "光通信", f"{name} 应归「光通信」"
+    # 同义叫法必须聚成一条线（否则同一条线会被拆成三四条）
+    assert len({ss._theme_key({"core_theme": n})
+                for n in ("光通信", "CPO", "光模块", "光纤")}) == 1
+    # 光通信 ≠ PCB板 ≠ 半导体（三条独立行情，不能互相算身位）
+    assert len({ss._theme_key({"core_theme": n})
+                for n in ("光通信", "PCB板", "半导体")}) == 3

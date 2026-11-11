@@ -280,10 +280,24 @@ def test_mech_leader_fusion_switch_restores_focus_first(monkeypatch):
 
 
 def test_mech_leader_does_not_bypass_hard_flaw():
-    """一字/ST/低成交额/纯跟风不能借机械标签绕过风险门。"""
-    flawed = _cand("000001", "低成交强票", boards=3, need=1.0)
-    flawed.update({"relay_rank": 1, "fbt": "093000", "carry_cnt": 6, "cje_yi": 1.0})
-    assert pool_call._is_mech_leader(flawed) is False
+    """一字/ST/纯跟风不能借机械标签绕过风险门。
+
+    ⚠️ 2026-11-11 改口径（用户「这个 5 亿的限制 pass 掉，全系统清除」）：
+    **成交额不再是硬伤** —— 低位缩量锁筹能封板是强结构，不是缺陷。
+    所以本条锁的是「事实权限与纯跟风」，⛔ 不再拿成交额当 flaw。
+    """
+    shape = _cand("000001", "强票", boards=3, need=1.0)
+    shape.update({"relay_rank": 1, "fbt": "093000", "carry_cnt": 6, "cje_yi": 1.0})
+    assert pool_call._is_mech_leader(shape) is True, "成交额已不作门槛，不应再否掉机械强龙"
+
+    yizi = dict(shape, is_one_word=True)
+    assert pool_call._is_mech_leader(yizi) is False, "一字买不到，不能给机械强龙标签"
+    st = dict(shape, is_st=True)
+    assert pool_call._is_mech_leader(st) is False, "ST 不可交易，不能给机械强龙标签"
+    follower = dict(shape, carry_cnt=0)
+    assert pool_call._is_mech_leader(follower) is True, "带动家数只是增强证据，不单独触发否决"
+    no_rank_no_early = dict(shape, relay_rank=3, fbt="141500", carry_cnt=0)
+    assert pool_call._is_mech_leader(no_rank_no_early) is False, "既非第 1 身位、又非早盘封板 → 不是机械强龙"
 
 
 # ── 3) 线族归并（绿电）───────────────────────────────────────────────
@@ -536,14 +550,35 @@ def test_run_verify_applies_relay_plan(monkeypatch, tmp_path):
 
 # ── ⑩ 跟风闸「归并一致性守卫」（2026-10-12 传媒事故回归锁）──────────────────
 def test_core_gate_blocks_normal_follower():
-    """跟风闸正常生效：核心 3 板已断板、候选 1 板、线族归并一致 → 拦（不占名额）。"""
+    """跟风闸正常生效：核心 3 板已断板、候选 1 板、线族归并一致 → 拦（不占名额）。
+
+    ⚠️ 2026-11-11：半导体已**独立成线**（不再并入 AI算力），所以 `line_cores` 的键
+    必须是「半导体」。原本用 AI算力 当键能命中，是因为两条线被错误合并 ——
+    那正是光通信 10 家首板失踪的同一个病根。
+    """
     cand = _cand("000001", "真跟风", boards=1, sector="半导体")
     res = pool_call.call_pool(
         {"relay": [cand], "watch": []}, {"000001": _q(10.0, 2.0)},
         plan=_plan({"000001": "normal"}, stance="defend"),
-        line_cores={"AI算力": {"code": "666666", "name": "传艺科技",
-                               "boards": 3, "broken": True}})
+        line_cores={"半导体": {"code": "666666", "name": "传艺科技",
+                              "boards": 3, "broken": True}})
     assert res["views"]["000001"].get("follower_gate") is True
+
+
+def test_core_gate_not_polluted_across_lines():
+    """跨线不串：PCB板 的核心不能拦 光通信 的票（大线同属 AI算力，但线不同）。
+
+    2026-11-11 光通信事故的另一面：把 光通信/PCB/半导体 压成 AI算力 时，
+    任何一条线的「已断板核心」都会拦下其余三条线的全部票。
+    """
+    cand = _cand("000001", "光通信票", boards=1, sector="通信设备")
+    cand["core_theme"] = "光通信"
+    res = pool_call.call_pool(
+        {"relay": [cand], "watch": []}, {"000001": _q(10.0, 2.0)},
+        plan=_plan({"000001": "normal"}, stance="defend"),
+        line_cores={"PCB板": {"code": "666666", "name": "某PCB核心",
+                              "boards": 3, "broken": True}})
+    assert res["views"]["000001"].get("follower_gate") is not True
 
 
 def test_core_gate_skipped_when_line_inconsistent():

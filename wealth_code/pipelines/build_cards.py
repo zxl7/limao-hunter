@@ -2812,51 +2812,63 @@ def _post_pool_blocks(payload: dict[str, Any], *, eod: bool = False) -> list[dic
             out.append(_div(f"　· <font color='grey'>{hint}</font>"))
         out.append(_hr())
 
-    # 🧩 P2：新方向首板独立观察位
+    # 🧩 低位池（回退模式的第三桶）—— eod 卡上的逐票清单。
+    # ⛔ 2026-11-11：新方向首板已从这里摘出去（它现在**真入池**，逐票清单会在接力池
+    #    那段出现一次；这里再列一遍就是同票两处、且旧文案「只看不买」与行为不符）。
     fb = payload.get("new_direction_first_board") or []
     low_pool = payload.get("low_pool") or []
-    if eod and (low_pool or fb):
-        out.append(_div("**低位与新方向（逐票保留原资格）**"))
+    if eod and low_pool:
+        out.append(_div("**低位（逐票保留原资格）**"))
         seen: set[str] = set()
-        for source, rows in (("low", low_pool), ("new", fb)):
-            for it in rows:
-                code = str(it.get("code") or "")
-                if code and code in seen:
-                    continue
-                if code:
-                    seen.add(code)
-                qualified = source == "low" and it.get("buyable") is True
-                qualification = ("原低位池资格·与接力池共用名额·待竞价裁决" if qualified
-                                 else "只看不买·不占接力名额")
-                theme = str(it.get("core_theme") or it.get("theme") or it.get("sector") or "")
-                out.append(_div(f"　· {_stock_hl(it, 'neutral')} "
-                                f"{it.get('boards') or 1}板｜{theme}｜{qualification}"))
-                if source == "low":
-                    g = it.get("gene") or {}
-                    promo = g.get("promo_rate_hist")
-                    fpo = g.get("first_prem_open_hist")
-                    promo_txt = f"{float(promo):.0f}%" if promo is not None else "—"
-                    fpo_txt = f"{float(fpo):+.1f}%" if fpo is not None else "—"
-                    out.append(_div(f"　　成交{it.get('cje_yi')}亿｜近一年{g.get('zt_250')}次涨停｜"
-                                    f"晋级{promo_txt}｜历史最长{g.get('max_boards_hist') or 0}板｜"
-                                    f"首板次日高开{fpo_txt}"))
-                elif isinstance(it.get("pct"), (int, float)):
-                    out.append(_div(f"　　当日涨幅{it['pct']:+.1f}%"))
-                for key in ("watch_reason", "dragon_note", "radar_why", "offpool_reason"):
-                    if it.get(key):
-                        out.append(_div(f"　　{it[key]}"))
+        for it in low_pool:
+            code = str(it.get("code") or "")
+            if code and code in seen:
+                continue
+            if code:
+                seen.add(code)
+            qualified = it.get("buyable") is True
+            qualification = ("原低位池资格·与接力池共用名额·待竞价裁决" if qualified
+                             else "只看不买·不占接力名额")
+            theme = str(it.get("core_theme") or it.get("theme") or it.get("sector") or "")
+            out.append(_div(f"　· {_stock_hl(it, 'neutral')} "
+                            f"{it.get('boards') or 1}板｜{theme}｜{qualification}"))
+            g = it.get("gene") or {}
+            promo = g.get("promo_rate_hist")
+            fpo = g.get("first_prem_open_hist")
+            promo_txt = f"{float(promo):.0f}%" if promo is not None else "—"
+            fpo_txt = f"{float(fpo):+.1f}%" if fpo is not None else "—"
+            out.append(_div(f"　　成交{it.get('cje_yi')}亿｜近一年{g.get('zt_250')}次涨停｜"
+                            f"晋级{promo_txt}｜历史最长{g.get('max_boards_hist') or 0}板｜"
+                            f"首板次日高开{fpo_txt}"))
+            for key in ("watch_reason", "dragon_note", "radar_why", "offpool_reason"):
+                if it.get(key):
+                    out.append(_div(f"　　{it[key]}"))
         out.append(_hr())
-    if fb and not eod:
-        out.append(_div("**🧩 新方向首板（题材刚冒头·只看不买·不占接力名额）**"))
-        for it in fb[:5]:
-            sec = str(it.get("core_theme") or it.get("theme") or it.get("sector") or "")
-            sec_txt = f"{sec}｜" if sec else ""
-            _pct = it.get("pct")
-            pct_txt = f"{_pct:+.1f}%" if isinstance(_pct, (int, float)) else ""
-            out.append(_div(
-                f"　· {_stock_hl(it, 'blue')} "
-                f"<font color='grey'>{sec_txt}首板｜{pct_txt}</font>"
-            ))
+
+    # 🌱 新方向（2026-11-11 用户「这条线必须打开·优秀的票明早能交易」）
+    #    只报**线级事实 + 入池了谁**：这些票已经在上面接力池逐票列过一遍了，
+    #    再逐票列一遍就是同票两处。⛔ 文案必须与行为一致 —— 它们有买入资格
+    #    （09:25 竞价裁决），不许再写「只看不买」。
+    if fb:
+        _nd_lines: dict[str, list[str]] = {}
+        for _it in fb:
+            _nd_lines.setdefault(str(_it.get("new_direction_line") or ""), []).append(
+                str(_it.get("name") or ""))
+        out.append(_div("**🌱 新方向（整条线零连板·已进池·明早竞价定）**"))
+        for _line, _names in list(_nd_lines.items())[:2]:
+            _m = next((x for x in fb
+                       if str(x.get("new_direction_line") or "") == _line), {})
+            _mem = _m.get("new_direction_line_members")
+            _amt = _m.get("new_direction_line_amount_yi")
+            _facts = []
+            if _mem:
+                _facts.append(f"{_mem}家全是首板")
+            if isinstance(_amt, (int, float)):
+                _facts.append(f"成交{_amt:.0f}亿")
+            out.append(_div(f"　· <font color='red'>{_line}</font>"
+                            f"<font color='grey'>｜{'·'.join(_facts)}</font>"))
+            out.append(_div(f"　　<font color='grey'>入池：{'、'.join(_names)}"
+                            f" —— 能不能接，看明早竞价</font>"))
         out.append(_hr())
 
     # 🐣 低位池（2026-10-27 用户「还不如推低位！」）：从雷达升级为**真可买**的第三桶。
@@ -2884,7 +2896,6 @@ def _post_pool_blocks(payload: dict[str, Any], *, eod: bool = False) -> list[dic
         out.append(_div("　<font color='grey'>名额就这么几个，前排买得到就先做前排；"
                         "前排被环境/位置拦掉，这里才有机会轮到。</font>"))
         out.append(_hr())
-
     # 🎯 低位连板龙雷达（2026-10-22 用户「需要做，雷达叠加观察的意思」）
     #    治「大业股份这种票第 1-2 板没被看见」：首板/2 板成交额小 → 被进池门槛挡掉 →
     #    复盘说得头头是道、卡上却查无此票。此块把「低位 + 股性连板龙 + 还有量」单列出来，
@@ -3231,6 +3242,22 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
         _total = len(relay)
         _sort_note = " ｜ 按昨日板块强度排序·编号不等于买入顺序" if _mtr_on else ""
         blocks.append(_div(f"**🔥 接力池（{_total} 只）**{_relay_mode_note(mode)}{_ice_flag}{_sort_note}"))
+        # 🚮 2026-11-11 用户「垃圾票不该进池」：资格线剔掉的票只报数量+原因分布，
+        #    ⛔ 不列名单（列了就等于又推一遍）、不给任何买入暗示。开关同 `POOL_QUALIFIED_ONLY`。
+        _unq = (payload.get("diagnostics") or {}).get("unqualified_dropped") or []
+        if _unq:
+            _cnt: dict[str, int] = {}
+            for _it in _unq:
+                _g = str(_it.get("watch_group") or "").strip()
+                _key = ("一字买不到" if "一字" in _g else
+                        "容量/封单太薄" if ("容量" in _g or "封单" in _g) else
+                        "成交额或成线不达标" if "过筛" in _g else
+                        "高标只作参照" if "高标" in _g else
+                        "历史连板没确认")
+                _cnt[_key] = _cnt.get(_key, 0) + 1
+            _parts = " · ".join(f"{k} {v}" for k, v in sorted(_cnt.items(), key=lambda x: -x[1]))
+            blocks.append(_div(f"　　🚮 <font color='grey'>另有 {len(_unq)} 只未获接力资格，不进池"
+                               f"（{_parts}）</font>"))
     # 🎯 晋级三问汇总（2026-10-30 用户「优化推送高胜率可晋级板块地位高的个股」）：
     #   只出现一次、放在接力池标题之下——**不是逐票灰字**（用户明确不要灰字行）。
     #   作用：一句话回答「今天到底有没有值得重仓的票」，没有就直说没有。

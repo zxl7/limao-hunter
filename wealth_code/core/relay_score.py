@@ -135,8 +135,10 @@ def _pass_gates(cand: dict[str, Any], cfg: dict[str, Any]) -> tuple[bool, str]:
         return False, "一字板·无参与机会"
     if g.get("exclude_688") and code.startswith("688"):
         return False, "688无权限"
-    if (_f(cand.get("cje_yi")) < _f(g.get("min_turnover_yi"), 5.0)):
-        return False, "成交额<5亿·辨识度不足"
+    # 🔴 2026-11-11 用户「5 亿限制全系统清除」→ 成交额只剩数据防呆线，不再作门槛。
+    #    回退：cfg.gates.min_turnover_yi = 5.0 即恢复旧口径。
+    if (_f(cand.get("cje_yi")) < _f(g.get("min_turnover_yi"), 0.05)):
+        return False, "成交额不足防呆线（数据异常）"
     return True, ""
 
 

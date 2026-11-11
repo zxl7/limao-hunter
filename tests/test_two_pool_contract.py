@@ -187,16 +187,18 @@ def test_一字龙头可回退(monkeypatch):
 def test_single_pool_rank_not_boards(monkeypatch, rank, removed):
     from core.quant_score import _merge_pools
     monkeypatch.setenv("POOL_SINGLE_POOL", "1")
-    source = row(boards=7, dragon_rank=rank, bucket="watch",
-                 participation_eligibility="observe_only", watch_group="补充观察")
+    # 2026-11-11 起池子只收已获接力资格的票 → 本用例测「身位过滤」，
+    # 故用 relay_candidate 身份（observe_only 会先被资格线剔掉，另有用例覆盖）。
+    source = row(boards=7, dragon_rank=rank, bucket="relay",
+                 participation_eligibility="relay_candidate", watch_group="补充观察")
     before = copy.deepcopy(source)
-    r, w, dropped, _ = _merge_pools([], [source], market_rows=[source, row(code="000002", boards=8)])
+    r, w, dropped, _ = _merge_pools([source], [], market_rows=[source, row(code="000002", boards=8)])
     assert bool(dropped) is removed
     assert len(r) == (0 if removed else 1)
     assert not w
     if r:
-        assert r[0]["participation_eligibility"] == "observe_only"
-        assert r[0]["pool_source_bucket"] == "watch"
+        assert r[0]["participation_eligibility"] == "relay_candidate"
+        assert r[0]["pool_source_bucket"] == "relay"
     assert source == before
 
 
@@ -208,7 +210,7 @@ def test_single_pool_unique_height_threshold(monkeypatch, boards, tied, observed
     """用户点的是「唯一高度 7 板」：⛔ 5/6 板最高票不能被顺手禁买，并列也不算。"""
     from core.quant_score import _merge_pools
     monkeypatch.setenv("POOL_SINGLE_POOL", "1")
-    source = row(boards=boards, bucket="relay")
+    source = row(boards=boards, bucket="relay", participation_eligibility="relay_candidate")
     market = [source, row(code="000002", boards=boards if tied else 1)]
     r, w, _, h = _merge_pools([source], [source], market_rows=market)
     assert bool(h) is observed
@@ -266,6 +268,7 @@ def test_formal_selection_applies_policy_after_finalize(monkeypatch):
 def test_single_pool_card_counts_height_separately():
     from core.quant_score import _merge_pools
     sources = [row(code=f"00000{i}", name=f"测试{i}", boards=7 if i == 1 else 2,
+                   participation_eligibility="relay_candidate",
                    watch_group="补充观察") for i in range(1, 7)]
     r, w, _, _ = _merge_pools([], sources)
     text = str(build_cards.build_eod_card({"date": "2026-11-10", "relay": r, "watch": w,
@@ -276,11 +279,65 @@ def test_single_pool_card_counts_height_separately():
     assert all(f"测试{i}" in text for i in range(1, 7))
 
 
-@pytest.mark.parametrize("all_tradeable,tradeable_text", [("1", True), ("0", False)])
-def test_single_pool_card_matches_real_eligibility(monkeypatch, all_tradeable, tradeable_text):
-    """文案=行为：全池可交易开时原观察票按待竞价渲染，关时仍按只看不买渲染。"""
+def test_unqualified_rows_never_enter_pool(monkeypatch):
+    """🚮 2026-11-11 用户「垃圾票不该进池」：没拿接力资格的一律不进池。
+
+    覆盖 11-11 实测的三类：一字买不到、容量核心、过筛未过（孤军/小额换手板）。
+    """
     from core.quant_score import _merge_pools
     monkeypatch.setenv("POOL_SINGLE_POOL", "1")
+    monkeypatch.delenv("POOL_QUALIFIED_ONLY", raising=False)
+    junk = [
+        row(code="000011", name="一字票", is_one_word=True,
+            participation_eligibility="observe_only", watch_group="一字核心"),
+        row(code="000012", name="容量票", is_capacity_core=True,
+            participation_eligibility="observe_only", watch_group="容量核心"),
+        row(code="000013", name="孤军票",
+            participation_eligibility="observe_only", watch_group="过筛未过·只观察",
+            screen_reject=["同题材仅 1 家，未成线（低板不接孤军）"]),
+    ]
+    good = row(code="000014", name="真接力", participation_eligibility="conditional",
+               buyable=True, watch_group="历史连板修复")
+    r, w, dropped, _ = _merge_pools([], junk + [good])
+    assert [x["name"] for x in r] == ["真接力"]
+    assert not w
+    assert {x["name"] for x in dropped} == {"一字票", "容量票", "孤军票"}
+    assert all(x["dropped_kind"] == "unqualified" for x in dropped)
+
+
+def test_empty_pool_is_legal(monkeypatch):
+    """合格 0 只 → 空池（不用观察票凑数）。"""
+    from core.quant_score import _merge_pools
+    monkeypatch.setenv("POOL_SINGLE_POOL", "1")
+    monkeypatch.delenv("POOL_QUALIFIED_ONLY", raising=False)
+    r, w, dropped, h = _merge_pools([], [row(participation_eligibility="observe_only",
+                                            watch_group="容量核心", is_capacity_core=True)])
+    assert r == [] and w == [] and h is None
+    assert len(dropped) == 1
+
+
+def test_qualified_only_switch_rolls_back(monkeypatch):
+    """`POOL_QUALIFIED_ONLY=0` → 逐字回到「观察票也并入接力池」的旧口径。"""
+    from core.quant_score import _merge_pools
+    monkeypatch.setenv("POOL_SINGLE_POOL", "1")
+    monkeypatch.setenv("POOL_QUALIFIED_ONLY", "0")
+    junk = row(code="000012", name="容量票", is_capacity_core=True,
+               participation_eligibility="observe_only", watch_group="容量核心")
+    r, w, dropped, _ = _merge_pools([], [junk])
+    assert [x["name"] for x in r] == ["容量票"]
+    assert not dropped
+
+
+@pytest.mark.parametrize("all_tradeable,tradeable_text", [("1", True), ("0", False)])
+def test_single_pool_card_matches_real_eligibility(monkeypatch, all_tradeable, tradeable_text):
+    """文案=行为：全池可交易开时原观察票按待竞价渲染，关时仍按只看不买渲染。
+
+    ⚠️ 2026-11-11 起这是**回退口径**（`POOL_QUALIFIED_ONLY=0`）的契约：
+    默认开资格线时，这些观察票根本不会进池（见 `test_unqualified_rows_never_enter_pool`）。
+    """
+    from core.quant_score import _merge_pools
+    monkeypatch.setenv("POOL_SINGLE_POOL", "1")
+    monkeypatch.setenv("POOL_QUALIFIED_ONLY", "0")   # 回退到「观察票并入接力池」旧口径
     monkeypatch.setenv("POOL_CALL_ALL_TRADEABLE", all_tradeable)
     sources = [
         row(code=f"00000{i}", name=f"测试{i}", boards=7 if i == 1 else 2,

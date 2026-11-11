@@ -38,7 +38,7 @@ LOOKBACK_DAYS = 5           # 2026-10-13 用户定：「前期的热门题材」
 MIN_HOT_SECTOR_ZT = 3
 MIN_HOT_THEME_ZT = 3        # 题材口径（选股宝/东财 getFryTomorrowList 回补）：单日涨停≥3家才算热门题材
 MIN_HISTORY_BOARDS = 2
-MIN_TURNOVER_YI = 5.0
+MIN_TURNOVER_YI = 0.05      # 🔴 2026-11-11 用户「5 亿全系统清除」→ 仅留数据防呆（原 5.0）
 EXCLUDE_BOARDS = 5
 DATA_FAIL_MAX_RATIO = 0.5   # 日K抓取失败占比 ≥ 此值 且 ≥ DATA_FAIL_MIN 只 → data_ok=False
 DATA_FAIL_MIN = 20

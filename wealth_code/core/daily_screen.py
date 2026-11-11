@@ -212,15 +212,18 @@ def screen_one(row: dict[str, Any], *, market_max_boards: int | None,
         unknown.append("封板质量字段缺失：" + ",".join(prof.get("missing") or []))
 
     # 门槛按形态分档：一字板原门槛（量小是封死的结构必然），换手板 1~2 板提到 5 亿
+    # 🔴 2026-11-11 用户「5 亿的限制全系统清除」→ 成交额不再产生 reject。
+    #    保留 `_sg.style_floor` 调用只为拿到「本档生效门槛」用于留痕；
+    #    成交额偏小一律降级为**提示**（supports/unknown），⛔ 不再写进 rejects。
     base_floor = 1.5 if boards <= 2 else 5.0
     floor = _sg.style_floor(row, base_floor)
     cje = _num(row.get("cje_yi"))
     if cje is None:
         unknown.append("成交额缺失")
-    elif style == "turnover" and floor > base_floor and cje < floor:
-        rejects.append(f"换手板成交额 {cje:.2f}亿 < {floor:g}亿（少数资金对倒，易被做局）")
-    elif cje < base_floor and style == "yizi":
-        supports.append(f"一字板成交额 {cje:.2f}亿（封死所致，不算缺陷）")
+    elif cje < base_floor:
+        # 只记事实：量小本身不是缺陷（缩量封板＝筹码锁死），⛔ 不复核、不否决
+        supports.append(f"成交额 {cje:.2f}亿（{'换手板' if style == 'turnover' else '一字/未知'}·"
+                        f"量小不构成缺陷，已不作门槛）")
 
     # ── 2) 封板质量 ────────────────────────────────────────────────────────
     # ⛔ 2026-11-04 重大修正：**封板弱不能当 reject 理由**。
