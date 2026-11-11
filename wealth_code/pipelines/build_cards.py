@@ -2661,10 +2661,13 @@ def _ai_plan_block(raw: dict, records: list[dict],
             # ⛔ 2026-11-11 用户：「不要说什么光洋断板这种错误的消息」。
             #    `in_pool=True` 说明它**今天就在涨停池里**，此时一个字都不该提「断」；
             #    只有 `in_pool` 明确为 False 时才提示「上一波已断」。
-            _in_pool = _lc.get("in_pool")
-            _broken_txt = ""
-            if _in_pool is False and _lc.get("broken"):
-                _broken_txt = "·上一波已断（今天不在板）"
+            # ⛔ 只认 `core_broken_self`（命名的这只自己断没断），⛔ 不用 `broken`——
+            #    `broken` 是「上一波更高核心已断」，可能是**另一只票**的事，
+            #    拿它写在这只票名字后面，就会出现「光洋·已断板」而光洋今天正封 7 板。
+            _self_broken = _lc.get("core_broken_self")
+            if _self_broken is None:            # 旧冻结件没有该字段 → 退回 in_pool 判断
+                _self_broken = _lc.get("in_pool") is False and _lc.get("broken")
+            _broken_txt = "·上一波已断（今天不在板）" if _self_broken else ""
             _core_tag = (f"<font color='grey'>（这条线最高板是 {_lc.get('name')}"
                          f"{_broken_txt}）</font>")
         blocks.append(_div(

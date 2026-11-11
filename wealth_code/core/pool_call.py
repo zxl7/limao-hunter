@@ -929,12 +929,29 @@ def load_line_cores(date10: str, *, days: int = LINE_CORE_LOOKBACK_DAYS,
                     "boards": beacon["boards"],
                     "last_date": beacon["last_date"],
                     "last_boards": beacon["boards"]}
+            # ⛔ 2026-11-11 用户当场质问：「昨天涨停，今天竞价刚开、没开一字，你就说人家断板！」
+            #    根因：`broken` 是拿 `hist_best`（窗口内最高板，**可能是另一只票**）算的，
+            #    而 `core` 取的是 alive 里的今日核心 —— 于是「名字是这只、断板是那只」。
+            #    ⇒ 语义拆开，⛔ 不要混：
+            #      · `broken`（旧语义，判据用）= 上一波更高的核心已断（闽东 6 板案例要它为 True）
+            #      · `core_broken_self`（展示用）= **命名的这只自己**断没断 → 卡面只认这个
+            core_broken = bool(broken)
+            core_broken_self = bool(str(core.get("last_date")) != newest_day)
+            prev_core_broken = bool(
+                str(hist_best.get("code")) != str(core["code"])
+                and str(hist_best.get("last_date")) != newest_day
+                and int(hist_best["boards"]) > int(core["boards"]))
         else:
             core = {"code": hist_best["code"], "name": hist_best["name"],
                     "boards": hist_best["boards"],
                     "last_date": hist_best["last_date"],
                     "last_boards": hist_best["last_boards"]}
-        core["broken"] = broken
+            core_broken = bool(broken)
+            core_broken_self = True        # 整线今日无人涨停 → 命名的这只也不在板
+            prev_core_broken = False
+        core["broken"] = core_broken
+        core["core_broken_self"] = core_broken_self
+        core["prev_core_broken"] = prev_core_broken
         core["in_pool"] = bool(beacon)
         core["beacon"] = beacon
         # ⭐ 2026-11-10：带出锚点那行的**原始涨停数据**（fbt/seal/hs/boards）。
