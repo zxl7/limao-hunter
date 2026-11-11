@@ -31,7 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from wealth_code.core.ai_tilt import FEATURES, MODEL_DIR, features  # noqa: E402
+from wealth_code.core.ai_tilt import FEATURES, MODEL_DIR, build_day_context, features  # noqa: E402
 
 WC = ROOT / "wealth_code" / "cache"
 CACHE = ROOT / "cache"
@@ -87,6 +87,7 @@ def build_dataset() -> list[dict]:
     out: list[dict] = []
     for p in sorted(WC.glob("pool_call-*.json")):
         day = p.stem.replace("pool_call-", "")
+        ctx = build_day_context(day)          # 正交特征（广度/昨日承接）
         try:
             views = (json.loads(p.read_text(encoding="utf-8")).get("views") or {})
         except Exception:  # noqa: BLE001
@@ -106,7 +107,7 @@ def build_dataset() -> list[dict]:
                 continue
             out.append({
                 "date": day, "code": code,
-                "x": features(row),
+                "x": features(row, ctx),
                 "y": 1 if ret > 0 else 0,
                 "ret": ret,
                 "label_src": src,
@@ -210,7 +211,13 @@ def main(argv=None) -> int:
 
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     files = sorted(MODEL_DIR.glob("ai_tilt_v*.json"))
-    ver = len(files) + 1
+    nums = []
+    for f in files:
+        try:
+            nums.append(int(f.stem.replace("ai_tilt_v", "")))
+        except ValueError:
+            pass
+    ver = (max(nums) + 1) if nums else 1
     model = {
         "version": f"ai_tilt_v{ver}",
         "trained_at": _bj().strftime("%Y-%m-%d %H:%M:%S"),
@@ -228,6 +235,44 @@ def main(argv=None) -> int:
     (MODEL_DIR / f"{model['version']}.json").write_text(
         json.dumps(model, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     print(f"[ai_tilt] 已写入 config/models/{model['version']}.json")
+
+    # 📓 迭代记录（tracked）：每次训练都留一行，含特征集/样本/训练与验证 AUC
+    log = ROOT / "config" / "ai_iterations.jsonl"
+    rec = {
+        "version": model["version"], "at": model["trained_at"],
+        "features": list(FEATURES), "n_features": len(FEATURES),
+        "samples": len(train_rows), "days": len(days),
+        "auc_train": tr["auc"], "auc_valid": va["auc"], "acc_valid": va["acc"],
+        "valid_days": sorted(valid_days),
+        "note": "正交特征：breadth_level / prev_zbc / prev_seal_ratio",
+    }
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    print("[ai_tilt] 迭代记录已追加 config/ai_iterations.jsonl")
+
+    # 📊 终端状态文件（供 /api/ai/tilt 读取）：当前模型 + 最近 20 条迭代
+    hist = []
+    try:
+        for line in log.read_text(encoding="utf-8").splitlines()[-20:]:
+            hist.append(json.loads(line))
+    except Exception:  # noqa: BLE001
+        hist = []
+    state = {
+        "schema": "ai_tilt_state_v1",
+        "updated": model["trained_at"],
+        "mode": "shadow",
+        "model": model["version"],
+        "features": list(FEATURES),
+        "samples": model["samples"],
+        "window": model["window"],
+        "auc_train": tr["auc"],
+        "auc_valid": va["auc"],
+        "iterations": hist,
+        "note": "只读状态：智能层仅提供建议，执行与否由交易员判断（AI_TILT_MODE=shadow）",
+    }
+    (ROOT / "config" / "ai_tilt_state.json").write_text(
+        json.dumps(state, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    print("[ai_tilt] 已写 config/ai_tilt_state.json")
     return 0
 
 

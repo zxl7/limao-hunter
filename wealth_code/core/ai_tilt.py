@@ -46,6 +46,10 @@ FEATURES = (
     "gap_to_top",      # 距全市场最高板（缺失用 -1 + 指示位）
     "gap_top_missing", # 缺失指示位（1=没有该字段）
     "carry_cnt",       # 带动家数（截断 0~10）
+    # ── 2026-11-11 正交特征（与机械排序键不重合；用户「开始训练」）──
+    "breadth_level",    # 该线竞价广度：2=ok / 1=分化 / 0=不判 / -1=弱
+    "prev_zbc",         # 该票昨日炸板次数（0~10）——承接质量
+    "prev_seal_ratio",  # 该票昨日封单/流通%（0~5）
 )
 
 ROLE_SCORE = {"龙头": 2.0, "准龙头": 1.0, "跟风": 0.0}
@@ -63,8 +67,13 @@ def _f(v: Any, default: float = 0.0) -> float:
     return x if math.isfinite(x) else default
 
 
-def features(row: Mapping[str, Any]) -> list[float]:
-    """从候选/冻结行抽特征。缺失一律**中性值 + 指示位**，⛔ 不把「没数据」当利空。"""
+def features(row: Mapping[str, Any], ctx: Mapping[str, Any] | None = None) -> list[float]:
+    """从候选/冻结行抽特征。缺失一律**中性值 + 指示位**，⛔ 不把「没数据」当利空。
+
+    `ctx`（可选）＝当日上下文 `{code: {breadth_level, prev_zbc, prev_seal_ratio}}`，
+    由 `build_day_context(day)` 生成；缺失时三项取中性值（0），模型仍可用。
+    """
+    c = (ctx or {}).get(str(row.get("code") or "")) or {}
     boards = _f(row.get("boards"))
     lr = _f(row.get("line_rank"), 9.0)
     is_core = 1.0 if row.get("line_is_core") else 0.0
@@ -78,6 +87,9 @@ def features(row: Mapping[str, Any]) -> list[float]:
     has_gtt = isinstance(gtt, (int, float))
     gap_to_top = min(_f(gtt), 8.0) if has_gtt else 0.0
     carry = min(max(_f(row.get("carry_cnt")), 0.0), 10.0)
+    breadth = min(max(_f(c.get("breadth_level")), -1.0), 2.0)
+    prev_zbc = min(max(_f(c.get("prev_zbc")), 0.0), 10.0)
+    prev_seal = min(max(_f(c.get("prev_seal_ratio")), 0.0), 5.0)
     return [
         boards,
         min(lr, 3.0),
@@ -88,6 +100,9 @@ def features(row: Mapping[str, Any]) -> list[float]:
         gap_to_top,
         0.0 if has_gtt else 1.0,
         carry,
+        breadth,
+        prev_zbc,
+        prev_seal,
     ]
 
 
@@ -116,9 +131,10 @@ def load_model(path: str | Path | None = None) -> dict[str, Any] | None:
     return m
 
 
-def predict(model: Mapping[str, Any], row: Mapping[str, Any]) -> float:
+def predict(model: Mapping[str, Any], row: Mapping[str, Any],
+            ctx: Mapping[str, Any] | None = None) -> float:
     """`p_win` ∈ (0,1)。数值稳定：先标准化，再 sigmoid（截断防止溢出）。"""
-    x = features(row)
+    x = features(row, ctx)
     mean = [float(v) for v in model["mean"]]
     std = [float(v) or 1.0 for v in model["std"]]
     w = [float(v) for v in model["weights"]]
@@ -130,7 +146,8 @@ def predict(model: Mapping[str, Any], row: Mapping[str, Any]) -> float:
 
 
 def score_rows(model: Mapping[str, Any] | None,
-               rows: list[Mapping[str, Any]]) -> dict[str, float]:
+               rows: list[Mapping[str, Any]],
+               ctx: Mapping[str, Any] | None = None) -> dict[str, float]:
     """批量打分；模型为空直接返回 {}（上层据此等价于关闭）。"""
     if not model:
         return {}
@@ -138,20 +155,92 @@ def score_rows(model: Mapping[str, Any] | None,
     for r in rows:
         code = str(r.get("code") or "")
         if code:
-            out[code] = round(predict(model, r), 4)
+            out[code] = round(predict(model, r, ctx), 4)
     return out
 
 
 def advice_payload(model: Mapping[str, Any] | None, rows: list[Mapping[str, Any]],
-                   *, mode: str = "shadow") -> dict[str, Any]:
+                   *, mode: str = "shadow", ctx: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """交给 `pool_call` 的建议包（只读、无副作用）。"""
-    scores = score_rows(model, rows)
+    scores = score_rows(model, rows, ctx)
     return {
         "schema": SCHEMA,
         "mode": mode,
         "model": (model or {}).get("version") or None,
         "scores": scores,
     }
+
+
+# ── 当日上下文（正交特征）────────────────────────────────────────────────
+ZT_DIR = ROOT / "cache" / "zt_history"
+_BREADTH_NUM = {"ok": 2.0, "divergent": 1.0, "weak": -1.0}
+
+
+def _prev_archive(day: str) -> tuple[str, list[dict]] | None:
+    """取 day 之前最近一个**完整收盘**涨停池（`zt_list` 缺失或被标 intraday 的跳过）。"""
+    days = sorted(p.stem.replace("zt_", "") for p in ZT_DIR.glob("zt_*.json"))
+    for d in reversed([x for x in days if x < day]):
+        try:
+            data = json.loads((ZT_DIR / f"zt_{d}.json").read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if data.get("intraday_only") or "zt_list" not in data:
+            continue
+        return d, [r for r in (data.get("zt_list") or []) if isinstance(r, dict)]
+    return None
+
+
+def build_day_context(day: str) -> dict[str, dict[str, float]]:
+    """当日上下文：`{code: {breadth_level, prev_zbc, prev_seal_ratio}}`。
+
+    · `breadth_level`：该票所属线的竞价广度（ok/分化/不判/弱 → 2/1/0/-1）
+    · `prev_zbc` / `prev_seal_ratio`：昨日炸板次数、封单占流通%（承接质量）
+    ⛔ 任何一步缺数据都退化为中性值，⛔ 不猜、不编。
+    """
+    got = _prev_archive(day)
+    if not got:
+        return {}
+    prev, rows = got
+    ctx: dict[str, dict[str, float]] = {}
+    for r in rows:
+        code = str(r.get("code") or "").strip()
+        if not code:
+            continue
+        try:
+            zbc = float(r.get("zbc") or 0)
+        except (TypeError, ValueError):
+            zbc = 0.0
+        seal, lt = r.get("seal"), r.get("lt_yi")
+        ratio = 0.0
+        try:
+            if seal is not None and lt:
+                ratio = max(0.0, float(seal) / float(lt) * 100.0)
+        except (TypeError, ValueError):
+            ratio = 0.0
+        ctx[code] = {"prev_zbc": zbc, "prev_seal_ratio": min(ratio, 5.0),
+                     "breadth_level": 0.0}
+
+    # 广度：用昨日涨停池分线 + 当日竞价快照现算（与 auction_breadth 同一函数）
+    try:
+        from .auction_breadth import build_breadth
+        from .theme_strength import theme_of_factory
+        quotes = json.loads((WC_CACHE / f"auction_quotes-{day}.json").read_text(encoding="utf-8"))
+        theme_of, _src = theme_of_factory(prev)
+        themes: dict[str, list[dict]] = {}
+        for r in rows:
+            code = str(r.get("code") or "").strip()
+            if code:
+                themes.setdefault(theme_of(code, r), []).append(r)
+        data = build_breadth(day, themes, quotes)
+        lvl_by_theme = {t["theme"]: _BREADTH_NUM.get(str(t.get("level")), 0.0)
+                        for t in data.get("themes") or []}
+        for r in rows:
+            code = str(r.get("code") or "").strip()
+            if code in ctx:
+                ctx[code]["breadth_level"] = lvl_by_theme.get(theme_of(code, r), 0.0)
+    except Exception:  # noqa: BLE001
+        pass
+    return ctx
 
 
 # ── 标签计算（训练与贡献报告共用，⛔ 不各自造一套口径）──────────────────────

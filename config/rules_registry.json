@@ -403,10 +403,10 @@
      "name": "模型文件",
      "kind": "data",
      "switch": "AI_TILT_MODEL",
-     "default": "config/models/ai_tilt_v2.json",
+     "default": "config/models/ai_tilt_v4.json",
      "status": "active",
      "since": "2026-11-11",
-     "what": "L2 逻辑回归（≤9 维，强正则），walk-forward 验证 AUC≥0.52 才产出；版本/维度不符拒绝加载。",
+     "what": "12 维逻辑回归（含正交特征 breadth_level / prev_zbc / prev_seal_ratio），walk-forward 验证 AUC≥0.52 才产出；版本/维度不符拒绝加载。",
      "source": " ｜ 归属：龙头战法交易员（只读建议，执行权在交易员）",
      "rollback": "AI_TILT_MODEL=off"
     }
