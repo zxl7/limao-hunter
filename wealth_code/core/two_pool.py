@@ -19,8 +19,12 @@ def widen_enabled():
     return os.environ.get("ENABLE_TWO_POOL_WIDEN", "1").lower() not in {"0", "false", "off"}
 
 
+def height_observation(row):
+    return row.get("height_observe") is True or row.get("watch_group") == "高度观察"
+
+
 def observation_only(row):
-    return row.get("participation_eligibility") == "observe_only"
+    return height_observation(row) or row.get("participation_eligibility") == "observe_only"
 
 
 # ── 🔁 盘后降级票的 09:25 复核类别（11-05 用户 A 方案·单一源）────────────────
@@ -78,6 +82,8 @@ def recheck_class(row):
                  仍逐票复核留痕，但不取得买入资格。
     ⛔ 缺字段/老候选 → 一律 restricted（诚实降级，不误放行）。
     """
+    if height_observation(row):
+        return "hard"
     code = str(row.get("code") or "")
     name = str(row.get("name") or "").upper()
     if code.startswith("688") or "ST" in name or row.get("is_one_word") is True:
@@ -128,7 +134,7 @@ def rechecked_entry(row: dict | None) -> bool:
     （验证记录 / AI 口径 / 账户账本）不再拿盘后身份把已翻案的票二次否决。
     ⛔ hard / restricted / 复核后仍 watch 的票一律返回 False。
     """
-    if not recheck_unlock_enabled() or not isinstance(row, dict):
+    if not isinstance(row, dict) or height_observation(row) or not recheck_unlock_enabled():
         return False
     if all_tradeable_enabled():
         # 全池可交易：不再要求 recheck_class == "state"
@@ -211,7 +217,13 @@ def finalize(relay, watch, *, stage):
     relay_codes = {str(r.get("code")) for r in relay}
     for row in relay + watch:
         kind = watch_kind(row)
-        if kind:
+        if height_observation(row):
+            r = deepcopy(row)
+            r.update(bucket="watch", bucket_label="高度观察", watch_group="高度观察",
+                     height_observe=True, participation_eligibility="observe_only",
+                     watch_only=True, buyable=False)
+            anchors.append(r)
+        elif kind:
             anchors.append(mark_watch(deepcopy(row), kind))
         elif (str(row.get("code")) in relay_codes and not row.get("watch_only")
               and not observation_only(row) and not row.get("is_one_word")

@@ -611,9 +611,42 @@ def _zt_dir(root: Path | None = None) -> Path:
 
 
 def _read_zt(path: Path) -> dict[str, Any] | None:
+    """只读有效完整收盘池；None 表示未知，显式空名单仍是有效证据。"""
     try:
         d = json.loads(path.read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else None
+        if not isinstance(d, dict) or d.get("intraday_only") not in (None, False):
+            return None
+        day = path.stem[3:]
+        if datetime.strptime(day, "%Y-%m-%d").strftime("%Y-%m-%d") != day:
+            return None
+        if d.get("date", day) != day:
+            return None
+        rows = d.get("zt_list")
+        if not isinstance(rows, list):
+            return None
+        codes = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                return None
+            code = str(row.get("code") or row.get("dm") or "").strip()
+            if len(code) != 6 or not code.isascii() or not code.isdigit() or code in codes:
+                return None
+            codes.add(code)
+            for key in ("boards", "lbc", "lianban"):
+                if key in row:
+                    value = row[key]
+                    if (isinstance(value, bool)
+                            or not (str(value).isdigit()
+                                    or isinstance(value, float) and value.is_integer())
+                            or int(value) < 1):
+                        return None
+        # 旧归档可以没有计数字段；显式空列表也是有效池，但声明的总数必须吻合。
+        for key in ("zt_count", "tc"):
+            if key in d:
+                value = d[key]
+                if isinstance(value, bool) or not str(value).isdigit() or int(value) != len(rows):
+                    return None
+        return d
     except Exception:
         return None
 
@@ -700,12 +733,15 @@ def load_line_cores(date10: str, *, days: int = LINE_CORE_LOOKBACK_DAYS,
         files = sorted(d.glob("zt_*.json"))
     except Exception:
         return {}
-    picked: list[tuple[str, Path]] = []
+    picked: list[tuple[str, dict[str, Any]]] = []
     for f in reversed(files):
         day = f.stem[3:]                                   # zt_2026-09-18 → 2026-09-18
         if len(day) != 10 or day > str(date10):
             continue
-        picked.append((day, f))
+        z = _read_zt(f)
+        if z is None:
+            continue
+        picked.append((day, z))
         if len(picked) >= max(1, int(days)):
             break
     if not picked:
@@ -726,10 +762,7 @@ def load_line_cores(date10: str, *, days: int = LINE_CORE_LOOKBACK_DAYS,
     # 掩盖（2026-09-21 实测 bug：闽东电力 09-16 六板后 09-17 断板，却因 09-18 同线
     # 锡华在板而把线族的 last_date 刷成 09-18 → broken 误判 False）。
     per_code: dict[str, dict[str, Any]] = {}
-    for day, f in picked:
-        z = _read_zt(f)
-        if not z:
-            continue
+    for day, z in picked:
         # 🧭 归组键：优先**炒作题材**（题材快照），⛔ 不再只用申万行业。
         #   11-03 实证：「短剧/互动影游」一条线 6 只票被行业拆成 游戏Ⅱ/出版/纺织制造/
         #   文娱用品 4 个键 → 候选（按题材归组）永远匹配不到自己的风向标，
@@ -827,6 +860,70 @@ def load_line_cores(date10: str, *, days: int = LINE_CORE_LOOKBACK_DAYS,
 # ─────────────────────────────────────────────────────────────────────────────
 # 池内裁决
 # ─────────────────────────────────────────────────────────────────────────────
+# 只分离核心身份与开盘买点；=0 完整回退原有隔壁/后排通道。
+POOL_CALL_CORE_FIRST = os.environ.get("POOL_CALL_CORE_FIRST", "1") != "0"
+
+
+def _core_identity_pool(pool, full_rows, code_theme):
+    """复用昨日完整池的龙一单源；不用行业归亲，也不靠代码兜底猜核心。"""
+    from core import sector_leader as sl
+
+    def theme(row):
+        code = sl.code_of(row)
+        if isinstance(code_theme, dict):
+            return sl.theme_of({"core_theme": code_theme.get(code)})
+        return sl.theme_of(row)
+
+    extras = {sl.code_of(c): c for c in pool}
+    rows = []
+    for raw in full_rows or []:
+        row = dict(raw)
+        for key, value in extras.get(sl.code_of(row), {}).items():
+            if row.get(key) is None:
+                row[key] = value
+        th = theme(row)
+        # 显式映射优先，清除可能与它冲突的旧题材字段。
+        for key in ("theme_em_name", "core_theme", "theme_name"):
+            row.pop(key, None)
+        row["core_theme"] = th
+        rows.append(row)
+    result = sl.compute(rows)
+    known = {}
+    for board in result["boards"]:
+        if not board["has_sector"]:
+            continue
+        group = [r for r in rows if sl.theme_of(r) == board["theme"]]
+        bands = sl.time_bands(group)
+        ordered = sorted(group, key=lambda r: sl.leader_key(
+            r, band=bands.get(sl.code_of(r), 999)))
+        # 完全同证据仅凭代码排第一不算核心证据，缺板数也不猜。
+        if (any(not any(r.get(k) is not None for k in ("boards", "lbc", "lianban"))
+                for r in group)
+                or sl.leader_key(ordered[0], band=bands.get(sl.code_of(ordered[0]), 999))[:-1]
+                == sl.leader_key(ordered[1], band=bands.get(sl.code_of(ordered[1]), 999))[:-1]):
+            continue
+        for row in group:
+            known[sl.code_of(row)] = result["by_code"][sl.code_of(row)]
+    out = []
+    for original in pool:
+        c = dict(original)
+        c["core_identity_theme"] = theme(c)
+        info = known.get(sl.code_of(c))
+        if info and info["theme"] == c["core_identity_theme"]:
+            c.update(dragon_rank=info["dragon_rank"], sector_has_mates=True,
+                     dragon_leader_code=info["leader_code"],
+                     dragon_leader_name=info["leader_name"],
+                     dragon_leader_boards=info["leader_boards"],
+                     dragon_leader_block=info["leader_block"],
+                     core_identity_source="sector_leader_full_pool")
+        elif c["core_identity_theme"] and c.get("dragon_leader_code"):
+            leader = extras.get(str(c["dragon_leader_code"]))
+            if leader is None or theme(leader) == c["core_identity_theme"]:
+                c["core_identity_source"] = "sector_leader_candidate"
+        out.append(c)
+    return out
+
+
 def _gap_of(q: dict[str, Any] | None) -> float | None:
     """竞价涨幅（%）。数据缺失/异常 → None（诚实·不编造）。"""
     if not isinstance(q, dict):
@@ -848,6 +945,31 @@ def _amount_of(q: dict[str, Any] | None) -> float | None:
         return float(q.get("auction_amount_yi"))
     except (TypeError, ValueError):
         return None
+
+
+def _dip_hint(q: dict[str, Any] | None, c: dict[str, Any], *, is_core: bool = False) -> str:
+    """给「开太高不追」的票补一句**低吸提示**（2026-11-11 用户口径）。
+
+    用户原话：「对于这种开得太高的票，我只想要有这样的一句话：如果它够值得买的话，
+    我想要有『低吸』这一句话，我自己来决定低吸不低吸，**不需要你机械执行**。」
+
+    ⛔ 只加文案，不改 view / 名额 / 仓位 / 账本 —— 系统**不替用户低吸**。
+    ⛔ 只在「够值得」时出现：这条线的龙一（`dragon_rank==1`）、这条线核心、或板块龙。
+       跟风票不提示，否则满屏都是「可低吸」，提示就贬值了。
+    参考位：竞价价 × (1 − 3%)；没有竞价价就只给一句定性提示。
+    """
+    worth = (c.get("dragon_rank") == 1) or is_core or bool(c.get("is_sector_dragon"))
+    if not worth:
+        return ""
+    ap = None
+    try:
+        ap = float((q or {}).get("auction_price"))
+    except (TypeError, ValueError):
+        ap = None
+    if ap and ap > 0:
+        return (f"｜💡 够强可等杀跌低吸：回踩到 {ap * 0.97:.2f}（今开 −3%）附近再看，"
+                "买不买你定")
+    return "｜💡 够强可等杀跌低吸（买不买你定）"
 
 
 def _bias_of(plan: dict | None, code: str) -> str:
@@ -1150,6 +1272,9 @@ def call_pool(candidates: dict[str, Any] | None,
             except Exception:
                 _gene_recent = {}
 
+    if POOL_CALL_CORE_FIRST:
+        pool = _core_identity_pool(pool, theme_open_rows, code_theme)
+
     # 🧬 基因换位预扫（2026-11-06）：同板数下「上一波更硬」的挑战者**顶替**原龙一。
     #   为什么需要顶替而不是只放行：⑩d 的语义是「只做龙一、跟风不追」。若 09:25 认定
     #   东方海洋才是这条线更强的那个，那皇台在**同一套判据下**就是跟风 —— 两个都买
@@ -1164,6 +1289,8 @@ def call_pool(candidates: dict[str, Any] | None,
             for c in pool:
                 _lc0 = str(c.get("dragon_leader_code") or "")
                 if not _lc0:
+                    continue
+                if POOL_CALL_CORE_FIRST and not c.get("core_identity_source"):
                     continue
                 _b0, _lb0 = c.get("boards"), c.get("dragon_leader_boards")
                 try:
@@ -1626,7 +1753,53 @@ def call_pool(candidates: dict[str, Any] | None,
             except Exception:                                # noqa: BLE001
                 base["forecast_band"] = None
 
-        from core.two_pool import observation_only, recheck_class, all_tradeable_enabled
+        if POOL_CALL_CORE_FIRST and c.get("core_identity_source"):
+            from core import gene_height as gh
+            rank = _candidate_int(c, "dragon_rank")
+            leader_code = str(c.get("dragon_leader_code") or "")
+            leader_name = str(c.get("dragon_leader_name") or leader_code)
+            swapped = _gene_swap.get(code)
+            mine = gh.prev_streak_of(zt_series, code)
+            theirs = gh.prev_streak_of(zt_series, leader_code)
+            override = bool(POOL_CALL_DRAGON_GENE and rank > 1
+                            and _candidate_int(c, "dragon_leader_boards") == boards_i
+                            and gh.gene_stronger(mine, theirs))
+            if swapped:
+                leader_code = swapped["by"]
+                leader_name = str(swapped.get("by_name") or leader_code)
+                rank = 2
+                base["gene_demoted"] = {
+                    "by": leader_code, "by_name": leader_name,
+                    "mine_prev_streak": swapped["leader_prev_streak"],
+                    "challenger_prev_streak": swapped["mine_prev_streak"],
+                }
+            elif override:
+                rank = 1
+                base["gene_leader_override"] = {
+                    "mine_prev_streak": mine, "leader_prev_streak": theirs,
+                    "leader": leader_name, "leader_rank": c.get("dragon_rank"),
+                }
+            if rank > 0 and c.get("sector_has_mates") is not False:
+                base["core_identity"] = {
+                    "theme": c["core_identity_theme"],
+                    "source": c["core_identity_source"],
+                    "code": code if rank == 1 else leader_code,
+                    "name": name if rank == 1 else leader_name,
+                    "is_core": rank == 1,
+                }
+                if rank > 1:
+                    marks[code] = {**base, "view": "watch", "core_first_gate": True,
+                                   "dragon_gate": "deputy",
+                                   "reason": (f"同真实题材核心是{leader_name}，同板数不等于同地位；"
+                                              "不因核心开盘不可买而改推非核心 → 只观察")}
+                    continue
+
+        from core.two_pool import observation_only, recheck_class, all_tradeable_enabled, height_observation
+        if height_observation(c):
+            marks[code] = {**base, "view": "watch", "height_observe": True,
+                           "participation_eligibility": "observe_only", "recheck_class": "hard",
+                           "reason": "高度观察，只看不买"}
+            continue
         if observation_only(c):
             # 🔁 11-05 用户拍板 A：观察票一律先用 09:25 实测「判一遍」并留痕，
             #    ⛔ 不再开局一句「板块观察参照，不参与交易」直接短路。
@@ -1701,7 +1874,8 @@ def call_pool(candidates: dict[str, Any] | None,
         if zone == "above":
             _why = ("今天开在涨停附近，竞价就封死了 → 买不进，不追"
                     if _ac.relative_mode() else
-                    f"今天开在 {gap:+.2f}%，高开超过 5% 上限 → 没买到，不追")
+                    f"今天开在 {gap:+.2f}%，高开超过 5% 上限 → 没买到，不追"
+                    + _dip_hint(q, c, is_core=is_core))
             marks[code] = {**base, "view": "skip", "reason": _why}
             continue
         # ②′ 顶部空间硬闸（2026-11-06 用户「避开开的特别高又没有资格和行情秒板的票」）
@@ -1718,7 +1892,8 @@ def call_pool(candidates: dict[str, Any] | None,
                 marks[code] = {**base, "view": "skip",
                                "high_gap_reject": True,
                                "reason": (f"今开 {gap:+.2f}%，离涨停只剩 {_room:.2f} 个点"
-                                          f"（上限 {_lim:.0f}%）→ 上方空间不够，不追")}
+                                          f"（上限 {_lim:.0f}%）→ 上方空间不够，不追"
+                                          + _dip_hint(q, c, is_core=is_core))}
                 continue
         # ③ 盘后预案＝回避（2026-11-06 用户「盘后预案这个功能关了，全系统关闭」）
         #    ⛔ 默认**不再否决**：只留痕 `bias_avoided`，买不买交给竞价链自己判。
@@ -2027,7 +2202,13 @@ def call_pool(candidates: dict[str, Any] | None,
         #   ⛔ 无板块（题材缺失 / 涨停独苗，`sector_has_mates=False` / rank=0）→ 不裁决，
         #     沿用孤军与高标逻辑（缺数据≠不利证据）。
         #   ⛔ 缺 `dragon_rank` 字段（旧候选文件）→ 不裁决（诚实降级，不误拦）。
-        if POOL_CALL_DRAGON_GATE:
+        if (POOL_CALL_DRAGON_GATE and base.get("core_identity", {}).get("is_core")
+                and not base.get("gene_leader_override")
+                and (c.get("dragon_leader_block") or c.get("dragon_gate") == "leader_unbuyable")):
+            marks[code] = {**base, "view": "watch", "dragon_gate": "leader_unbuyable",
+                           "reason": "核心身份保留，但一字/ST风控未通过，开盘不买"}
+            continue
+        if POOL_CALL_DRAGON_GATE and not base.get("core_identity"):
             _dr = c.get("dragon_rank")
             _has_sector = c.get("sector_has_mates")
             if isinstance(_dr, (int, float)) and int(_dr) > 0 and _has_sector is not False:
@@ -2139,7 +2320,7 @@ def call_pool(candidates: dict[str, Any] | None,
         #   若核心已断板 / 今天买不到 → 这条线没有可买的前排，后排就是唯一入口（用户
         #   「买隔壁」场景），⛔ 不拦，只打标签。反例支撑：10-21 传媒线核心新华传媒已断板，
         #   后排南威软件(首板)当日 +9.27%，硬拦会直接错过这只当天最大的肉。
-        if POOL_CALL_BACKROW_GATE:
+        if POOL_CALL_BACKROW_GATE and not base.get("core_identity", {}).get("is_core"):
             _tier = _fc.row_tier(c, line_is_core=is_core,
                                  line_max_boards=base.get("line_max_boards"),
                                  line_rank=base.get("line_rank"),
@@ -2430,6 +2611,15 @@ def call_pool(candidates: dict[str, Any] | None,
                            "reason": (f"今天开在 {e['gap_pct']:+.2f}% 也达标，"
                                       f"但今天只买前 {effective_quota} 只、它排在后面 → 先看"
                                       + _fusion_note)}
+
+    if POOL_CALL_CORE_FIRST:
+        for row in marks.values():
+            if row.get("core_identity", {}).get("is_core") and row["view"] != "participate":
+                row["core_open_view"] = row["view"]
+                row["view"] = "watch"
+                row["core_manual_wait"] = True
+                row["auto_low_buy"] = False
+                row["reason"] += "；核心身份保留，人工等待合适价格，直接走强接受错过；不采分时、不自动低吸"
 
     # ── 🎯 单票场景（2026-11-04 用户「只能推一只票 仓位控死50%」）─────────────────
     # 判定口径＝**当日实际参与票数**（⛔ 不按名额/计划猜：名额 2 但只合格 1 只 →
@@ -2749,7 +2939,9 @@ def apply_to_views(pool_result: dict[str, Any], views: dict[str, Any] | None) ->
         for _k in ("auction_state", "auction_r", "auction_route",
                    "auction_state_reason", "manual_only",
                    "expected_gap_pct", "gap_vs_expected",
-                   "is_20cm", "low_open_expected", "low_open_guard"):
+                   "is_20cm", "low_open_expected", "low_open_guard",
+                   "core_identity", "core_first_gate", "core_manual_wait",
+                   "core_open_view", "auto_low_buy", "gene_leader_override", "gene_demoted"):
             if m.get(_k) is not None:
                 cur[_k] = m.get(_k)
         if not cur.get("name"):

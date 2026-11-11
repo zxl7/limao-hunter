@@ -181,3 +181,118 @@ def test_一字龙头可回退(monkeypatch):
     """⛔ `ENABLE_TWO_POOL_WIDEN=0` → 逐字回到「一字板封单不厚即丢弃」的旧行为。"""
     monkeypatch.setenv("ENABLE_TWO_POOL_WIDEN", "0")
     assert two_pool.watch_kind(row(is_one_word=True, seal_amt=.2)) is None
+
+
+@pytest.mark.parametrize("rank,removed", [(4, False), (5, True), ("5", True), (None, False), (True, False)])
+def test_single_pool_rank_not_boards(monkeypatch, rank, removed):
+    from core.quant_score import _merge_pools
+    monkeypatch.setenv("POOL_SINGLE_POOL", "1")
+    source = row(boards=7, dragon_rank=rank, bucket="watch",
+                 participation_eligibility="observe_only", watch_group="补充观察")
+    before = copy.deepcopy(source)
+    r, w, dropped, _ = _merge_pools([], [source], market_rows=[source, row(code="000002", boards=8)])
+    assert bool(dropped) is removed
+    assert len(r) == (0 if removed else 1)
+    assert not w
+    if r:
+        assert r[0]["participation_eligibility"] == "observe_only"
+        assert r[0]["pool_source_bucket"] == "watch"
+    assert source == before
+
+
+@pytest.mark.parametrize("boards,tied,observed", [
+    (4, False, False), (5, False, False), (6, False, False),
+    (7, False, True), (8, False, True), (7, True, False),
+])
+def test_single_pool_unique_height_threshold(monkeypatch, boards, tied, observed):
+    """用户点的是「唯一高度 7 板」：⛔ 5/6 板最高票不能被顺手禁买，并列也不算。"""
+    from core.quant_score import _merge_pools
+    monkeypatch.setenv("POOL_SINGLE_POOL", "1")
+    source = row(boards=boards, bucket="relay")
+    market = [source, row(code="000002", boards=boards if tied else 1)]
+    r, w, _, h = _merge_pools([source], [source], market_rows=market)
+    assert bool(h) is observed
+    assert len(r) + len(w) == 1
+    if observed:
+        assert h["buyable"] is False
+        assert h["watch_only"] is True
+        assert h["participation_eligibility"] == "observe_only"
+        assert two_pool.finalize(r, w, stage="test")[1][0]["height_observe"]
+
+
+def test_single_pool_rollback(monkeypatch):
+    from core.quant_score import _merge_pools
+    monkeypatch.setenv("POOL_SINGLE_POOL", "0")
+    monkeypatch.setenv("POOL_CALL_DROP_BACKROW_RANK", "0")
+    r, w, dropped, h = _merge_pools([row()], [row(code="000002", dragon_rank=8)])
+    assert len(r) == len(w) == 1
+    assert not dropped and h is None
+
+
+@pytest.mark.parametrize("all_tradeable", ["0", "1"])
+@pytest.mark.parametrize("marker", [{"height_observe": True}, {"watch_group": "高度观察"}])
+def test_height_never_unlocked(monkeypatch, all_tradeable, marker):
+    monkeypatch.setenv("POOL_CALL_ALL_TRADEABLE", all_tradeable)
+    anchor = row(**marker, participation_eligibility="relay_candidate",
+                 expectation={"expected_range": [1, 3], "auction_amount_min_yi": 1})
+    result = pool_call.call_pool({"date": "2026-11-10", "relay": [anchor], "watch": []},
+        {"000001": {"auction_change_pct": 2., "auction_amount_yi": 10.}},
+        line_cores={}, sector_flow={}, zt_series={}, zt_days=[], market_open={"ready": True})
+    decision = result["views"]["000001"]
+    assert decision["view"] == "watch"
+    assert decision["height_observe"] is True
+    assert not result["meta"]["participate"]
+    assert not two_pool.rechecked_entry({**marker, "rechecked_from_observe": True, "view": "participate"})
+
+
+def test_formal_selection_applies_policy_after_finalize(monkeypatch):
+    from core import quant_score
+    sources = [row(code="000001", boards=7, score=90, lead_score=90),
+               row(code="000002", boards=2, score=90, lead_score=90),
+               row(code="000003", boards=1, dragon_rank=5, score=90, lead_score=90)]
+    monkeypatch.setenv("POOL_SINGLE_POOL", "1")
+    r, w, diag, _ = quant_score.select_relay_watch(
+        sources, {"regime": "neutral"}, None, None, apply_pool_policy=True)
+    assert all(x["bucket"] == "relay" for x in r)
+    assert all(x["height_observe"] for x in w)
+    assert "000003" not in {x["code"] for x in r + w}
+    assert diag["relay_count"] == len(r)
+    assert diag["watch_count"] == len(w)
+    assert diag["single_pool"] is True
+    assert diag["backrow_dropped_count"] == 1
+    assert diag["height_observe"]["code"] == "000001"
+
+
+def test_single_pool_card_counts_height_separately():
+    from core.quant_score import _merge_pools
+    sources = [row(code=f"00000{i}", name=f"测试{i}", boards=7 if i == 1 else 2,
+                   watch_group="补充观察") for i in range(1, 7)]
+    r, w, _, _ = _merge_pools([], sources)
+    text = str(build_cards.build_eod_card({"date": "2026-11-10", "relay": r, "watch": w,
+               "diagnostics": {"single_pool": True}, "ai_plan": {}}))
+    assert "接力池（5 只）" in text
+    assert "高度观察 1 只" in text
+    assert "观察池 TOP" not in text
+    assert all(f"测试{i}" in text for i in range(1, 7))
+
+
+@pytest.mark.parametrize("all_tradeable,tradeable_text", [("1", True), ("0", False)])
+def test_single_pool_card_matches_real_eligibility(monkeypatch, all_tradeable, tradeable_text):
+    """文案=行为：全池可交易开时原观察票按待竞价渲染，关时仍按只看不买渲染。"""
+    from core.quant_score import _merge_pools
+    monkeypatch.setenv("POOL_SINGLE_POOL", "1")
+    monkeypatch.setenv("POOL_CALL_ALL_TRADEABLE", all_tradeable)
+    sources = [
+        row(code=f"00000{i}", name=f"测试{i}", boards=7 if i == 1 else 2,
+            watch_group="补充观察", price=10.0,
+            participation_eligibility="observe_only",
+            watch_reason="补充观察，跟踪后续表现；不参与",
+            expectation={"expected_range": [1, 3]})
+        for i in range(1, 7)
+    ]
+    r, w, _, _ = _merge_pools([], sources)
+    text = str(build_cards.build_eod_card({"date": "2026-11-10", "relay": r, "watch": w,
+               "diagnostics": {"single_pool": True}, "ai_plan": {}}))
+    assert "只看不买" in text                         # 唯一 7 板高度观察
+    assert ("预期1~3%" in text) is tradeable_text
+    assert ("补充观察，跟踪后续表现；不参与" in text) is (not tradeable_text)

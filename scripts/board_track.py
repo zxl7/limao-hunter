@@ -13,7 +13,7 @@
 
 ## 口径（全部只读本地归档，禁编造）
 
-- 涨停池序列 = `cache/zt_history/zt_<YYYY-MM-DD>.json`（有归档=有数据，⛔ 不按日历猜交易日）。
+- 涨停池序列 = `cache/zt_history/zt_<YYYY-MM-DD>.json`（仅有效完整收盘池，非文件存在即有数据）。
 - 题材/身位 = `cache/theme_snapshot/theme_<date>.json` 的当日冻结映射 → `core.sector_leader.compute`
   （单一源，与选股/板块台账同一答案）。快照缺失 → 标 `theme_source=sector_fallback`。
 - **在册** = 当日涨停且 `boards >= 2`。**断板** = 昨日在册、今日不在涨停池。
@@ -66,6 +66,7 @@ if str(WEALTH) not in sys.path:
     sys.path.insert(0, str(WEALTH))
 
 from core import sector_leader as sl   # noqa: E402
+from core.pool_call import _read_zt, _zt_rows   # noqa: E402
 
 BJ_TZ = timezone(timedelta(hours=8))
 SCHEMA = "board_track.v1"
@@ -88,17 +89,24 @@ def _load_json(p: Path) -> dict:
 
 
 def trade_dates() -> list[str]:
-    """涨停池归档日序列（有归档=有数据）。"""
+    """有效完整收盘池日期；盘中统计、缺名单和损坏归档不计入。"""
     out = []
     for p in sorted(ZT_DIR.glob("zt_*.json")):
         d = p.stem[3:]
-        if len(d) == 10 and d[4] == "-":
+        if _read_zt(p) is not None:
             out.append(d)
     return out
 
 
 def _rows(date: str) -> list[dict]:
-    return _load_json(ZT_DIR / f"zt_{date}.json").get("zt_list") or []
+    pool = _read_zt(ZT_DIR / f"zt_{date}.json")
+    if pool is None:
+        raise ValueError(f"{date} 缺少有效完整收盘涨停池，不能认定断板")
+    rows = _zt_rows(pool)
+    # 兼容旧归档别名，后续统计仍使用统一的 code / boards 字段。
+    return [{**r, "code": str(r.get("code") or r.get("dm") or "").strip(),
+             "boards": next((r[k] for k in ("boards", "lbc", "lianban") if k in r), 0),
+             "name": r.get("name") or r.get("mc")} for r in rows]
 
 
 def _theme_map(date: str) -> tuple[dict, str]:
@@ -316,6 +324,13 @@ def cmd_build(date: str | None = None, write: bool = True) -> dict:
 
 
 def cmd_show(date: str | None = None) -> None:
+    dates = trade_dates()
+    if not dates or (date is not None and date not in dates):
+        requested = date or "当前"
+        print(f"{requested} 缺少有效完整收盘涨停池（缺失、盘中或畸形），断板未知。")
+        if dates:
+            print(f"最近有效完整收盘池：{dates[-1]}")
+        return
     d = cmd_build(date, write=False)
     m = d["market"]
     print(f"\n=== {d['date']} 连板在册台账（≥{MIN_BOARDS}板）===")

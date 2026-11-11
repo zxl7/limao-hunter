@@ -5314,3 +5314,96 @@ fbt/seal/hs)。⛔ 不带它就算不出锚点的预期，DEV 永远为 None —
 `test_verify_card_compact` 10 例、新增 `test_anchor_copy_consistency` 12 例均全过。
 ⚠️ `test_verify_card_lean`（69 例）在本机**整文件跑会被 OOM 杀掉**（单跑每条都过），
 是环境内存问题、与文案改动无关。
+
+## 🚫 盘后候选瘦身：方案 B + 单接力池 + 唯一 7 板高度观察（2026-11-10 晚·用户拍板）
+
+用户原话：
+
+> 「先做一下 B 吧，我觉得后期肯定还可以再精简。那么我们就不要这个观察池和接力池了，
+> 全部都进入接力池。但是这个唯一高度 7 板可以作为观察，你能理解我这个意思吗？」
+
+⚠️ 本节**覆盖 11-03「仅接力/观察两池」的展示口径**；⛔ 不改两池资格单源 `core/two_pool.py`，
+不改任何买入判据、名额、DEV / 量能 / 顶部空间 / 仓位 P0。
+
+### ① 两条规则（全部带可逆开关）
+
+| 规则 | 判据与落点 | 回退 |
+|---|---|---|
+| **B：后排不进池** | 同题材身位 `dragon_rank ≥ 5` 的候选**盘后就剔出池**（不是「5 板以上」）。11-10 实证 13 只全是首板跟风（机器人 29 家里的龙7/8/11/13/15），09:25 本来就会被龙一闸拦掉，推了纯噪声 | `POOL_CALL_DROP_BACKROW_RANK=0` |
+| **单接力池** | 原 `relay + watch` 按代码去重后统一进 `relay`，`bucket_label=接力池`；**全市场唯一且 ≥7 板**那一只要单独留 `watch` 作「高度观察」，硬 `observe_only` | `POOL_SINGLE_POOL=0` 回到旧双池 |
+
+- **唯一高度口径**：必须拿**当日完整涨停池**（`zt["ztgc"]` / 独立选池传 `scored`）算最高板，⛔ 不拿过滤后的残池冒充全市场。最高板并列、或最高只有 5/6 板 → **不设高度观察**，照常进接力池走 09:25 裁决。默认 `POOL_HEIGHT_OBS_MIN=7` 只对应本次用户点名的 7 板，⛔ 不得解释成「所有最高板永久禁买」。
+- **高度观察硬不可买**：`two_pool.height_observation` 为唯一识别；`pool_call` 在 `ALL_TRADEABLE=1` 之前短路成 `view=watch`，`recheck_class=hard`，`rechecked_entry=False`。`ai_caliber` / `pipeline_verify` / `ai_ledger` 共用同份资格，**任何复核解冻都绕不过**。
+- **普通观察票资格原样保留**：合池只改 `bucket` / `bucket_label` / 排名 / 卡面分区，⛔ 不把 `observe_only` 改成 `relay_candidate`；09:25 仍按 `POOL_CALL_ALL_TRADEABLE` 与既有全部闸门判。`POOL_CALL_ALL_TRADEABLE=0` 时它们仍只看不买。
+- **正式链路位置**：`pipeline_eod` 在 `pool_admit → thin_seal_top → 龙一闸 → 四条件闸 → historical_repair → two_pool.finalize` **全部完成后**才调 `_merge_pools`，后补的票也过龙5过滤；`select_relay_watch` 默认 `apply_pool_policy=False`，独立验新口径须显式置 `True`（保护旧排序契约的逐字节 diagnostics）。
+- 诊断同口径精简摘要：`pre_single_pool` / `single_pool` / `backrow_dropped[_count]` / `height_observe` / `relay_count` / `watch_count`，由 `quant_score.pool_policy_diag()` 单一源生成。
+
+### ② 卡面：文案 = 行为
+
+- 标题改「**🔥 接力池（N 只）**」，N = 池子总只数（含下面简列区），⛔ 不再用会骗人的 `TOP3`；单池时**前 3 只详述、其余进简列区**，「高度观察」单独 1 只，不叫「观察池 TOP」。
+- `POOL_CALL_ALL_TRADEABLE=1` 之后原观察票明早真会判，卡面**不许再说「不参与 / 只看不买」**：`_pool_reason` 把旧理由改成「明早竞价判 / 仅作参照」。⛔ 例外保留原话：高度观察、一字封死、`ALL_TRADEABLE=0`；`plan_marker` 与「是否展示预期区间」同按 `two_pool` 实际资格渲染。
+- `POOL_SINGLE_POOL=0` 回退时旧「观察池 TOP…（仅作板块参照·不可买）」逐字保留，既有渲染契约不受影响。
+
+### ③ 11-10 真实归档离线回放（只内存，不重写冻结件、不推群）
+
+数据源：`cache/decision_log/2026-11-10/candidates.json` + 同日 `cache/zt_history/zt_2026-11-10.json`（93 只涨停、最高 7 板且唯一）。
+
+| 项 | 结果 |
+|---|---:|
+| 原 relay / watch | 2 / 39（共 41，去重后仍 41） |
+| `dragon_rank ≥ 5` 被剔 | **13**（全部 1 板） |
+| 唯一高度观察 | **1**：闽发铝业 002578 · 7 板 |
+| 合并后 relay / watch | **27 / 1** |
+| 09:25 高度观察契约 | 合成报价 `+2%`、竞价额 10 亿 → `view=watch`、`height_observe=True`、无参与；`rechecked_entry=False` |
+
+卡片离线渲染 21,279 字 / 102 个 div；`card_lint ok=true`（11 条为「单块过密」WARN + 1 条「孤军」白话 WARN），`card_selfcheck ok=true`（C4 需人工扫的四字词告警，无 FAIL）。⚠️ 卡片仍很长，符合用户「后期肯定还可以再精简」的预期，本轮**只做 B，不追加新筛法**。
+
+### ④ 验收
+
+- 新增/更新 `tests/test_two_pool_contract.py`：龙5不是5板、唯一 7 板阈值（5/6/并列不观察、7/8 观察）、旧双池回退、`ALL_TRADEABLE` 0/1 下高度永不可解锁、正式 `select_relay_watch(apply_pool_policy=True)`、卡面计数与「文案=行为」。
+- 定向回归 **151 例全过**（合池契约 / 观察池扩容 / 旧排序逐字节 / 旧双池卡面文案）。
+- 全量回归排除本机已知 `test_verify_card_lean`（整文件 OOM）与 `test_golden`（存量 3 红）后：**3469 passed / 1 skipped / 11 failed**。11 条全部是 HEAD 基线红项（回撤压仓、冰点名额、旁白布局、技能词频基线等）；已用 `git stash` 对照确认与本轮改动无关，本轮定向 151 例全绿。
+
+
+---
+
+## 🧭 市场级题材强度 + 板块优先序（2026-11-11 用户拍板 B · 只做展示与排序，不进判据）
+
+### ① 用户质疑与诊断
+11-10 晚原话：「我们要在最强的板块，或者说前三强的板块里面，去寻找能接力的个股……根据涨停时间、涨幅、带领性推谁是龙头，再来接力谁。这一套逻辑我现在没有感觉到，你看到了昨天的强度题材，但没有看到你对昨天整个市场强题材的思考。」
+
+11-10 真实归档诊断：`theme_strength`/`theme_score` 只在次日 09:25 `pool_call.call_pool` 写 `views[code]` 留痕，盘后候选 **0/32 落地**；`sector_leader` 组件在，但 `dragon_rank`/`carry_cnt`/`theme_mates_cnt` 只覆盖 **11/32**；池口是全市场按个股 score 铺 12 个题材（市场 18 组）；`relay_rank` 与 score／家数／封板时间／带动性均无关 —— 卡面前 3 是大晟文化(14:41:52 封·带动 1·封流通 0.54%)、盛洋科技(炸 5 次·带动 0)、东方新能，而全场 score 最高的光洋股份(09:30:12 封·带动 10 家·99.45)排 #11 进简列。
+
+### ② 落地面（B）
+
+| 项 | 规则 |
+|---|---|
+| 单一源 | `core/market_theme_rank.py`（`SCHEMA=market_theme_rank_v1`）；`pipeline_eod` 唯一入口 `attach_to_payload(diagnostics, relay, watch, ztgc, theme_map)` |
+| 聚合基准 | **完整同日涨停池 ztgc**（含 688/ST/一字/低成交额），⛔ 禁拿过滤后残池冒充全市场 |
+| 「强」的口径 | 用户拍板：①有催化/有逻辑（缺数据不裁决，只留题材名）②高度与梯队（最高板、连板≥2 家数）③承接质量（最早封板、封单/流通、带动家数）；**家数只做弱辅助（≤8 分）**，与 7-27「广度≠核心」一致 |
+| 铺广度标记 | `zt_count≥8 且 max_boards≤2 且 3 板以上=0` → `breadth_flag=True`、排序 −25。11-10 机器人(29 家/2 板封顶)、短剧(13 家/2 板)命中 |
+| 双榜留痕 | `top3`（高度·承接榜）+ `breadth_top3`（广度榜）+ `divergence` 分歧标记，卡面同时呈现，不假装两榜一致 |
+| 板块优先序 | `theme_order` = 板块档加成（第 1 档 30 分，每降一档 −6，第 6 档起 0）+ 票强度分（连板高度×8 + 封单/流通×3 + 早封分 + 带动×3，上限约 100）。**混合排序**：强板块烂票不能整体压过次强板块龙头 |
+| 卡面 | 首段「🧭 昨日市场强题材」（广度榜／高度榜／分歧警示）；接力池按 `theme_order` 排，前 3 详述、其余简列；标题注明「按昨日板块强度排序·编号不等于买入顺序」 |
+
+### ③ ⛔ 铁律（本轮最重要）
+
+- **`relay_rank` 不是纯展示字段**：`pool_call.py:900` 用 `relay_rank==1` 裁决、`expectation_ai.py:128` 用 `<=2` 定期望、`pool_admit` 龙一闸读 `dragon_rank`。本轮 **`relay_rank`／`dragon_rank`／`participation_eligibility`／`relay` 数组顺序逐字节不动**，只新增 `theme_rank`／`theme_order`／`theme_metrics` 展示字段。静态锁 `test_pool_call_stays_free_of_theme_rank`。
+- 不进任何准入闸；不改 DEV／量能带／顶部空间硬闸／quota／仓位 P0／两池资格单一源。
+- `theme_metrics` 从完整涨停池重算（补票路径也有因子，11-10 覆盖 **31/31**），**不覆盖** `dragon_rank`／`carry_cnt` 判据字段 ⇒ A 档「堵 09:25 缺数据放行后排」的效果**本轮没有产生**，那是 C 的事，须先 A/B。
+- 新分数**不进权重、不做收益预测**，区别于已证伪的 `core/theme_score.py`。「涨幅」在涨停池里全是 10/20% 无区分度，改用连板高度。
+- 开关 `POOL_CALL_MARKET_THEME_RANK=0`：不算、不写 diagnostics、不写候选字段、卡面整段不渲染；**冻结件重放时同样生效**（`build_cards` 同时校验 `ctx.enabled` 与全局开关）。
+
+### ④ 11-10 真实归档离线回放（纯内存，未写生产）
+
+- 全市场 93 只 / 17 条有效线。广度榜 机器人 29·短剧 13·航天 7；高度·承接榜 **光伏(3 家·7 板·09:25)** / 冰雪产业(2 家·3 板) / 大消费(5 家·3 板)；`divergence=True`，机器人 `breadth_flag=True`。
+- 板块优先序前 5：**日出东方(3 板 09:25·封流通 8.82%) → 大东方(3 板·带动 3) → 光洋股份(带动 10 家·score 99.45) → 龙江交通 → 泰尔股份**。旧 #1 大晟文化沉到尾部；永臻股份(13:09 封·炸 4 次)不再靠板块躺赢。
+- 不变式：`relay_rank`／数组顺序／资格全不变；`theme_metrics` 31/31；`dragon_rank` 仍 10 只有值（未被补写）。
+- 离线卡 `/tmp/limao_mtr_card_20261110.json`（47,727 B）：`card_lint ok=true / 0 FAIL`、`card_selfcheck ok=true / 0 FAIL`（1 条 C4 人工扫 WARN）。开关 0 时卡面与旧版 `json.dumps` **逐字相等**。
+
+### ⑤ 验收与未做
+
+- 新增 `tests/test_market_theme_rank.py`（10 例：广度标记／高度优先／缺题材不成线／不改输入／强线烂票沉底／票强度分／判据字段零触碰／`pool_call` 静态锁／开关回退／11-10 真归档 + 卡面回退）。
+- 定向 **114 passed**；全量排除已知 OOM（`test_verify_card_lean`）与存量 3 红（`test_golden`）：**3479 passed / 1 skipped / 11 failed**，11 条与 HEAD 基线逐条相同，**零新增红**。
+- 生产数据：未调用 `run_eod`（它会重写 `daily_screen` + snapshot 分区），`candidates-2026-11-10.json`／`daily_screen`／`snapshot`／冻结件／`publish_ledger` mtime 全停在 11-10 晚，逐字节未动；09:25 竞价输入零影响。要看后台效果须**盘后重跑一次**，本轮没有擅自覆盖。
+- **C 未做**：前三强板块外不进池／降仓是真改判据，必须先跑历史 A/B 证明分档单调。`架构/板块优先选股_方案研究_2026-11-11.md` 是前序研究件（明确「不跑回测、不改代码」），本轮只落地 B 的展示与排序，未触碰其研究范围。

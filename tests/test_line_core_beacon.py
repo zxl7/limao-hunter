@@ -188,6 +188,126 @@ def test_line_dead_today_has_no_beacon(tmp_path):
     assert core["code"] == "600892"                  # 回退历史核心
 
 
+# ── 完整收盘池读入回归 ────────────────────────────────────────────────
+@pytest.mark.parametrize("payload", [
+    {"intraday_only": True, "intraday_points": [{"total": 36}]},
+    {"intraday_only": True, "zt_list": []},
+    {"intraday_only": True, "zt_list": [{"code": "000001", "boards": 9}]},
+    {}, {"zt_count": 0}, {"zt_list": None}, {"zt_list": {}},
+    {"zt_list": "损坏名单"}, {"zt_list": [None]},
+    {"zt_list": [{}]}, {"zt_list": [{"code": "错误代码"}]},
+    {"zt_list": [{"code": "000001", "boards": "损坏板数"}]},
+    {"zt_list": [{"code": "000001", "boards": None}]},
+    {"zt_list": [], "zt_count": 20}, {"zt_list": [], "tc": 20},
+    {"zt_list": [], "zt_count": None},
+    {"zt_list": [{"code": "000001"}, {"code": "000001"}]},
+    {"zt_list": [{"code": "000001", "boards": 1}], "zt_count": 2},
+    {"zt_list": [], "date": "2026-11-10"},
+    [{"code": "000001"}], None, "{损坏 JSON",
+])
+def test_invalid_archive_cannot_advance_day_or_claim_broken(tmp_path, monkeypatch, capsys, payload):
+    """盘中/畸形不能挤占回看窗口，也不能让 show 把昨日在册全报断板。"""
+    from scripts import board_track as bt
+
+    _seed_zt(tmp_path, "2026-11-10", [
+        _zt_row("002708", "光洋股份", 2, sector="汽车零部件")])
+    zdir = tmp_path / "cache" / "zt_history"
+    (zdir / "zt_2026-11-11.json").write_text(
+        payload if isinstance(payload, str) else json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(bt, "ZT_DIR", zdir)
+    monkeypatch.setattr(bt, "THEME_DIR", tmp_path / "missing_theme")
+    monkeypatch.setattr(bt, "OUT_DIR", tmp_path / "must_not_write")
+
+    cores = pc.load_line_cores("2026-11-11", days=1, root=tmp_path)
+    assert len(cores) == 1
+    core = next(iter(cores.values()))
+    assert core["code"] == "002708"
+    assert core["last_date"] == "2026-11-10"
+    assert core["broken"] is False
+    assert core["in_pool"] is True
+    assert core["beacon"]["code"] == "002708"
+    assert bt.trade_dates() == ["2026-11-10"]
+    bt.cmd_show()
+    output = capsys.readouterr().out
+    assert "2026-11-10 连板在册台账" in output
+    assert "今日断板 0 只" in output
+    bt.cmd_show("2026-11-11")
+    output = capsys.readouterr().out
+    assert "断板未知" in output
+    assert "今日断板" not in output
+    with pytest.raises(ValueError, match="不能认定断板"):
+        bt._rows("2026-11-11")
+    assert not bt.OUT_DIR.exists()
+
+
+@pytest.mark.parametrize("counts", [{}, {"zt_count": 0, "tc": 0}])
+def test_explicit_empty_close_pool_is_valid(tmp_path, monkeypatch, capsys, counts):
+    """显式空名单不是缺失；新旧 schema 的合法空池都可提供断板证据。"""
+    from scripts import board_track as bt
+
+    _seed_zt(tmp_path, "2026-11-10", [_zt_row("002708", "光洋股份", 2)])
+    _seed_zt(tmp_path, "2026-11-11", [])
+    zdir = tmp_path / "cache" / "zt_history"
+    (zdir / "zt_2026-11-11.json").write_text(json.dumps({
+        "date": "2026-11-11", "zt_list": [], **counts}), encoding="utf-8")
+    monkeypatch.setattr(bt, "ZT_DIR", zdir)
+    monkeypatch.setattr(bt, "THEME_DIR", tmp_path / "missing_theme")
+    monkeypatch.setattr(bt, "OUT_DIR", tmp_path / "must_not_write")
+    core = next(iter(pc.load_line_cores("2026-11-11", root=tmp_path).values()))
+    assert core["broken"] is True
+    assert core["beacon"] is None
+    assert bt.trade_dates() == ["2026-11-10", "2026-11-11"]
+    bt.cmd_show("2026-11-11")
+    output = capsys.readouterr().out
+    assert "涨停 0 只" in output
+    assert "今日断板 1 只" in output
+    assert not bt.OUT_DIR.exists()
+
+
+def test_legacy_alias_pool_and_missing_archive(tmp_path, monkeypatch, capsys):
+    from scripts import board_track as bt
+
+    _seed_zt(tmp_path, "2026-11-10", [
+        {"dm": "002708", "mc": "光洋股份", "lbc": "2", "sector": "汽车零部件"}])
+    monkeypatch.setattr(bt, "ZT_DIR", tmp_path / "cache" / "zt_history")
+    monkeypatch.setattr(bt, "THEME_DIR", tmp_path / "missing_theme")
+    core = next(iter(pc.load_line_cores("2026-11-11", root=tmp_path).values()))
+    assert core["code"] == "002708" and core["broken"] is False
+    bt.cmd_show("2026-11-10")
+    assert "在册 1 只" in capsys.readouterr().out
+    bt.cmd_show("2026-11-11")
+    assert "断板未知" in capsys.readouterr().out
+    assert pc.load_line_cores("2026-11-09", root=tmp_path) == {}
+
+
+def test_invalid_filename_and_future_pool_do_not_advance_day(tmp_path, monkeypatch):
+    from scripts import board_track as bt
+
+    _seed_zt(tmp_path, "2026-11-10", [_zt_row("002708", "光洋股份", 2)])
+    _seed_zt(tmp_path, "2026-11-12", [])
+    _seed_zt(tmp_path, "2026-11-31", [])
+    _seed_zt(tmp_path, "2026-11-aa", [])
+    monkeypatch.setattr(bt, "ZT_DIR", tmp_path / "cache" / "zt_history")
+    assert bt.trade_dates() == ["2026-11-10", "2026-11-12"]
+    core = next(iter(pc.load_line_cores("2026-11-11", root=tmp_path).values()))
+    assert core["last_date"] == "2026-11-10"
+    assert core["broken"] is False
+
+
+def test_only_invalid_archives_degrade_without_facts(tmp_path, monkeypatch, capsys):
+    from scripts import board_track as bt
+
+    _seed_zt(tmp_path, "2026-11-11", [])
+    zdir = tmp_path / "cache" / "zt_history"
+    (zdir / "zt_2026-11-11.json").write_text(
+        json.dumps({"intraday_only": True}), encoding="utf-8")
+    monkeypatch.setattr(bt, "ZT_DIR", zdir)
+    assert pc.load_line_cores("2026-11-11", root=tmp_path) == {}
+    assert bt.trade_dates() == []
+    bt.cmd_show()
+    assert "断板未知" in capsys.readouterr().out
+
+
 # ── 真实数据锚点（11-03 候选库）────────────────────────────────────────
 def test_drama_line_anchor_is_dasheng_not_wentou():
     """真实数据：短剧线风向标必须是大晟文化（一字封死 +9.98%），不是文投控股。"""

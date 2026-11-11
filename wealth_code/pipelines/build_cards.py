@@ -764,6 +764,9 @@ _STATUS_PLAIN = {k: _vs.label(v) for k, v in _vs.STATUS_MAP.items()}
 
 # 观察池分组 → 白话（仅显示层别名·数据键 watch_group 不动）
 _WATCH_GROUP_PLAIN = {
+    # 👀 2026-11-10 晚：单池合并后，全市场唯一最高板单独作「高度观察」（只看不买）。
+    #    ⛔ 放在第一位：它是标尺，不该埋在 25 只后面。
+    "高度观察": "👀 高度观察·全市场唯一高度（只看不买）",
     "容量核心": "板块大票（体量大）",
     "高标/题材核心": "高连板 / 题材领头",
     "最高板封单过薄": "封单太薄·只看不买",   # 2026-10-27 用户「只观察」
@@ -788,6 +791,27 @@ _DEFENSE_GATE_PLAIN = {
     "high_position": "位置太高了，是断板之后的第二波反抽",
     "old_dragon_rebound": "是炒过的老票，断了很久才又拉首板，不是新方向",
 }
+
+
+def _pool_reason(txt: Any, *, observing: bool) -> str:
+    """接力池简列区的「为什么它在这」——⛔ 不许再说「不参与」。
+
+    2026-11-10 晚：`POOL_CALL_ALL_TRADEABLE=1` 之后，原观察票 09:25 **真能买**
+    （11-10 买的东方创业就来自观察池）。盘后候选里那套「不参与 / 只看不买」
+    是旧口径留下的字，留着就是「卡面说不能买、系统照买」。
+    唯一例外：`高度观察`（全市场唯一最高板）确实只看不买，原样保留。
+    """
+    s = str(txt or "")
+    if observing or not s:
+        return s
+    for a, b in (
+        ("位置要看，不参与", "位置要看·明早竞价判"),
+        ("仅参照，不参与", "仅作参照"),
+        ("；不参与", ""), ("，不参与", ""),
+        ("只看不买", "明早竞价判"),
+    ):
+        s = s.replace(a, b)
+    return s
 
 
 def _status_plain(raw) -> str:
@@ -3022,6 +3046,9 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
     payload = pipeline_eod.run_eod() 的输出（含 relay / watch / diagnostics / regime）。
     标题规范：显式携带日期 + 定调。
     """
+    # 2026-11-10 晚：单池模式下原观察票仍走 09:25 完整裁决（ALL_TRADEABLE=1），
+    # 卡面不能再一律按「只看不买」渲染；唯一例外＝高度观察 / 一字封死 / 全池可交易关着。
+    from core.two_pool import all_tradeable_enabled, height_observation, observation_only
     hhmm = _now_bj().strftime("%H:%M")
     date = str(payload.get("date") or "")
     mmdd = date[5:] if len(date) >= 10 else date
@@ -3085,6 +3112,35 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
         blocks.append(_div("<font color='grey'>数据源：涨停池</font>"))
     blocks.append(_hr())
 
+    # 🧭 市场级题材强度（2026-11-11 用户拍板 B）：先回答「昨天整个市场哪几条线真强」，
+    #    再进入逐票明细。⛔ 纯展示：不进判据、不改 relay_rank / 数组顺序；=0 整段不渲染。
+    _mtr_ctx = (payload.get("diagnostics") or {}).get("market_theme_rank") or {}
+    # ⛔ 全局开关也要过：payload 是盘后冻结件，重放时 env=0 必须能关掉整段渲染。
+    if _mtr_ctx.get("enabled"):
+        from core.market_theme_rank import enabled as _mtr_enabled
+        _mtr_on = bool(_mtr_enabled())
+    else:
+        _mtr_on = False
+    if _mtr_on:
+        def _theme_brief(x):
+            return (f"{x.get('theme')}({x.get('zt_count')}家·{x.get('max_boards')}板·"
+                    f"最早{x.get('first_seal')})")
+        _b3 = _mtr_ctx.get("breadth_top3") or []
+        _t3 = _mtr_ctx.get("top3") or []
+        blocks.append(_div(
+            f"**🧭 昨日市场强题材** | 全市场{_mtr_ctx.get('zt_count', '—')}只涨停·"
+            f"{_mtr_ctx.get('theme_count', '—')}条线 ｜ 📊 广度榜 "
+            + "｜".join(_theme_brief(x) for x in _b3)))
+        blocks.append(_div("🎯 高度·承接榜｜" + "｜".join(_theme_brief(x) for x in _t3)))
+        _bd = next((x for x in _b3 if x.get("breadth_flag")), None)
+        if _bd and _mtr_ctx.get("divergence"):
+            blocks.append(_div(
+                f"<font color='grey'>⚠️ {_bd.get('theme')}{_bd.get('zt_count')}家却"
+                f"{_bd.get('max_boards')}板封顶＝铺广度，不算主线（广度不等于核心）；"
+                f"接力池改按板块强度加封板、封单、带动排序，"
+                f"买卖仍由明早09:25裁决</font>"))
+        blocks.append(_hr())
+
     # 连板天梯（用户关切：能否拿到连板天梯 —— 答案：yesterday_zt.json 现成可用）
     ladder = (snap or {}).get("ladder") or {}
     if ladder:
@@ -3138,7 +3194,11 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
                     f"<font color='grey'> —— 只差市场情绪这一条，明早 09:25 竞价转强才解冻</font>"))
     else:
         _ice_flag = " ｜ ⚠️市场很冷·候选仅供参考·买不买自决" if regime == "ice" else ""
-        blocks.append(_div(f"**🔥 接力池 TOP{len(relay)}（核心候选）**{_relay_mode_note(mode)}{_ice_flag}"))
+        # 🎯 2026-11-10 晚：不再有「接力池 / 观察池」两套 —— 候选只有**一个接力池**。
+        #    ⛔ 标题里的数字必须是池子总只数（含下面简列区），否则「TOP3」会骗人。
+        _total = len(relay)
+        _sort_note = " ｜ 按昨日板块强度排序·编号不等于买入顺序" if _mtr_on else ""
+        blocks.append(_div(f"**🔥 接力池（{_total} 只）**{_relay_mode_note(mode)}{_ice_flag}{_sort_note}"))
     # 🎯 晋级三问汇总（2026-10-30 用户「优化推送高胜率可晋级板块地位高的个股」）：
     #   只出现一次、放在接力池标题之下——**不是逐票灰字**（用户明确不要灰字行）。
     #   作用：一句话回答「今天到底有没有值得重仓的票」，没有就直说没有。
@@ -3150,7 +3210,30 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
     # 同一市场结构提示只在接力池汇总一次：逐票重复会挤占信息密度，且无法增加决策信息。
     mid_carry_weak = 0
     relay_narr: list[str] = []
-    for it in relay:
+    # 🔎 2026-11-10 晚 单池：池子可能几十只，**前 3 只详述、其余进下方简列区**，
+    #    避免「每只都两屏长文」把卡撑爆（合并前 relay 只有 2 只，全量详述没问题）。
+    _single_pool = bool((payload.get("diagnostics") or {}).get("single_pool"))
+
+    def _render_as_observation(it: dict[str, Any], *, from_relay: bool = False) -> bool:
+        """这行该不该按「只看不买」渲染 —— 只管显示层，不改任何资格/裁决。"""
+        if height_observation(it) or it.get("is_one_word"):
+            return True                                  # 高度观察 / 一字封死确实买不进
+        if not _single_pool:
+            return not from_relay                        # 旧双池：relay 详述可买、watch 只观察
+        # 全池可交易关着时，原 observe_only 仍不可买；开着时统一由 09:25 判。
+        return not all_tradeable_enabled() and observation_only(it)
+
+    _RELAY_DETAIL_N = 3 if _single_pool else len(relay)
+    # ⛔ 只排「展示顺序」：relay 数组与 relay_rank 逐字节不动（09:25 判据 / quota 顺序敏感）。
+    if _mtr_on:
+        from core.market_theme_rank import order_rows as _mtr_order_rows
+        _relay_show = _mtr_order_rows(relay, _mtr_ctx)
+        _watch_show = _mtr_order_rows(watch, _mtr_ctx)
+    else:
+        _relay_show, _watch_show = relay, watch
+    _relay_head = _relay_show[:_RELAY_DETAIL_N]
+    _relay_rest = _relay_show[_RELAY_DETAIL_N:]
+    for it in _relay_head:
         exp = it.get("expectation") or {}
         rng = exp.get("expected_range") or ["—", "—"]
         # 日报 verdict（板块被判弱/观察级时记 weak_flagged；重要风险提示保留在独立行）
@@ -3160,25 +3243,32 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
         amt_txt = _amount_txt(it)
         conf = _conf_tag(it)
         cloud = _render_tag_cloud(_eod_candidate_tags(it, suppress_band=uniform_band))
+        _head_observing = _render_as_observation(it, from_relay=True)
         # 新布局（2026-08-13）：行1=紫色小卡(名称+分数)+tag云紧跟；
         # 行2=现价｜预期%｜高开｜竞价额｜板块｜可信度（预期+高开同红，竞价额去昨基数）
         blocks.append(_div(
-            f"<font color='red'>{it.get('relay_rank')}、</font> {_stock_hl(it, 'purple')}"
-            + (f" {cloud}" if cloud else "") + plan_marker(it)
+            f"<font color='red'>{it.get('theme_order') if _mtr_on else it.get('relay_rank')}、</font> {_stock_hl(it, 'purple')}"
+            + (f" {cloud}" if cloud else "") + plan_marker(it, observation=_head_observing)
         ))
         price = it.get("price")
         price_seg = f"现价{price:.2f}｜" if isinstance(price, (int, float)) else ""
         ai_tag = ""  # AI 竞价区间覆盖仍生效（data.expectation.ai_override），按用户要求不显示 🤖AI 标记
-        blocks.append(_div(
-            f"　　<font color='grey'>{price_seg}</font>"
-            f"<font color='red'>预期{rng[0]}~{rng[1]}%｜{_gap_strength_short(it)}｜</font>"
-            f"<font color='grey'>{amt_txt}｜{_theme_dual_tag(it)}｜{conf}{ai_tag}</font>"
-        ))
+        if _head_observing:
+            # 只看不买的票不挂交易预期（一字 / 高度观察 / 全池可交易关闭时的原观察票）。
+            _facts = [f"现价{price:.2f}" if isinstance(price, (int, float)) else "",
+                      _theme_dual_tag(it)]
+            blocks.append(_div("　　" + "｜".join(f for f in _facts if f)))
+        else:
+            blocks.append(_div(
+                f"　　<font color='grey'>{price_seg}</font>"
+                f"<font color='red'>预期{rng[0]}~{rng[1]}%｜{_gap_strength_short(it)}｜</font>"
+                f"<font color='grey'>{amt_txt}｜{_theme_dual_tag(it)}｜{conf}{ai_tag}</font>"
+            ))
         # 历史基因不在盘后卡展示，后台证据保持不动。
         # 🔮 明早怎么开（2026-11-02）：选股卡的核心新增——把「明天大概率开在几个点、
         #    几成概率买不到」提前说清。⛔ 不是买入指令；买不买由 09:25 竞价卡裁决。
         _fv, _ftxt = _rfc_line(it)
-        if _ftxt:
+        if _ftxt and not _head_observing:
             # ⛔ 建议档必须**永远可见**：`C_SKIP=""` 意思是「不上色」，不是「不显示」——
             #    早期写法用 `if _fcolor` 兜底，会把「放弃」两个字直接吞掉（实测只渲染出半句）。
             _fcolor = (C_BUY if _fv == "可等" else C_WATCH if _fv == "只观察" else C_SKIP)
@@ -3219,18 +3309,35 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
         ))
     blocks.append(_hr())
 
-    # 观察池（按 watch_group 分区展示：容量核心 / 高标题材核心 / 补充观察）
+    # 池内其余票 + 唯一高度观察（按 watch_group 分区展示）
+    # ⛔ 2026-11-10 晚：这里原来是「👀 观察池 TOP39（仅作板块参照·不可买）」。
+    #    ① 池子已合并 → 标题不再叫观察池；
+    #    ② 「不可买」这句在 `POOL_CALL_ALL_TRADEABLE=1` 之后就是假的（观察票 09:25
+    #       真能买，11-10 买的东方创业就来自观察池）→ 改成「能不能买由明早竞价判」。
     watch_narr: list[str] = []
-    if watch:
-        watch_note = "条件资格须竞价核验·其余只观察" if any(
-            it.get("participation_eligibility") == "conditional" for it in watch
-        ) else "仅作板块参照·不可买"
-        blocks.append(_div(f"**👀 观察池 TOP{len(watch)}（{watch_note}）**"))
+    _rest_rows = [
+        {**it, "watch_rank": (it.get("theme_order") if _mtr_on else it.get("relay_rank"))}
+        for it in _relay_rest
+    ]
+    _render_watch = list(_watch_show or []) + _rest_rows
+    if _render_watch:
+        if any(it.get("participation_eligibility") == "conditional" for it in _render_watch):
+            watch_note = "条件资格须竞价核验"
+        elif _single_pool:
+            # 单池 + 全池可交易开：原观察票 09:25 会真判，不能再说「不可买」。
+            watch_note = "同一池塘·买不买由明早竞价定"
+        else:
+            # ⛔ 旧双池回退态逐字保留，既有渲染契约锁着这句。
+            watch_note = "仅作板块参照·不可买"
+        if _single_pool:
+            blocks.append(_div(f"**接力池简列 {len(_rest_rows)} 只 · 高度观察 {len(watch)} 只**"))
+        else:
+            blocks.append(_div(f"**观察池 TOP{len(watch)}（{watch_note}）**"))
         # 分组兜底：无 watch_group 字段（旧数据）按板数归入合理组
         groups: list[tuple[str, list[dict]]] = []
         for grp in _WATCH_GROUP_PLAIN:
             items = [
-                it for it in watch
+                it for it in _render_watch
                 if (it.get("watch_group") or ("高标/题材核心" if it.get("boards", 1) >= 3 else "补充观察")) == grp
             ]
             if items:
@@ -3246,15 +3353,15 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
                 cloud = _render_tag_cloud(_eod_candidate_tags(it, suppress_band=uniform_band))
                 # 新布局（同接力池）：行1=黄色小卡(名称+分数)+tag云紧跟；
                 # 行2=现价｜预期%｜高开｜竞价额｜板块｜可信度（预期+高开同红，竞价额去昨基数）
+                _observing = _render_as_observation(it)
                 blocks.append(_div(
                     f"<font color='red'>  {it.get('watch_rank')}、</font> {_stock_hl(it, 'yellow')}"
-                    + (f" {cloud}" if cloud else "") + plan_marker(it, observation=True)
+                    + (f" {cloud}" if cloud else "") + plan_marker(it, observation=_observing)
                 ))
                 price = it.get("price")
                 price_seg = f"现价{price:.2f}｜" if isinstance(price, (int, float)) else ""
-                from core.two_pool import observation_only
-                if observation_only(it) or it.get("is_one_word"):
-                    # 板块参照不展示交易预期；缺失不以占位或零值充数。
+                if _observing:
+                    # 真正只看不买的票不展示交易预期；缺失不以占位或零值充数。
                     facts = [f"现价{price:.2f}" if isinstance(price, (int, float)) else "",
                              _theme_dual_tag(it)]
                     blocks.append(_div("　　" + "｜".join(f for f in facts if f)))
@@ -3269,7 +3376,8 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
                 if it.get("participation_eligibility") == "conditional":
                     blocks.append(_div("　　条件资格：竞价核验全部风控后方可参与，非买入确认"))
                 if it.get("watch_reason"):
-                    blocks.append(_div(f"　　<font color='grey'>{it['watch_reason']}</font>"))
+                    reason = _pool_reason(it["watch_reason"], observing=_observing)
+                    blocks.append(_div(f"　　<font color='grey'>{reason}</font>"))
                 # 🐉 龙一闸降级原因（非龙一 / 龙一买不进）—— 同样是"为什么它不能买"
                 if it.get("dragon_note") and not it.get("watch_reason"):
                     blocks.append(_div(f"　　<font color='grey'>{it['dragon_note']}</font>"))

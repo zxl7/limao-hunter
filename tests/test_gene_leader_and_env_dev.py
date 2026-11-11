@@ -228,3 +228,107 @@ def test_pool_call_gene_override_switch_reverts(monkeypatch):
                 stance="attack", zt_series=_SERIES,
                 zt_days=["2026-11-03", "2026-11-05"])
     assert res["views"]["002086"]["view"] == "watch"
+
+
+@pytest.fixture
+def core_first_rules(monkeypatch):
+    monkeypatch.setattr(pc, "POOL_CALL_CORE_FIRST", True)
+    monkeypatch.setattr(pc, "POOL_CALL_HIGH_GAP_REJECT", True)
+    monkeypatch.setattr(pc, "POOL_CALL_DEFENSE_GATE", False)
+    monkeypatch.setattr(pc, "POOL_CALL_ANCHOR_GATE", False)
+    monkeypatch.setattr(pc, "POOL_CALL_MIDBOARD_GATE", False)
+    monkeypatch.setattr(pc, "POOL_CALL_THIN_SEAL_TOP", False)
+    monkeypatch.setattr(pc, "POOL_CALL_UNLIMITED_SLOTS", True)
+    monkeypatch.setenv("AI_EXPECTED_GAP_MODE", "relative")
+    monkeypatch.setattr(pc, "_cycle_info", lambda: {})
+    monkeypatch.setattr(pc, "load_line_cores", lambda *a, **kw: pytest.fail("禁止读取生产归档"))
+    monkeypatch.setattr(pc._dg, "load_sector_flow", lambda *a, **kw: pytest.fail("禁止读取资金"))
+    monkeypatch.setattr(pc._dg, "load_zt_series", lambda *a, **kw: pytest.fail("禁止读取生产序列"))
+
+
+def _identity_case(core_gap=2, *, boards=2, core_amount=2, **kw):
+    lead = _cand("600001", "核心样本", boards=boards)
+    deputy = _cand("600002", "同板样本", boards=boards)
+    for c in (lead, deputy):
+        c.update(core_theme="真实题材甲", fbt="093500", seal_ratio_pct=3)
+    lead["seal_ratio_pct"] = 8
+    # 故意不带候选身位：必须从完整昨日池恢复，不能只依赖候选标签。
+    rows = [dict(lead), dict(deputy)]
+    return _call({"relay": [lead, deputy], "watch": []},
+                 {"600001": _q(10, core_gap, core_amount), "600002": _q(10, 2, 2)},
+                 theme_open_rows=rows, expected_gaps={"600001": 2, "600002": 2}, **kw)
+
+
+@pytest.mark.usefixtures("core_first_rules")
+@pytest.mark.parametrize("gap,amount,view,old_view", [
+    (2, 2, "participate", None), (7, 2, "watch", "skip"),
+    (10, 2, "watch", "skip"), (-1, 2, "watch", "skip"),
+    (2, 0.01, "watch", "watch"),
+])
+def test_core_identity_separate_from_open_price(gap, amount, view, old_view):
+    result = _identity_case(gap, core_amount=amount)
+    core, deputy = result["views"]["600001"], result["views"]["600002"]
+    assert core["view"] == view
+    assert core["core_identity"]["is_core"] is True
+    assert deputy["view"] == "watch" and deputy["core_first_gate"] is True
+    assert deputy["core_identity"]["code"] == "600001"
+    assert not deputy.get("next_to_leader")
+    if old_view:
+        assert core["core_open_view"] == old_view
+        assert core["core_manual_wait"] is True and core["auto_low_buy"] is False
+        assert "人工等待合适价格" in core["reason"] and "接受错过" in core["reason"]
+        assert not core.get("pending_confirm")
+    merged = pc.apply_to_views(result, {})
+    assert merged["600001"]["core_identity"] == core["core_identity"]
+
+
+@pytest.mark.usefixtures("core_first_rules")
+def test_core_first_switch_restores_same_board_substitute(monkeypatch):
+    monkeypatch.setattr(pc, "POOL_CALL_CORE_FIRST", False)
+    result = _identity_case(7)
+    assert result["views"]["600001"]["view"] == "skip"
+    assert result["views"]["600002"]["view"] == "participate"
+    assert "core_identity" not in result["views"]["600002"]
+
+
+@pytest.mark.usefixtures("core_first_rules")
+@pytest.mark.parametrize("mode", ["无题材", "独立题材", "缺核心证据"])
+def test_core_first_does_not_kill_first_boards_or_guess_industry(mode):
+    rows = [_cand("600001"), _cand("600002")]
+    if mode == "独立题材":
+        rows[0]["core_theme"], rows[1]["core_theme"] = "题材甲", "题材乙"
+    elif mode == "缺核心证据":
+        for row in rows:
+            row["core_theme"] = "同题材"
+    result = _call({"relay": rows}, {c["code"]: _q(10, 2) for c in rows},
+                   theme_open_rows=rows, expected_gaps={c["code"]: 2 for c in rows})
+    assert result["meta"]["participate"] == ["600001", "600002"]
+    assert all(not v.get("core_first_gate") for v in result["views"].values())
+
+
+@pytest.mark.usefixtures("core_first_rules")
+def test_core_outside_candidate_pool_still_blocks_same_theme():
+    lead = _cand("600001", boards=3)
+    deputy = _cand("600002", boards=1)
+    for c in (lead, deputy):
+        c["core_theme"] = "真实题材甲"
+    result = _call({"relay": [deputy]}, {"600002": _q(10, 2)},
+                   theme_open_rows=[lead, deputy], expected_gaps={"600002": 2})
+    assert result["views"]["600002"]["core_first_gate"] is True
+    assert result["meta"]["participate"] == []
+
+
+@pytest.mark.usefixtures("core_first_rules")
+def test_core_gene_swap_survives_high_gap_short_circuit():
+    old = _dragon_cand("000995", "旧核心", 1, "000995")
+    new = _dragon_cand("002086", "新核心", 2, "000995")
+    for c in (old, new):
+        c["core_theme"] = "真实题材甲"
+    result = _call({"relay": [old, new]},
+                   {"000995": _q(10, 2), "002086": _q(10, 7)},
+                   zt_series=_SERIES, zt_days=["2026-11-03", "2026-11-05"],
+                   expected_gaps={"000995": 2, "002086": 2})
+    assert result["views"]["000995"]["gene_demoted"]["by"] == "002086"
+    assert result["views"]["002086"]["gene_leader_override"]["mine_prev_streak"] == 4
+    assert result["views"]["002086"]["core_manual_wait"] is True
+    assert result["meta"]["participate"] == []

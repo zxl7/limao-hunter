@@ -137,6 +137,53 @@ _WATCH_ALL_MULTI = (os.environ.get("ENABLE_WATCH_ALL_MULTI_BOARD") or "1").strip
 }
 
 
+# ============================================================================
+# 🚫 后排不进池 + 单池合并（2026-11-10 晚 用户拍板，方案 B）
+#
+# 用户原话：「先做一下 B 吧，我觉得后期肯定还可以再精简。那么我们就不要这个观察池和
+#           接力池了，全部都进入接力池。但是这个唯一高度 7 板可以作为观察。」
+#
+# ① B：`dragon_rank`（同题材身位，1 = 该题材龙一/最高板）≥ 5 的票**不进池**。
+#    实证 11-10：39 只观察票里 13 只 `dragon_rank ≥5`，**全是首板跟风**
+#    （机器人 29 家里的龙7/8/11/13/15）—— 09:25 本来就会被「只做龙一」闸拦掉，
+#    推了也不买，纯噪声。
+# ② 单池：不再分「接力池 / 观察池」，全部归「接力池」；**全市场唯一且 ≥7 板**
+#    的那一只单独拎出来作「高度观察」，`observe_only` 不参与买入。
+#    ⚠️ 用户点的是「这个唯一高度 7 板」，⛔ 不是「所有最高板都不准买」：
+#       最高只有 5/6 板、或最高板并列时，仍留在接力池走正常裁决。
+#       `POOL_HEIGHT_OBS_MIN` 只调这条极端高度门槛，不得拿它改买入判据。
+#
+# ⛔ 只改「哪些票进池 / 池子叫什么」，**不改任何买入判据**：
+#    合并进接力池的原观察票保留 `participation_eligibility=observe_only`，
+#    09:25 仍走同一套闸门（价格/量能/顶部空间/封板质量/名额）。
+# 回退：`POOL_CALL_DROP_BACKROW_RANK=0` 关过滤；`POOL_SINGLE_POOL=0` 回到两池。
+# ============================================================================
+def drop_backrow_rank() -> int:
+    """同题材身位达到第几名就不进池。0 = 关闭（回到旧行为）。"""
+    try:
+        return max(0, int(os.environ.get("POOL_CALL_DROP_BACKROW_RANK") or 5))
+    except (TypeError, ValueError):
+        return 5
+
+
+def single_pool_enabled() -> bool:
+    return (os.environ.get("POOL_SINGLE_POOL") or "1").strip().lower() not in {
+        "0", "false", "off", "no", ""
+    }
+
+
+def height_obs_min() -> int:
+    """从几板起算「高度观察」（且必须是**全市场唯一**的那个高度）。
+
+    默认 7 = 用户 11-10 点名的「这个唯一高度 7 板」；⛔ 不把 5/6 板的最高板
+    顺手改成不可买。`POOL_HEIGHT_OBS_MIN` 只供日后显式改这条极端高度线。
+    """
+    try:
+        return max(1, int(os.environ.get("POOL_HEIGHT_OBS_MIN") or 7))
+    except (TypeError, ValueError):
+        return 7
+
+
 def _watch_hard_excluded(cand: dict[str, Any]) -> bool:
     """观察池硬性排除：无交易权限 / 必排标的。⛔ 这两类不因任何放宽规则进入。"""
     code = str(cand.get("code") or "")
@@ -731,7 +778,126 @@ def _is_lone_lowboard(cand: dict[str, Any]) -> bool:
     return _to_num(cand.get("boards"), 1) <= LONE_LOWBOARD_MAX and lone
 
 
-def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse: dict[str, Any] | None, ai: dict[str, Any] | None, *, comparison=None, first_board_out: list[dict[str, Any]] | None = None, prev_pool_boards: dict[str, int] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], str]:
+def _merge_pools(
+    relay: list[dict[str, Any]], watch: list[dict[str, Any]], *, market_rows=None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]:
+    """🚫 后排过滤 + 单池合并（2026-11-10 晚 用户方案 B）。
+
+    返回 `(relay, watch, dropped, height_obs)`：
+      · `dropped`  = 因同题材身位 ≥ `drop_backrow_rank()` 被剔出池的票（留痕用，不入池）；
+      · `height_obs` = 全市场**唯一**最高板（且 ≥ `height_obs_min()`），只观察不买。
+
+    ⛔ **不改买入判据**：原观察票并入接力池时保留 `participation_eligibility`，
+       09:25 依旧按同一套闸门判（它是不是 `observe_only` 由原字段决定，不看 `bucket`）。
+    ⛔ `bucket` 只影响卡面分区与统计，不参与任何裁决。
+    """
+    from copy import deepcopy
+
+    # 保留原资格与来源；代码去重先于唯一高度判断，不修改调用方输入。
+    seen = set()
+    buckets = []
+    for rows in (relay, watch):
+        unique = []
+        for row in rows:
+            code = str(row.get("code") or "")
+            if code and code in seen:
+                continue
+            if code:
+                seen.add(code)
+            r = deepcopy(row)
+            r.setdefault("pool_source_bucket", r.get("bucket") or ("relay" if not buckets else "watch"))
+            unique.append(r)
+        buckets.append(unique)
+    relay, watch = buckets
+
+    def _dragon_rank(r: dict[str, Any]) -> float | None:
+        v = r.get("dragon_rank")
+        if isinstance(v, bool):
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    lim = drop_backrow_rank()
+    dropped: list[dict[str, Any]] = []
+    if lim > 0:
+        def _split(rows: list[dict[str, Any]]):
+            keep, drop = [], []
+            for r in rows:
+                dr = _dragon_rank(r)
+                if dr is not None and dr >= lim:
+                    d = dict(r)
+                    d["dropped_reason"] = f"同题材身位第 {dr}（≥{lim}）·后排不进池"
+                    drop.append(d)
+                else:
+                    keep.append(r)
+            return keep, drop
+        relay, d1 = _split(relay)
+        watch, d2 = _split(watch)
+        dropped = d1 + d2
+
+    if not single_pool_enabled():
+        return relay, watch, dropped, None
+
+    pool = list(relay) + list(watch)
+    height_obs: dict[str, Any] | None = None
+    if pool:
+        # 正式 EOD 传完整同日涨停池；独立选池传完整 scored，不能拿过滤后残池冒充全市场。
+        reference = list({str(r.get("code") or r.get("dm")): r for r in
+                          (market_rows if market_rows is not None else relay + watch)}.values())
+        _maxb = max((_to_num(r.get("boards") or r.get("lbc"), 0) for r in reference), default=0)
+        _tops = [r for r in reference if _to_num(r.get("boards") or r.get("lbc"), 0) == _maxb]
+        src = next((r for r in pool if _tops and str(r.get("code")) == str(_tops[0].get("code") or _tops[0].get("dm"))), None)
+        if len(_tops) == 1 and _maxb >= height_obs_min() and src is not None:
+            height_obs = dict(src)
+            height_obs["bucket"] = "watch"
+            height_obs["bucket_label"] = "高度观察"
+            height_obs["watch_group"] = "高度观察"
+            height_obs["height_observe"] = True
+            # ⛔ 只观察：不参与买入（与「容量核心/一字龙头」同一处理口径）
+            height_obs.update(participation_eligibility="observe_only", watch_only=True,
+                              buyable=False, recheck_class="hard",
+                              watch_reason="唯一最高且达到高度观察门槛，只看不买")
+            height_obs.pop("relay_rank", None)
+            height_obs.pop("leader_preference_rank", None)
+            _del = str(src.get("code") or "")
+            pool = [r for r in pool if str(r.get("code") or "") != _del]
+
+    for i, r in enumerate(pool, start=1):
+        r["bucket"] = "relay"
+        r["bucket_label"] = "接力池"
+        r["relay_rank"] = i
+        r["watch_rank"] = i          # 卡面简列区沿用 watch_rank 编号，与 relay_rank 同值
+        r["leader_preference_rank"] = i
+
+    return pool, ([height_obs] if height_obs is not None else []), dropped, height_obs
+
+
+def pool_policy_diag(dropped: list[dict[str, Any]], height: dict[str, Any] | None) -> dict[str, Any]:
+    """单池政策的**精简**诊断（2026-11-10 晚）：只写可审计字段，不把整票塞进 diagnostics。
+
+    与 `select_relay_watch(apply_pool_policy=True)` / `pipeline_eod` 共用同一份口径，
+    避免一处写摘要、一处写完整候选 dict。
+    """
+    return {
+        "single_pool": bool(single_pool_enabled()),
+        "backrow_dropped": [
+            {"code": d.get("code"), "name": d.get("name"),
+             "boards": d.get("boards"), "dragon_rank": d.get("dragon_rank"),
+             "reason": d.get("dropped_reason")}
+            for d in dropped
+        ],
+        "backrow_dropped_count": len(dropped),
+        "height_observe": (
+            None if height is None else
+            {"code": height.get("code"), "name": height.get("name"),
+             "boards": height.get("boards"), "reason": height.get("watch_reason")}
+        ),
+    }
+
+
+def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse: dict[str, Any] | None, ai: dict[str, Any] | None, *, comparison=None, first_board_out: list[dict[str, Any]] | None = None, prev_pool_boards: dict[str, int] | None = None, apply_pool_policy: bool = False) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], str]:
     """
     faithful §4.4 四档接力选择 + 观察池生成。
 
@@ -746,6 +912,10 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
     来自**上一交易日**的 `candidates-<D>.json` 的 relay+watch。
     传入时，观察池里「昨日已在池 ∧ 今日板数更高」的票会被提到前面优先占位
     （⛔ 只调顺序，不改资格）。不传 = 旧行为。
+
+    `apply_pool_policy`（2026-11-10 晚）：默认 **False**。正式 `pipeline_eod` 要在
+    所有降级/补票/回填完成后显式调 `_merge_pools`，所以这里不提前合池；
+    独立调用想验新口径须显式置 True（旧排序契约测试逐字节比对 diagnostics）。
     """
     from copy import deepcopy
     from core import leader_cycle
@@ -1067,7 +1237,8 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
                           if core_active else "沿用旧排序"),
     }
     if active:
-        old_relay, old_watch, _, old_mode = select_relay_watch(scored, env, pulse, ai)
+        old_relay, old_watch, _, old_mode = select_relay_watch(
+            scored, env, pulse, ai, apply_pool_policy=False)
         old_positions = {c["code"]: (bucket, i) for bucket, rs in (("relay", old_relay), ("watch", old_watch))
                          for i, c in enumerate(rs, 1)}
         new_positions = {c["code"]: (bucket, i) for bucket, rs in (("relay", relay), ("watch", watch))
@@ -1113,4 +1284,13 @@ def select_relay_watch(scored: list[dict[str, Any]], env: dict[str, Any], pulse:
             it["watch_reason"] = f"{it['leader_role']}补充观察，跟踪题材地位变化；不参与"
         else:
             it["watch_reason"] = "补充观察，跟踪后续表现；不参与"
+    # 🚫 后排不进池 + 单池合并（2026-11-10 晚·用户方案 B，见顶部开关注释）
+    #    ⛔ 默认不在这里合池：正式 EOD 须等所有降级/补票/回填完成后再调，
+    #       否则后补的观察票会绕过过滤。旧排序契约测试逐字节比对 diagnostics，
+    #       只有 apply_pool_policy=True 才写入新键。
+    if apply_pool_policy and (drop_backrow_rank() > 0 or single_pool_enabled()):
+        diagnostics["pre_single_pool"] = {"relay": len(relay), "watch": len(watch)}
+        relay, watch, dropped, height = _merge_pools(relay, watch, market_rows=scored)
+        diagnostics.update(pool_policy_diag(dropped, height),
+                           relay_count=len(relay), watch_count=len(watch))
     return relay, watch, diagnostics, mode

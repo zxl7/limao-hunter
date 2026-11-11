@@ -2223,7 +2223,7 @@ def run_eod(
     relay, watch, diagnostics, sel_mode = select_relay_watch(
         scored, env, pulse, ai_env, comparison=comparison,
         first_board_out=new_direction_first_board,
-        prev_pool_boards=_prev_pool_boards)
+        prev_pool_boards=_prev_pool_boards, apply_pool_policy=False)
     if _prev_pool_boards:
         _carry = [r for r in watch if r.get("carryover_promoted")]
         diagnostics["watch_carryover"] = {
@@ -2496,6 +2496,30 @@ def run_eod(
         offpool_high_ident = []
         low_pool = []
         new_direction_first_board = []
+
+    # 所有降级与补票完成后才迁移展示身份；不把 observe_only 改成 relay_candidate。
+    # ⚠️ 位置必须在「准入闸 → 各降级闸 → 历史修复/补票 → two_pool.finalize」之后，
+    #    否则后补的票会绕过「龙5及以后不进池」；仍早于所有纯回填（不动交易资格）。
+    from core.quant_score import _merge_pools, drop_backrow_rank, single_pool_enabled, pool_policy_diag
+    if drop_backrow_rank() > 0 or single_pool_enabled():
+        diagnostics["pre_single_pool"] = {"relay": len(relay), "watch": len(watch)}
+        relay, watch, _dropped, _height = _merge_pools(
+            relay, watch, market_rows=zt.get("ztgc") or [])
+        diagnostics.update(pool_policy_diag(_dropped, _height),
+                           relay_count=len(relay), watch_count=len(watch))
+
+    # 🧭 市场级题材强度（2026-11-11 用户拍板 B）：回答「昨天整个市场哪几条线真强」。
+    #    ⛔ 只写 diagnostics + 展示字段 theme_rank/theme_metrics；不改 relay_rank、
+    #       dragon_rank、relay 数组顺序、任何准入闸 / DEV / 量能 / quota / 仓位 P0。
+    #    ⛔ 基准必须是完整同日涨停池 ztgc，不能拿过滤后的候选残池冒充全市场。
+    #    ⛔ 可逆：POOL_CALL_MARKET_THEME_RANK=0 → 不算、不写、卡面整段不渲染。
+    try:
+        from core import market_theme_rank as _mtr
+        _mtr.attach_to_payload(diagnostics, relay, watch,
+                               zt.get("ztgc") or [],
+                               locals().get("_theme_map_all") or {})
+    except Exception as _e:  # noqa: BLE001
+        print(f"[EOD] 市场级题材强度降级（不影响候选）: {_e}")
 
     # early 回标统计（diagnostics 来自 select_relay_watch 返回值，须在其后写入）
     diagnostics["early_buy_hits"] = early_hits
