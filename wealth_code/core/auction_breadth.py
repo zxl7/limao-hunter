@@ -33,6 +33,9 @@ DIVERGENT_UNDER_RATIO = 0.40   # 水下占比 ≥40% → 分化
 WEAK_UNDER_RATIO = 0.50        # 水下占比 ≥50% 或中位 < -1% → 弱
 WEAK_MEDIAN_PCT = -1.0
 FRONT_N = 5                 # 「前五」= 身位前 5
+# ⛔ 竞价快照可能只覆盖部分涨停票（11-10 只有 54/93）。覆盖率不足时**不许拿剩下的
+#    算百分比**：1 只有报价、0 水下 → 「水下 0%」是假象；1/2=50% 更是纯粹误导。
+MIN_COVERAGE = 0.80
 
 
 def _bj_now() -> datetime:
@@ -73,13 +76,16 @@ def theme_breadth(members: Iterable[Mapping[str, Any]],
     gaps = [g for g in (gap_pct(quotes.get(c)) for c in codes) if g is not None]
     n = len(codes)
     covered = len(gaps)
+    cover_ratio = round(covered / n, 3) if n else 0.0
     out: dict[str, Any] = {
         "n": n,
         "covered": covered,
-        "applicable": n >= MIN_THEME_SIZE and covered > 0,
+        "cover_ratio": cover_ratio,
+        # 判定广度要同时满足：家数够 + 竞价覆盖够（⛔ 不拿残缺样本算百分比）
+        "applicable": n >= MIN_THEME_SIZE and covered > 0 and cover_ratio >= MIN_COVERAGE,
     }
     if not gaps:
-        out.update(underwater=0, deep_under=0, median_gap=None,
+        out.update(underwater=0, under_ratio=0.0, deep_under=0, median_gap=None,
                    front_gap=None, divergence=None, level="n/a", note="无竞价数据")
         return out
 
@@ -91,7 +97,10 @@ def theme_breadth(members: Iterable[Mapping[str, Any]],
     fgap = _median(front_gaps)
 
     if not out["applicable"]:
-        level, note = "n/a", f"家数 {n} < {MIN_THEME_SIZE}，不判广度"
+        if n < MIN_THEME_SIZE:
+            level, note = "n/a", f"家数 {n} < {MIN_THEME_SIZE}，不判广度"
+        else:
+            level, note = "n/a", f"竞价覆盖 {covered}/{n}（{cover_ratio:.0%}），样本不足不判广度"
     elif (med is not None and med < WEAK_MEDIAN_PCT) or under / covered >= WEAK_UNDER_RATIO:
         level, note = "weak", "整条线竞价偏弱"
     elif under / covered >= DIVERGENT_UNDER_RATIO:

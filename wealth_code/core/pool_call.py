@@ -690,7 +690,9 @@ def load_breadth(date10: str, quotes: dict[str, Any], line_cores: dict | None = 
     day = ""
     for f in reversed(files):
         cand = f.stem[3:]
-        if len(cand) != 10 or cand > str(date10):
+        # ⛔ 必须**严格早于执行日**：广度问的是「昨日涨停池今天开在哪」，
+        #    回放/补算时当天归档已完整，若用 `<=` 会拿今天的池子算今天（前视）。
+        if len(cand) != 10 or cand >= str(date10):
             continue
         z = _read_zt(f)
         if z is None:                       # 盘中档/半成品 → 跳过，继续往前找

@@ -84,3 +84,22 @@ def test_build_breadth_sorted_by_size():
     assert d["schema"] == "auction_breadth_v1"
     assert [t["theme"] for t in d["themes"]] == ["大", "小"]
     assert d["themes"][1]["applicable"] is False
+
+
+def test_partial_quote_coverage_not_judged():
+    """竞价只覆盖一部分 → 不判广度（1/2=50% 这种百分比纯属误导）。"""
+    ms = members(10)
+    codes = [m["code"] for m in ms]
+    quotes = {c: q(-2.0) for c in codes[:5]}      # 只覆盖 5/10
+    b = theme_breadth(ms, quotes)
+    assert b["covered"] == 5 and b["cover_ratio"] == 0.5
+    assert b["applicable"] is False
+    assert b["level"] == "n/a"
+    assert "覆盖" in b["note"]
+
+
+def test_full_coverage_judged():
+    ms = members(10)
+    codes = [m["code"] for m in ms]
+    b = theme_breadth(ms, {c: q(1.0) for c in codes})
+    assert b["cover_ratio"] == 1.0 and b["applicable"] is True and b["level"] == "ok"
