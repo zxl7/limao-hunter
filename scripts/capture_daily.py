@@ -1050,7 +1050,20 @@ def main():
     except Exception as e:
         tl2_msg = f"theme_ladder ERR:{e}"
 
-    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {arch_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {gg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | {th_msg} | {ld_msg} | {technical_msg} | {sg_msg} | {dg_msg} | {tl2_msg} | pruned={removed}")
+    # 17) 🧾 影子排序记录（2026-11-11 · 只读）：现行顺序 vs 候选顺序（板块内身位）
+    #     只写 cache/shadow_rank_<date>.json，⛔ 不改任何买入；半年后回测靠它比分歧票。
+    #     候选文件缺 `ret_20d_pct` 时会在 coverage 里注明「缺料」，不假装有数据。
+    try:
+        import subprocess as _sp4
+        _sh = _sp4.run([sys.executable, str(Path(__file__).resolve().parent / "shadow_rank_diff.py"),
+                        "--date", today],
+                       capture_output=True, text=True, timeout=120)
+        sh_msg = ("shadow ok" if _sh.returncode == 0
+                  else f"ERR:rc={_sh.returncode} {(_sh.stderr or '').strip()[:60]}")
+    except Exception as e:
+        sh_msg = f"shadow ERR:{e}"
+
+    print(f"[capture_daily {today}] {erupt_msg} | {zt_msg} | {flow_msg} | {emo_msg} | {nf_msg} | {arch_msg} | {tl_msg} | {ss_msg} | {rw_msg} | {zg_msg} | {gg_msg} | {pq_msg} | {pe_msg} | {rwm_msg} | {so_msg} | {ta_msg} | {th_msg} | {ld_msg} | {technical_msg} | {sg_msg} | {dg_msg} | {tl2_msg} | {sh_msg} | pruned={removed}")
 
 
 if __name__ == "__main__":

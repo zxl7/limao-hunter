@@ -133,6 +133,13 @@ def _compute(code: str, rules: dict[str, Any] | None = None) -> dict[str, Any] |
     out: dict[str, Any] = {"kline_asof": dates[-1], "idx_sec": idx_sec}
 
     # 官方公式两项（当前窗口：最近10/30个交易日）
+    # 🆕 2026-11-11 用户「身位要看最近一个月或最近 5 天的累计涨幅」：
+    #    5/20 日累计涨幅与 10/30 日同一数据源、同一口径，只多算两个窗口。
+    #    ⛔ 只落字段，不参与任何判据（排序/权重另议）。
+    if len(c) >= 6 and c[-6] > 0:
+        out["ret_5d_pct"] = round((cur / c[-6] - 1) * 100, 1)
+    if len(c) >= 21 and c[-21] > 0:
+        out["ret_20d_pct"] = round((cur / c[-21] - 1) * 100, 1)
     if c[-11] > 0:
         out["ret_10d_pct"] = round((cur / c[-11] - 1) * 100, 1)
     if c[-31] > 0:
@@ -248,7 +255,7 @@ def main() -> int:
                  (isinstance(d30, (int, float)) and d30 >= up30)
         if any(v is not None for v in (d10, d30, tg)):
             item = {k: c.get(k) for k in (
-                "code", "name", "ret_10d_pct", "ret_30d_pct", "idx_10d_pct", "idx_30d_pct",
+                "code", "name", "ret_5d_pct", "ret_20d_pct", "ret_10d_pct", "ret_30d_pct", "idx_10d_pct", "idx_30d_pct",
                 "dev_10d_pct", "dev_30d_pct", "dev_hit_down", "trig_line", "trig_gap_pct",
                 "trig_price", "kline_asof", "idx_sec")}
             items.append(item)
