@@ -2581,17 +2581,17 @@ def _ai_plan_block(raw: dict, records: list[dict],
                    ("<text_tag color='{C_BUY}'>AI 买入</text_tag>（符合逐票预期）"
                     if _rel else
                     f"<text_tag color='{C_BUY}'>AI 买入</text_tag>（高开{limit:g}%以内）"))
+        v = views.get(code) or {}
         # 🧾 替补声明（2026-11-11 用户：「其他票必须有独立成立依据，
         #    不能因为核心太贵就获得替代资格」）。⛔ 只标注，不改买入。
+        #    ⚠️ 必须放在 `v` 赋值之后——此前放到前面，导致 UnboundLocalError。
         _sub = (v.get("substitute") or {}) if isinstance(v, dict) else {}
         if _sub:
-            _sub_txt = (f"<font color='grey'>（这条线核心 {_sub.get('core_name') or ''} 今天没买"
+            _ok_tag += (f"<font color='grey'>（这条线核心 {_sub.get('core_name') or ''} 今天没买"
                         f" → 它是替补；依据：{_sub.get('basis')}）</font>"
                         if _sub.get("independent") else
                         f"<font color='orange'>（⚠️ 替补：核心 {_sub.get('core_name') or ''} 今天没买，"
                         f"它本身不是这条线的龙一 —— 必须自己成立才买）</font>")
-            _ok_tag += _sub_txt
-        v = views.get(code) or {}
         # 🎨 2026-10-21 用户「主要把要买的这个推得花哨一点，指标打满」：
         #    买入票是全卡唯一用**红底**的票名（`C_BUY`），其余一律降权。
         name_txt = _hl(f"{r.get('name') or v.get('name') or code}({code})", C_BUY)
