@@ -5626,7 +5626,9 @@ def _ambush_pullback_block(cache_dir: Path, day: str) -> list[dict]:
             line += "\n　历史热度：" + " · ".join(hot_bits)
         metrics = []
         if isinstance(close, (int, float)):
-            metrics.append(f"收盘{close:.2f}")
+            # ⛔ 2026-11-11：这个 `close` 是 **14:30 快照价**，不是收盘价
+            #    （选股时还没收盘）。写成「收盘」会让人高估形态强度。
+            metrics.append(f"14:30 现价{close:.2f}")
         if isinstance(ma10, (int, float)):
             metrics.append(f"十日线{ma10:.2f}")
         if isinstance(gap, (int, float)):
@@ -5634,7 +5636,14 @@ def _ambush_pullback_block(cache_dir: Path, day: str) -> list[dict]:
         if isinstance(volume_ratio, (int, float)):
             metrics.append(f"量比{volume_ratio:.2f}")
         if isinstance(score, (int, float)):
-            metrics.append(f"形态分{score:.1f}")
+            # 🧾 2026-11-11：分数必须带分量（旧写法只有「形态分9.8」，像接近满分）
+            _sp = row.get("score_parts")
+            if isinstance(_sp, dict):
+                metrics.append(
+                    f"形态分{score:.1f}（热度{_sp.get('hot')}·板数{_sp.get('boards')}"
+                    f"·量能{_sp.get('volume')}·位置{_sp.get('position')}）")
+            else:
+                metrics.append(f"形态分{score:.1f}")
         # 分歧洗盘（2026-10-15 第二轮收敛）：旧版每只票单起一行「分歧洗盘：X 日 -Y% → 次日
         # 反包转一致」——可「次日反包转一致」**本身就是入选条件**（不反包的票根本进不了池），
         # 4 只票复读 4 遍同一句准入规则。只保留可核事实「哪一天洗的、洗多狠」，并进上一行。
@@ -5777,7 +5786,12 @@ def build_ambush_card(data: dict | None = None) -> dict:
         _n = sum(len(p.get("stocks") or []) for p in picks)
         out: list[dict] = [_div(
             "<text_tag color='purple'>✅ 今日买入</text_tag>"
-            f"（AI 精选 {_n} 只 · 实时数据核验）"
+            # ⛔ 2026-11-11：这 1–4 只是 `ambush_pullback` **机械规则**筛的，
+            #    AI 只写点评 —— 标「AI 精选」属于夸大（用户 11-10 审计发现）。
+            f"（规则筛选 {_n} 只 · 实时数据核验）"
+            # ⛔ 仓位口径单一源：个股点评是 AI 写的，曾出现「不超三成」与系统 50% 打架。
+            #    卡面在这里钉死优先级，⛔ 不复述数字（数字只在「风险」段出现一次）。
+            "\n<font color='grey'>仓位只以本卡「风险」段为准；个股点评里出现的仓位百分比不生效。</font>"
         )]
         for p in picks:
             theme = str(p.get("theme") or "")

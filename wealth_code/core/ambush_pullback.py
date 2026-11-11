@@ -437,13 +437,18 @@ def scan(cache_dir: Path, bars_fetcher: Callable[[str, int], list[dict]] | None 
             continue
         hot_zt = int(meta.get("theme_zt_max") or 0) or int(meta["sector_zt_count"])
         # 越接近 MA10 上方 +8% 越好；量能放大加分；热度/辨识度加分
-        score = round(
-            min(hot_zt, 8)
-            + min(int(meta["max_boards"]), 4) * 2
-            + (shape["volume_ratio"] - 1) * 10
-            + max(0, 5 - abs(shape["ma10_gap_pct"] - 8)) * 2,
-            2)
-        candidates.append({**meta, **shape, "score": score})
+        _hot = min(hot_zt, 8)
+        _boards = min(int(meta["max_boards"]), 4) * 2
+        _vol = (shape["volume_ratio"] - 1) * 10
+        _pos = max(0, 5 - abs(shape["ma10_gap_pct"] - 8)) * 2
+        score = round(_hot + _boards + _vol + _pos, 2)
+        # 🧾 2026-11-11 用户「形态分 9.8 没有分母」：把四项分量一起带出去，
+        #    卡面写「形态分 9.8（热度3·板数2·量能4.8·位置0）」——读者能看出
+        #    这个分是被哪一项撑起来的，也不会再误以为接近满分。
+        #    ⛔ 分量与总分同一处计算，禁止卡面自己重算（必漂移）。
+        parts = {"hot": round(_hot, 2), "boards": round(_boards, 2),
+                 "volume": round(_vol, 2), "position": round(_pos, 2)}
+        candidates.append({**meta, **shape, "score": score, "score_parts": parts})
     candidates.sort(key=lambda x: (-x["score"], x["code"]))
     # ⛔ 数据源健康度（2026-10-09 血案：腾讯停用 host → 全量日K空 → 候选 0 只被当成
     #    「今日无符合条件」的假阴性）。两条任一即判 data_ok=False：
