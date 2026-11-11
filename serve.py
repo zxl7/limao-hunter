@@ -460,6 +460,7 @@ PUBLIC_ROUTES = {
     "/api/ai/view": {"dir": "cache", "pattern": r"^ai_view_\d{4}-\d{2}-\d{2}\.json$", "mode": "all", "limit": 20, "cadence": "daily", "desc": "AI 判断（参与/放弃/观察 + 理由）"},
     "/api/ai/decisions": {"file": "wealth_code/cache/ai_decisions.jsonl", "format": "jsonl", "cadence": "daily", "desc": "AI 判断台账"},
     "/api/ai/nav": {"file": "wealth_code/cache/ai_nav_history.jsonl", "format": "jsonl", "cadence": "daily", "desc": "AI 轨净值台账"},
+    "/api/ai/nav-t1": {"file": "wealth_code/cache/ai_nav_history_t1.jsonl", "format": "jsonl", "cadence": "daily", "desc": "AI 轨 T+1 口径净值（竞价买→次日收盘卖，独立序列）"},
     "/api/account/nav": {"file": "wealth_code/cache/account_nav_history.jsonl", "format": "jsonl", "cadence": "daily", "desc": "净值账本（脚本轨）"},
     "/api/account/metrics": {"file": "wealth_code/cache/account_strategy_metrics.json", "cadence": "daily", "desc": "策略指标（胜率/盈亏比聚合）"},
     # 15.4 尾盘潜伏明细

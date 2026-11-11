@@ -57,6 +57,9 @@ BJ_TZ = timezone(timedelta(hours=8))
 CACHE = ROOT / "cache"
 DECISIONS = CACHE / "ai_decisions.jsonl"
 AI_LEDGER = CACHE / "ai_nav_history.jsonl"
+# T+1 口径（2026-11-11 用户「两套口径不混账」）：同一批买入，**次日收盘**才卖。
+# ⛔ 独立文件、独立净值序列，绝不与策略口径混成一条线。
+AI_LEDGER_T1 = CACHE / "ai_nav_history_t1.jsonl"
 PY_LEDGER = CACHE / "account_nav_history.jsonl"
 # ⛔ AI 判断视图目录 = 狸猫猎手/cache（**不是** wealth_code/cache）——2026-09-11 修：
 #    消费方 build_cards._load_ai_view 读 ROOT.parent/cache，此前本脚本写 wealth_code/cache，
@@ -66,6 +69,7 @@ AI_VIEW_DIR = BASE / "cache"
 BASE_NAV = 1.0                      # AI 轨起点净值（独立计）
 DEFAULT_ENTRY_MAX_GAP = 3.0         # AI 自定上限的兜底值（仅留痕·⛔ 不参与裁决）
 STRATEGY = "ai_judgement_next_day_close"
+STRATEGY_T1 = "ai_judgement_t1_close"     # 次日收盘卖（可执行性口径）
 
 # ── 统一买入口径（2026-09-14 用户「AI 决定要买的，低于 5% 直接买」）────────────
 # 单一源 = `core/ai_caliber.USER_ENTRY_MAX_GAP_PCT`；本轨结算必须与账户账本同值，
@@ -759,7 +763,18 @@ def _resolve_auction(code: str, trade_date: str, q: dict) -> dict:
 
 
 def _close_of(code: str, trade_date: str) -> float | None:
-    """T+1 收盘价（腾讯日K·前复权·ifzq host 2026-09-09 已修）。失败→None（诚实跳过）。"""
+    """T+1 收盘价（前复权）。**先本机缓存**，缺失才联网 —— 与 `_open_of` 同一策略。
+
+    ⛔ 2026-11-11：原来只走网络，回填时逐票 0.5s 且大量失败 → T+1 口径几乎写不出来。
+       缓存里已有同一份前复权日K，先查缓存既快又不依赖网络。
+    """
+    key = str(trade_date).replace("-", "")
+    for b in _cached_bars(code):
+        if str(b.get("date")).replace("-", "") == key:
+            try:
+                return float(b["close"])
+            except Exception:  # noqa: BLE001
+                break
     try:
         import common.tencent_kline as tk
         rows = tk.fetch_kline(code, n=8)          # [(date, close), ...]
@@ -897,6 +912,39 @@ def cmd_settle(args) -> int:
             "not_picked": len(others),
             "ts": datetime.now(BJ_TZ).isoformat(),
         })
+
+        # ── 📏 T+1 口径（2026-11-11）──────────────────────────────────────
+        # 同一批成交票：竞价价买（tdate）→ **次一交易日收盘**卖。
+        # ⛔ 独立文件 + 独立净值；次日行情没落盘就**整批不写**（不写半截、不补 0）。
+        _nxt = _next_trade_day(tdate)
+        _t1 = []
+        for t in traded:
+            _c = str(t["code"])
+            _c1 = _close_of(_c, _nxt)
+            if _c1 is None or not t["auction_price"]:
+                _t1 = []
+                break
+            _t1.append({**t, "exit_date": _nxt, "exit_close": float(_c1),
+                        "return_pct": round((float(_c1) - t["auction_price"]) / t["auction_price"] * 100, 2)})
+        if _t1:
+            _rows = _read_jsonl(AI_LEDGER_T1)
+            _base = float(_rows[-1]["nav"]) if _rows else BASE_NAV
+            _avg1 = round(sum(x["return_pct"] for x in _t1) / len(_t1), 4)
+            _append_jsonl(AI_LEDGER_T1, {
+                "trade_date": tdate,
+                "recommendation_date": sorted({str(r["decision_date"]) for r in due})[-1],
+                "strategy": STRATEGY_T1,
+                "caliber": "竞价价买 → 次日收盘卖",
+                "exit_date": _nxt,
+                "stock_count": len(_t1),
+                "avg_return_pct": _avg1,
+                "nav": round(_base * (1 + _avg1 / 100.0), 6),
+                "stocks": _t1,
+                "ts": datetime.now(BJ_TZ).isoformat(),
+            })
+            print(f"[ai_ledger] T+1 口径已记 {len(_t1)} 只 → {_nxt} 收盘结算，均 {_avg1:+.2f}%")
+        else:
+            print(f"[ai_ledger] T+1 口径跳过（{_nxt} 收盘价未落盘）")
     else:
         nav = _nav_now()
         print(f"  AI 今日 0 成交（{len(skipped)} 只未买到/未选）→ 不写账本行（净值 {nav} 不变）")
