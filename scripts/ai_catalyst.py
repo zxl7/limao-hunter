@@ -156,7 +156,35 @@ def main(argv=None) -> int:
     ap.add_argument("--date", default=None)
     ap.add_argument("--dry-run", action="store_true", help="只打印 prompt，不调用")
     ap.add_argument("--validate", default=None, help="校验已有 ai_advice 文件")
+    ap.add_argument("--write-stdin", action="store_true",
+                    help="从 stdin 读 JSON 并落盘（供 AI 一句话调用，避免手写文件出错）")
     args = ap.parse_args(argv)
+
+    if args.write_stdin:
+        # 🗣 给 WorkBuddy 的 AI 用：它把判断结果 JSON 从 stdin 传进来，由本脚本负责
+        #    校验 + 落盘（⛔ 不让 AI 手写文件，避免格式/转义错误）。
+        try:
+            raw = json.loads(sys.stdin.read())
+        except Exception as e:  # noqa: BLE001
+            print(f"[ai_catalyst] stdin 不是合法 JSON：{e}")
+            return 1
+        day = args.date or str(raw.get("date") or _bj().strftime("%Y-%m-%d"))
+        payload = {
+            "schema": AA.SCHEMA, "date": day,
+            "source": str(raw.get("source") or "workbuddy-llm"),
+            "model": str(raw.get("model") or ""),
+            "generated_at": str(raw.get("generated_at") or _bj().strftime("%Y-%m-%d %H:%M:%S")),
+            "themes": raw.get("themes") or {}, "stocks": raw.get("stocks") or {},
+        }
+        checked = AA.validate(payload)
+        if not checked["valid"]:
+            print(f"[ai_catalyst] 无有效题材（{checked['errors'] or '空'}）→ ⛔ 不落盘")
+            return 1
+        AA.path_for(day).write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n",
+                                    encoding="utf-8")
+        lv = {k: v.get("level") for k, v in list(checked["themes"].items())[:6]}
+        print(f"[ai_catalyst] 已写 cache/ai_advice_{day}.json｜{len(checked['themes'])} 个题材｜{lv}")
+        return 0
 
     if args.validate:
         adv = AA.load(args.validate)
