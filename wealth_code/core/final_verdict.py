@@ -94,6 +94,14 @@ def decide(rows: list[dict], views: dict[str, Any] | None = None,
 # 打板轨门槛 = 该板位**机械可达的最高档**（5~7% 档）历史晋级率：
 TOP_BAND = {1: 37.5, 2: 50.0}
 
+# 🚫 打板轨总开关（2026-11-12 用户选 A「关掉」）
+# 理由三条同时成立：
+#   ① 既有约定：高开 >+6% 不追（顶部空间闸）、竞价封死买不到 —— 打板轨正好买这段；
+#   ② 新文章《一文道尽龙头战法》：打板 ≠ 龙头战法（溢价思维 vs 接力思维）；
+#   ③ 30 天实测：打板轨 47 笔 −2.48%、胜率 51%（低吸轨 3 笔 +6.47%）。
+# 回退：`BOARD_TRACK=1` 恢复打板轨。
+BOARD_TRACK = os.environ.get("BOARD_TRACK", "0") == "1"
+
 
 def _buyable_gap(code: str, gap) -> bool:
     """竞价能不能买到：封死（≈涨停）就买不到 —— 与机械端「竞价封死」同一口径。"""
@@ -141,6 +149,9 @@ def decide_tracks(rows: list[dict], views: dict[str, Any] | None = None,
             out.append({**base, "track": "低吸轨", "conclusion": "可买",
                         "why": f"机械过（晋级率 {pct}% 仅参考）+催化{level}"})
         # 打板轨：高开档（≥该板位可达最高档）+ 催化不弱 + LLM 不反对
+        elif not BOARD_TRACK:
+            out.append({**base, "track": "打板轨（已关闭）", "conclusion": "观察",
+                        "why": "高开不打板：与顶部空间闸约定一致（BOARD_TRACK=0）"})
         elif isinstance(pct, (int, float)) and float(pct) >= TOP_BAND.get(b, 37.5) \
                 and _buyable_gap(code, r.get("gap")) \
                 and b <= 3 and "ST" not in str(r.get("name") or "").upper() \

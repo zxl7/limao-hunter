@@ -52,6 +52,11 @@ def run_day(day: str, *, use_llm: bool) -> dict:
     rd = R.replay_day(day, days)
     if not rd:
         return {"day": day, "error": "无可回放数据"}
+    # 🧹 数据校验：竞价文件里的 time 日期必须等于当日（09-30 曾是 09-29 的数据）
+    _ts = {str(v.get("time"))[:10] for v in (rd["quotes"] or {}).values()
+           if isinstance(v, dict) and v.get("time")}
+    if _ts and _ts != {day}:
+        return {"day": day, "error": f"竞价文件日期错配 {sorted(_ts)}"}
     from core import second_wave as sw
     M = {"", "-", "—", "其他", "无", "未知", "none", "null"}
     pool = list(rd["cands"].get("relay") or []) + list(rd["cands"].get("watch") or [])

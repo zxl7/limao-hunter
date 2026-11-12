@@ -65,8 +65,9 @@ def test_llm_actions_override():
     assert out["C"]["conclusion"] == "观察" and "LLM 观察" in out["C"]["why"]
 
 
-def test_tracks_split_conflict():
-    """低吸轨=机械自决；打板轨=高开未封死；互不否决。"""
+def test_tracks_split_conflict(monkeypatch):
+    """低吸轨=机械自决；打板轨=高开未封死（需显式开启 BOARD_TRACK=1）。"""
+    monkeypatch.setattr(fv, "BOARD_TRACK", True, raising=False)
     rows = [{"code": "600001", "name": "低吸票", "pct": 21.9, "boards": 1, "gap": 3.6},
             {"code": "600002", "name": "打板票", "pct": 59.3, "boards": 1, "gap": 8.0},
             {"code": "600003", "name": "封死票", "pct": 64.5, "boards": 2, "gap": 10.0}]
@@ -94,3 +95,13 @@ def test_rank_bonus_can_promote():
     views = {c: {"view": "participate"} for c in "AB"}
     out = fv.decide_tracks(rows, views, {}, None, {"A": {"role": "总龙"}})
     assert out[0]["code"] == "A" and out[0]["bonus"] >= 3
+
+
+def test_board_track_closed_by_default():
+    """2026-11-12 用户选 A：默认关闭打板轨（高开不打板）。"""
+    import importlib
+    importlib.reload(fv)
+    assert fv.BOARD_TRACK is False
+    rows = [{"code": "600001", "name": "高开票", "pct": 64.5, "boards": 2, "gap": 8.0}]
+    out = fv.decide_tracks(rows, {"600001": {"view": "skip"}}, {})
+    assert out[0]["conclusion"] == "观察" and "已关闭" in out[0]["track"]
