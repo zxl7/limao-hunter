@@ -847,52 +847,6 @@ def load_theme_momentum(day: str, root: Path | None = None) -> dict[str, dict[st
     return {str(k): v for k, v in themes.items() if isinstance(v, dict)}
 
 
-def _prior_wave_zt(code: str, window: int = 20) -> tuple[int, int] | None:
-    """返回 `(当前连续涨停天数, 这波之前 window 日内的涨停次数)`；缺 K 线 → None。
-
-    ⛔ 涨停判定用**收盘涨幅**（10cm ≥9.8% / 20cm ≥19.7%），与账本口径一致。
-    """
-    import json as _json
-    try:
-        from pathlib import Path as _P
-        root = _P(__file__).resolve().parents[2]
-        bars = _json.loads((root / "cache" / "kline_qfq" / f"{code}.json").read_text(encoding="utf-8")).get("bars") or []
-    except Exception:  # noqa: BLE001
-        return None
-    bars = [b for b in bars if b.get("close") and b.get("date")]
-    if len(bars) < 3:
-        return None
-    flags: list[bool] = []
-    for i in range(1, len(bars)):
-        try:
-            r = float(bars[i]["close"]) / float(bars[i - 1]["close"]) - 1
-        except (TypeError, ValueError, ZeroDivisionError):
-            flags.append(False)
-            continue
-        flags.append(r >= 0.098 or r >= 0.197)
-    streak = 0
-    for ok in reversed(flags):
-        if ok:
-            streak += 1
-        else:
-            break
-    idx = len(flags) - streak
-    prior = sum(1 for x in flags[max(0, idx - window):idx] if x)
-    return streak, prior
-
-
-def _gene_zt_n(code: str) -> int | None:
-    """读个股近一年涨停次数（`cache/zt_genes/gene_<code>.json`）；缺档案 → None。"""
-    import json as _json
-    try:
-        from pathlib import Path as _P
-        root = _P(__file__).resolve().parents[2]
-        d = _json.loads((root / "cache" / "zt_genes" / f"gene_{code}.json").read_text(encoding="utf-8"))
-        return int(d.get("zt_n") or 0)
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def load_line_cores(date10: str, *, days: int = LINE_CORE_LOOKBACK_DAYS,
                     root: Path | None = None) -> dict[str, dict[str, Any]]:
     """近 N 个交易日涨停池 → {线族: 该线**最高板**那只}（含已断板的核心）。
@@ -2027,10 +1981,10 @@ def call_pool(candidates: dict[str, Any] | None,
                                "reason": c.get("watch_reason") or "板块观察参照，不参与交易"}
                 continue
             # 🕯 一字板次日低吸（2026-11-12 用户「毕竟它是光模块的…应该能低吸到」）：
-            #    昨天一字（买不到）的核心，今天开在 +2%~+6% → 允许走完整裁决链（同一套闸）。
+            #    昨天一字（买不到）的核心，今天开在 +2%~+5% → 允许走完整裁决链（同一套闸）。
             _owg = str(c.get("watch_group") or "")
             _ow_low_gap = (_owg in ("一字核心", "一字龙头")
-                           and isinstance(gap, (int, float)) and 2.0 <= float(gap) <= 6.0)
+                           and isinstance(gap, (int, float)) and 2.0 <= float(gap) <= 5.0)
             if _ow_low_gap:
                 _recheck["verdict"] = "一字次日低吸窗口·进入完整竞价裁决"
                 base["recheck_class"] = "state"
@@ -2755,18 +2709,17 @@ def call_pool(candidates: dict[str, Any] | None,
                 continue
         # 🥈 第二波 3 板危险节点（2026-11-12 用户口径：近一个月第一波走完 → 第二波 3 板只观察）
         if POOL_CALL_OLD_STOCK_OBSERVE:
-            _pw = _prior_wave_zt(code, POOL_CALL_SECOND_WAVE_WINDOW)
-            if _pw is not None:
-                _streak, _prior = _pw
-                if (_streak >= POOL_CALL_SECOND_WAVE_MIN_BOARDS
-                        and _prior >= POOL_CALL_SECOND_WAVE_PRIOR_ZT):
-                    marks[code] = {**base, "view": "watch", "second_wave_node": True,
-                                   "prior_wave_zt": _prior, "streak": _streak,
-                                   "reason": (f"第二波高位节点：近 {POOL_CALL_SECOND_WAVE_WINDOW} 日"
-                                              f"已有 {_prior} 次涨停（第一波走完），"
-                                              f"现在第 {_streak} 板 → 只观察，不买"
-                                              "（2026-11-12 用户口径）")}
-                    continue
+            from core import second_wave as _sw
+            _hit = _sw.second_wave(
+                c.get("boards"), code,
+                window=POOL_CALL_SECOND_WAVE_WINDOW,
+                min_boards=POOL_CALL_SECOND_WAVE_MIN_BOARDS,
+                prior_zt=POOL_CALL_SECOND_WAVE_PRIOR_ZT)
+            if _hit:
+                marks[code] = {**base, "view": "watch", "second_wave_node": True,
+                               "prior_wave_zt": _hit["prior"], "streak": _hit["streak"],
+                               "reason": _hit["note"] + "（2026-11-12 用户口径）"}
+                continue
         # 🚫 首板只看不买（2026-11-12 用户「明明写只观察，结果被买了」）
         if (not POOL_CALL_FIRST_BOARD_BUY
                 and (str(c.get("watch_group") or "") == "首板观察"

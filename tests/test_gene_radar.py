@@ -93,7 +93,11 @@ def test_skips_small_sample_grade(monkeypatch):
 
 
 def test_skips_hard_exclusions(monkeypatch):
-    """一字板 / 688 / ST / 3 板以上 / 成交额 <1 亿 一律不进。"""
+    """一字板 / 688 / ST / 3 板以上 一律不进。
+
+    ⚠️ 2026-11-11 用户「5 亿限制全系统清除」后，成交额不再是否决理由；
+    地量票（0.6 亿）现在可以进雷达，故本用例只锁前四类硬排除。
+    """
     _patch(monkeypatch, {c: _facts() for c in
                          ("603001", "688001", "603002", "603003", "603004")})
     rows = [
@@ -101,7 +105,6 @@ def test_skips_hard_exclusions(monkeypatch):
         _row("688001", "科创票", 1, 2.0),
         _row("603002", "ST票", 1, 2.0),
         _row("603003", "高位票", 3, 2.0),
-        _row("603004", "地量票", 1, 0.6),
     ]
     assert pz.select_gene_radar(rows, in_pool_codes=set()) == []
 

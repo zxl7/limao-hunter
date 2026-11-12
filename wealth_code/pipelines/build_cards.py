@@ -2856,6 +2856,7 @@ def _post_pool_blocks(payload: dict[str, Any], *, eod: bool = False) -> list[dic
                 str(_it.get("name") or ""))
         out.append(_div("**🌱 新方向（整条线零连板·已进池·明早竞价定）**"))
         for _line, _names in list(_nd_lines.items())[:2]:
+            _line = _line or "新方向"     # 旧候选没有 new_direction_line → 不渲染空红字
             _m = next((x for x in fb
                        if str(x.get("new_direction_line") or "") == _line), {})
             _mem = _m.get("new_direction_line_members")

@@ -67,9 +67,12 @@ def test_eod_merge_preserves_qualification_and_input():
                                   "buyable": True, "gene": {}, "dragon_note": "原风险说明"}])
     before = copy.deepcopy(payload)
     txt = "\n".join(_texts(bc._post_pool_blocks(payload, eod=True)))
-    assert txt.count("长城军工") == 1
+    # 2026-11-11 起新方向「真入池」：线级摘要与低位池逐票各出现一次，
+    # 因此同名出现 2 次属预期（不是重复渲染同一块）。
+    assert txt.count("长城军工") == 2
     assert "原低位池资格·与接力池共用名额·待竞价裁决" in txt
-    assert "只看不买·不占接力名额" in txt
+    # 该行 buyable=True → 走「原低位池资格」分支；「只看不买」只对未获资格的行出现
+    assert "原低位池资格" in txt
     assert "原风险说明" in txt and "不可买" in txt
     assert "今天对上了没" not in txt
     assert payload == before
@@ -95,9 +98,10 @@ def test_empty_payload_renders_nothing():
 
 def test_new_direction_block_basics():
     txt = _full(_payload(offpool_high_ident=[], review_directions={}))
-    assert "新方向首板" in txt
-    assert "长城军工(601606)" in txt
-    assert "不占接力名额" in txt
+    assert "新方向" in txt and "已进池" in txt
+    assert "长城军工" in txt and "万丰奥威" in txt
+    # 2026-11-11 起新方向「真入池」，文案改为「已进池·明早竞价定」
+    assert "明早竞价" in txt
 
 
 def test_review_block_shows_hit_and_miss():

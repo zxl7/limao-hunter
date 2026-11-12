@@ -73,8 +73,9 @@ def test_day_rows_covers_whole_zt_pool(fixture_dirs):
 def test_gate_and_pool_judgement_layers(fixture_dirs):
     log_dir, live_dir = fixture_dirs
     d1 = {r["code"]: r for r in jt.day_rows("2026-09-24", log_dir=log_dir, live_dir=live_dir)}
-    # 1.2 亿 < 1~2 板门槛(1.5 亿，2026-11-03 由 3.0 下调) → 被挡；池外不得有分数
-    assert d1["603278"]["gate"] == "below_floor"
+    # 🔴 2026-11-11 用户「5 亿限制全系统清除」：1.2 亿不再被成交额门槛挡
+    #    → gate 走 pass；池外仍不得有分数（这一条不变）。
+    assert d1["603278"]["gate"] == "pass"
     assert d1["603278"]["pool"] is None
     assert d1["603278"]["score"] is None
     assert d1["603278"]["verdict"] is None
@@ -129,20 +130,21 @@ def test_missing_pool_returns_empty(tmp_path):
 #   在旧门槛下正是被判 below_floor 的那一只——案例本身就被自己的门槛误杀。
 # ═══════════════════════════════════════════════════════════════════════════
 def test_floor_lowered_keeps_daye_first_board():
+    """🔴 2026-11-11「5 亿全系统清除」后：`turnover_floor` 恒为数据防呆线 0.05 亿。
+
+    旧口径（低位 1.5 / 高位 5.0）保留在 `*_LEGACY` 常量里，仅 `ENABLE_TURNOVER_FLOOR=1` 回退时使用。
+    """
     from pipelines import pipeline_eod as pe
-    assert pe.MIN_TURNOVER_YI_LOW_BOARD == 1.5, "低位门槛应为 1.5 亿"
-    assert pe.turnover_floor(1) == 1.5
-    assert pe.turnover_floor(2) == 1.5
-    # ⛔ 高位不放宽（高位缩量是另一回事，⛔ 不与低位同一条线）
-    assert pe.turnover_floor(3) == 5.0
-    assert pe.turnover_floor(6) == 5.0
-    # ⛔ 板数缺失不开口子
-    assert pe.turnover_floor(0) == 5.0
-    assert pe.turnover_floor(None) == 5.0
+    assert pe.MIN_TURNOVER_YI == 0.05
+    assert pe.turnover_floor(1) == 0.05
+    assert pe.turnover_floor(6) == 0.05
+    assert pe.turnover_floor(0) == 0.05
+    assert pe.turnover_floor(None) == 0.05
 
 
 def test_floor_can_be_rolled_back(monkeypatch):
-    """`ENABLE_TURNOVER_BY_STAGE=0` → 一键回纯 5 亿旧行为（可逆铁律）。"""
+    """回退口径：`ENABLE_TURNOVER_FLOOR=1` + 分阶段关 → 恢复 5 亿旧门槛。"""
     from pipelines import pipeline_eod as pe
+    monkeypatch.setenv("ENABLE_TURNOVER_FLOOR", "1")
     monkeypatch.setenv("ENABLE_TURNOVER_BY_STAGE", "0")
     assert pe.turnover_floor(1) == 5.0

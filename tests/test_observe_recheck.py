@@ -154,15 +154,19 @@ def test_finalize_stamps_recheck_class_without_changing_identity():
 
 
 # ── ②③④ 硬闸 / 个股级准入：复核留痕但仍不买 ─────────────────────────────
-@pytest.mark.parametrize("kind", ["hard_one_word", "hard_thin", "hard_st", "restricted"])
-def test_hard_and_restricted_are_rechecked_then_still_watch(kind):
+@pytest.mark.parametrize("kind,gap", [
+    # 🕯 2026-11-12：一字龙头开 +3% 属「次日低吸窗口」→ 会参与；
+    #    本用例锁「硬闸仍不买」，所以给它 +7%（窗口外）。
+    ("hard_one_word", 7.0), ("hard_thin", 3.0), ("hard_st", 3.0), ("restricted", 3.0),
+])
+def test_hard_and_restricted_are_rechecked_then_still_watch(kind, gap):
     r = _watch("000001", kind=kind)
-    res = _call([r], amt=2.0, gap=3.0)
+    res = _call([r], amt=2.0, gap=gap)
     v = res["views"][str(r["code"])]
     assert v["view"] == "watch"
     assert v["participation_eligibility"] == "observe_only"
     rc = v["auction_recheck"]
-    assert rc["gap_pct"] == pytest.approx(3.0, abs=0.05)
+    assert rc["gap_pct"] == pytest.approx(gap, abs=0.05)
     assert rc["amount_yi"] == 2.0 and rc["volume_band"] == "full"
     assert "今早开" in v["reason"] and "量足" in v["reason"]
     assert res["meta"]["recheck"]["observed"] == 1
@@ -253,5 +257,7 @@ def test_mixed_pool_meta_counts_all_observe_tickets():
         ["state", "hard_one_word", "hard_thin", "restricted", "state_turnover"], 1)]
     res = _call(rows, amt=2.0, gap=3.0)
     rc = res["meta"]["recheck"]
-    assert rc["observed"] == 5 and rc["state_entered"] == 2
-    assert set(rc["participated"]) <= {"000001", "000005"}
+    # 🕯 2026-11-12：一字龙头开 +3%（2~5% 低吸窗口）→ 也进入完整裁决
+    #    ⇒ state_entered 2 → 3；参与集合可能包含 000002（一字票）。
+    assert rc["observed"] == 5 and rc["state_entered"] == 3
+    assert set(rc["participated"]) <= {"000001", "000002", "000005"}
