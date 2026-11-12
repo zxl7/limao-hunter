@@ -110,6 +110,12 @@ def _maybe_push_plan(day: str, *, dry: bool) -> None:
     l1 = [r for r in (res.get("rows") or []) if r["boards"] == 1 and r["likely"]][:4]
     l2 = [r for r in (res.get("rows") or []) if r["boards"] == 2 and r["likely"]][:4]
     rows = []
+    # 🧩 若 09:25 已融合三层（机械×晋级率×催化），先报"最终可买"
+    _buy = [v for v in (res.get("verdicts") or []) if v.get("conclusion") == "可买"]
+    if _buy:
+        rows.append("**🧩 最终可买**（机械过 + 晋级率≥40% + 催化不弱）：")
+        rows += [f"  {v.get('priority')} {v.get('name')}({v.get('code')}) 晋级{v.get('pct'):.0f}%·催化{v.get('catalyst')}"
+                 for v in _buy[:4]]
     if l2:
         rows.append("**🔁 二进三**（定心·不加仓）：")
         rows += [f"  {r['name']} 竞价{r['gap']:+.1f}% → 晋级 {r['pct']:.0f}%" for r in l2]

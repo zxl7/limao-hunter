@@ -770,13 +770,27 @@ def run_verify(
                     _rows = _plan.get("rows") or []
                     _l1 = [r for r in _rows if r["boards"] == 1 and r["likely"]][:3]
                     _l2 = [r for r in _rows if r["boards"] == 2 and r["likely"]][:3]
+                    # 🧩 最终结论 = 机械闸 × 晋级率 × LLM 催化
+                    from core import final_verdict as _fv
+                    _lvl = {}
+                    if _catalyst:
+                        _lvl = {str(k): str((v or {}).get("level") or "unknown")
+                                for k, v in (_catalyst.get("themes") or {}).items()}
+                    _verdicts = _fv.decide(_rows, pool_res.get("views") or {}, _lvl)
+                    _plan["verdicts"] = _verdicts
+                    (ROOT.parent / "cache" / f"promotion_plan_{trade_date10}.json").write_text(
+                        json.dumps(_plan, ensure_ascii=False, indent=1), encoding="utf-8")
                     pool_res.setdefault("meta", {})["promotion_plan"] = {
                         "count": _plan.get("count"), "prev": _plan.get("prev"),
-                        "likely_1to2": _l1, "likely_2to3": _l2}
+                        "likely_1to2": _l1, "likely_2to3": _l2,
+                        "buyable": [v for v in _verdicts if v["conclusion"] == "可买"][:5]}
                     def _fmt(rs):
                         return "、".join(f"{r['name']} {r['gap']:+.1f}%→{r['pct']:.0f}%" for r in rs) or "无"
                     print(f"[VERIFY] 一进二预案（大概率）：{_fmt(_l1)}")
                     print(f"[VERIFY] 二进三预案（大概率）：{_fmt(_l2)}")
+                    _buy = [v for v in _verdicts if v["conclusion"] == "可买"]
+                    print("[VERIFY] 🧩 最终可买：" + ("、".join(
+                        f"{v['name']}({v['code']}) 晋级{v['pct']:.0f}%·催化{v['catalyst']}" for v in _buy[:4]) or "无"))
                 except Exception as _e:  # noqa: BLE001
                     print(f"[VERIFY] 晋级预案跳过：{_e}")
 
