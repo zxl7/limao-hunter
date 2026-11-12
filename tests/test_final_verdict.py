@@ -14,10 +14,10 @@ from core import final_verdict as fv  # noqa: E402
 
 
 def _rows():
-    return [{"code": "A", "name": "甲", "pct": 59.3, "theme": "机器人"},
-            {"code": "B", "name": "乙", "pct": 64.5, "theme": "光通信"},
-            {"code": "C", "name": "丙", "pct": 30.0, "theme": "机器人"},
-            {"code": "D", "name": "丁", "pct": 50.0, "theme": "PCB板"}]
+    return [{"code": "A", "name": "甲", "pct": 59.3, "theme": "机器人", "boards": 1},
+            {"code": "B", "name": "乙", "pct": 64.5, "theme": "光通信", "boards": 1},
+            {"code": "C", "name": "丙", "pct": 10.0, "theme": "机器人", "boards": 1},
+            {"code": "D", "name": "丁", "pct": 50.0, "theme": "PCB板", "boards": 1}]
 
 
 def test_three_way_rule():
@@ -29,7 +29,7 @@ def test_three_way_rule():
     out = {x["code"]: x for x in fv.decide(_rows(), views, cat)}
     assert out["A"]["conclusion"] == "可买"
     assert out["B"]["conclusion"] == "观察"      # 机械未过
-    assert out["C"]["conclusion"] == "不买"      # 晋级率不足
+    assert out["C"]["conclusion"] == "不买"      # 低于 1 板基准 16.3%
     assert out["D"]["conclusion"] == "不买"      # 机械 skip
 
 
@@ -63,3 +63,17 @@ def test_llm_actions_override():
     assert out["A"]["conclusion"] == "可买" and "LLM" in out["A"]["why"]
     assert out["B"]["conclusion"] == "不买" and "LLM 放弃" in out["B"]["why"]
     assert out["C"]["conclusion"] == "观察" and "LLM 观察" in out["C"]["why"]
+
+
+def test_tracks_split_conflict():
+    """低吸轨=机械自决；打板轨=高开未封死；互不否决。"""
+    rows = [{"code": "600001", "name": "低吸票", "pct": 21.9, "boards": 1, "gap": 3.6},
+            {"code": "600002", "name": "打板票", "pct": 59.3, "boards": 1, "gap": 8.0},
+            {"code": "600003", "name": "封死票", "pct": 64.5, "boards": 2, "gap": 10.0}]
+    views = {"600001": {"view": "participate"}, "600002": {"view": "skip"},
+             "600003": {"view": "skip"}}
+    out = {x["code"]: x for x in fv.decide_tracks(rows, views, {})}
+    assert out["600001"]["track"] == "低吸轨" and out["600001"]["conclusion"] == "可买"
+    assert out["600002"]["track"] == "打板轨" and out["600002"]["conclusion"] == "可买"
+    # 封死（gap 10 ≥ 9.5）买不到 → 不进打板轨
+    assert out["600003"]["conclusion"] == "观察"
