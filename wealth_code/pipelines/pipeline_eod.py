@@ -2614,6 +2614,10 @@ def run_eod(
                 continue
             if _c.startswith("688") or "ST" in str(_it.get("name") or "").upper():
                 continue
+            # 🚫 缺题材归属不配进观察池（2026-11-12 用户「三钢闽光连观察池都不配」）
+            _ct = str(_it.get("core_theme") or "").strip().lower()
+            if _ct in {"", "-", "—", "其他", "无", "未知", "none", "null"}:
+                continue
             try:
                 _g = json.loads((ROOT / "cache" / "zt_genes"
                                  / f"gene_{_c}.json").read_text(encoding="utf-8"))

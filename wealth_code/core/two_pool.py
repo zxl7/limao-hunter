@@ -32,7 +32,7 @@ def observation_only(row):
 # ⛔ 保守白名单：只有明确属于「状态类」的降级才允许被竞价新证据解锁；
 #    其余一律只复核留痕、不放行。竞价能推翻市场/状态级判断，推不翻事实权限
 #    与有回测证据的个股赔率闸（10-28 冰点解冻同一铁律）。
-RECHECK_HARD_GROUPS = {"最高板封单过薄", "一字龙头", "一字核心", "容量核心"}
+RECHECK_HARD_GROUPS = {"最高板封单过薄", "一字龙头", "一字核心", "容量核心", "首板观察"}
 RECHECK_HARD_MARKS = ("封单只占流通", "一字封死买不进", "一字封死、厚封单", "薄封")
 RECHECK_STATE_GROUPS = {"过筛未过·只观察"}
 
@@ -123,7 +123,10 @@ def all_tradeable_enabled() -> bool:
 
     回退：`POOL_CALL_ALL_TRADEABLE=0` → 逐字回到「只有 state 类能翻案」。
     """
-    return os.environ.get("POOL_CALL_ALL_TRADEABLE", "1") != "0"
+    # 🔴 2026-11-12 用户：「09:25 裁决完全没有参考明日裁决的东西，很不合理…要修改逻辑的」。
+    #    → 默认 **0**：盘后判定为「只观察」的票，09:25 不得翻案买入；
+    #      只有 `state` 类（历史连板修复）保留复核权。回退 `POOL_CALL_ALL_TRADEABLE=1`。
+    return os.environ.get("POOL_CALL_ALL_TRADEABLE", "0") != "0"
 
 
 def rechecked_entry(row: dict | None) -> bool:
