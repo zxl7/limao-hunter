@@ -47,9 +47,21 @@ def test_fullpos_requires_data():
     assert pe.fullpos_cap(index_ok=True, sector_ok=False, stock_ok=True)["cap"] == 0.8
 
 
-def test_combine_takes_min_and_names_driver():
+def test_combine_takes_min_and_names_driver(monkeypatch):
+    monkeypatch.setattr(pe, "phase_cap", lambda: {"cap": 1.0, "phase": "advancing", "why": "test"})
     r = pe.combine(win_rate=0.8, odds=1.2, returns=[0.01, -0.005],
                    fb={"broken_rate": 40, "nuke_count": 5},
                    index_ok=True, sector_ok=True, stock_ok=True)
     # edge=0.96→满仓1.0；streak=1.0；crash=1.0；fullpos=1.0 → 取小 1.0
     assert r["exposure"] == 1.0
+
+
+def test_phase_cap_present_and_bounded():
+    r = pe.phase_cap()
+    assert 0.0 <= r["cap"] <= 1.0
+    assert r["phase"] in (None, "advancing", "bottom", "high_vol", "ebbing", "unknown")
+
+
+def test_combine_includes_phase():
+    s = pe.combine(win_rate=None, odds=None, returns=[0.01])
+    assert "phase" in s["coeffs"] and s["exposure"] <= s["coeffs"]["phase"]

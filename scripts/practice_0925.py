@@ -85,7 +85,29 @@ def run_day(day: str, *, use_llm: bool) -> dict:
         if tp.exists():
             llm = {str(x.get("code")): x for x in
                    (json.loads(tp.read_text(encoding="utf-8")).get("picks") or [])}
-    vs = fv.decide_tracks(plan.get("rows") or [], views, lv, llm)
+    # 🏛⚡🔄 三层
+    from core import sector_hierarchy as sh2, accel as ac2, weak_to_strong as ws2
+    zt_rows = json.loads((ROOT / "cache" / "zt_history" / f"zt_{day}.json").read_text(encoding="utf-8"))["zt_list"]
+    snap = {}
+    try:
+        snap = json.loads((ROOT / "cache" / "theme_snapshot" / f"theme_{day}.json").read_text(encoding="utf-8")).get("mapping") or {}
+    except Exception:  # noqa: BLE001
+        pass
+    def _th(r):
+        m = snap.get(str(r.get("code"))) or {}
+        return str(m.get("theme_base") or m.get("theme") or r.get("core_theme") or r.get("sector") or "—")
+    hier = sh2.classify(zt_rows, _th)
+    prev = ws2._prev_zt(day)
+    acc = {}
+    w2s = {}
+    for _r in (plan.get("rows") or []):
+        _c = str(_r.get("code"))
+        acc[_c] = ac2.accel_of(_c, day)
+        ap = (rd["quotes"].get(_c) or {}).get("auction_price")
+        pc = (rd["quotes"].get(_c) or {}).get("prev_close")
+        g = round((ap / pc - 1) * 100, 2) if ap and pc else None
+        w2s[_c] = ws2.judge(_c, day, g, prev=prev)
+    vs = fv.decide_tracks(plan.get("rows") or [], views, lv, llm, hier, acc, w2s)
     buys = [v for v in vs if v["conclusion"] == "可买"]
     zt = {str(r.get("code")) for r in (json.loads(
         (ROOT / "cache" / "zt_history" / f"zt_{day}.json").read_text(encoding="utf-8"))["zt_list"])}

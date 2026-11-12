@@ -77,3 +77,20 @@ def test_tracks_split_conflict():
     assert out["600002"]["track"] == "打板轨" and out["600002"]["conclusion"] == "可买"
     # 封死（gap 10 ≥ 9.5）买不到 → 不进打板轨
     assert out["600003"]["conclusion"] == "观察"
+
+
+def test_global_daily_cap(monkeypatch):
+    monkeypatch.setattr(fv, "MAX_DAILY_PICKS", 2, raising=False)
+    rows = [{"code": str(i), "name": f"票{i}", "pct": 50 + i, "boards": 1, "gap": 5.0} for i in range(4)]
+    views = {str(i): {"view": "participate"} for i in range(4)}
+    out = fv.decide_tracks(rows, views, {})
+    assert sum(1 for x in out if x["conclusion"] == "可买") == 2
+    assert [x["priority"] for x in out if x["conclusion"] == "可买"] == ["P1", "P2"]
+
+
+def test_rank_bonus_can_promote():
+    rows = [{"code": "A", "name": "总龙", "pct": 54, "boards": 1, "gap": 5.0},
+            {"code": "B", "name": "普通", "pct": 55, "boards": 1, "gap": 5.0}]
+    views = {c: {"view": "participate"} for c in "AB"}
+    out = fv.decide_tracks(rows, views, {}, None, {"A": {"role": "总龙"}})
+    assert out[0]["code"] == "A" and out[0]["bonus"] >= 3

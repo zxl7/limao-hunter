@@ -126,15 +126,23 @@ def compose(day: str, *, run_llm: bool = True, register: bool = False,
     if catp.exists():
         lv = {k: (v or {}).get("level") for k, v in
               (json.loads(catp.read_text(encoding="utf-8")).get("themes") or {}).items()}
-    vs = fv.decide(rows_all, freeze, lv, llm)
+    # 🏛⚡🔄 地位/加速/弱转强（读 09:25 冻结件里的 meta；缺失则空）
+    _meta = {}
+    if fz.exists():
+        _meta = json.loads(fz.read_text(encoding="utf-8")).get("meta") or {}
+    vs = fv.decide_tracks(rows_all, freeze, lv, llm,
+                          _meta.get("hierarchy") or {}, _meta.get("accel") or {},
+                          _meta.get("weak_to_strong") or {})
     buys = [v for v in vs if v["conclusion"] == "可买"]
 
     body: list[str] = []
     body.append("**🧠 最终裁决**" + ("：" if buys else "：今天不买"))
     if buys:
         for v in buys[:3]:
-            body.append(f"  {v['priority']} {v['name']}({v['code']}) 晋级{v['pct']:.0f}% "
-                        f"· 催化{v['catalyst']} · {v['why'][:48]}")
+            _tags = "".join(x for x in (v.get("role"), v.get("accel") if v.get("accel") in ("加速", "减速") else None,
+                                        "弱转强" if v.get("w2s") == "弱转强" else None) if x)
+            body.append(f"  {v['priority']} {v['name']}({v['code']}) {v['track']} 晋级{v['pct']:.0f}% "
+                        f"· 催化{v['catalyst']}" + (f" · {_tags}" if _tags else ""))
     else:
         reason = "机械未过 / 晋级率不足 / 催化弱 / LLM 放弃"
         body.append(f"  —— 四层无一同时满足（{reason}）")

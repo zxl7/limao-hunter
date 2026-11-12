@@ -770,13 +770,49 @@ def run_verify(
                     _rows = _plan.get("rows") or []
                     _l1 = [r for r in _rows if r["boards"] == 1 and r["likely"]][:3]
                     _l2 = [r for r in _rows if r["boards"] == 2 and r["likely"]][:3]
-                    # 🧩 最终结论 = 机械闸 × 晋级率 × LLM 催化
+                    # 🧩 最终结论 = 机械闸 × 晋级率 × 催化 × 地位/加速/弱转强
                     from core import final_verdict as _fv
+                    from core import sector_hierarchy as _sh, accel as _ac, weak_to_strong as _ws
                     _lvl = {}
                     if _catalyst:
                         _lvl = {str(k): str((v or {}).get("level") or "unknown")
                                 for k, v in (_catalyst.get("themes") or {}).items()}
-                    _verdicts = _fv.decide(_rows, pool_res.get("views") or {}, _lvl)
+                    # 🏛 地位分层（当日涨停池，按题材）
+                    try:
+                        _zt_rows = _load_full_zt_rows(date10)
+                        _snap = {}
+                        try:
+                            _snap = json.loads((ROOT.parent / "cache" / "theme_snapshot" /
+                                                f"theme_{date10}.json").read_text(encoding="utf-8")).get("mapping") or {}
+                        except Exception:  # noqa: BLE001
+                            _snap = {}
+                        def _th_of(r):
+                            m = _snap.get(str(r.get("code"))) or {}
+                            return str(m.get("theme_base") or m.get("theme") or r.get("core_theme") or r.get("sector") or "—")
+                        _hier = _sh.classify(_zt_rows, _th_of)
+                    except Exception:  # noqa: BLE001
+                        _hier = {}
+                    # ⚡ 加速 / 🔄 弱转强
+                    _acc = {}
+                    _w2s = {}
+                    try:
+                        _prev = _ws._prev_zt(trade_date10)
+                        for _r in _rows:
+                            _c = str(_r.get("code"))
+                            _acc[_c] = _ac.accel_of(_c, date10)
+                            _q = (quotes or {}).get(_c) or {}
+                            _ap, _pc = _q.get("auction_price"), _q.get("prev_close")
+                            _g = round((_ap / _pc - 1) * 100, 2) if _ap and _pc else None
+                            _w2s[_c] = _ws.judge(_c, trade_date10, _g, prev=_prev)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    _verdicts = _fv.decide_tracks(_rows, pool_res.get("views") or {}, _lvl, None,
+                                                  _hier, _acc, _w2s)
+                    pool_res.setdefault("meta", {})["hierarchy"] = {
+                        c: v for c, v in _hier.items() if v.get("role") in ("总龙", "阶段龙", "补涨龙")}
+                    pool_res["meta"]["accel"] = {c: v.get("state") for c, v in _acc.items()}
+                    pool_res["meta"]["weak_to_strong"] = {
+                        c: v.get("state") for c, v in _w2s.items() if v.get("state") == "弱转强"}
                     _plan["verdicts"] = _verdicts
                     (ROOT.parent / "cache" / f"promotion_plan_{trade_date10}.json").write_text(
                         json.dumps(_plan, ensure_ascii=False, indent=1), encoding="utf-8")

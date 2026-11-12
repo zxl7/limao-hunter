@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +122,7 @@ def combine(*, win_rate: float | None = None, odds: float | None = None,
         win_rate = None
     parts = {
         "edge": edge_tier(win_rate, odds),
+        "phase": phase_cap(),
         "streak": streak_coeff(list(returns or [])),
         "crash": crash_cap(fb),
         "fullpos": fullpos_cap(index_ok=index_ok, sector_ok=sector_ok, stock_ok=stock_ok),
@@ -128,7 +130,8 @@ def combine(*, win_rate: float | None = None, odds: float | None = None,
     coeffs = {"edge": parts["edge"]["max_position"],
               "streak": parts["streak"]["coeff"],
               "crash": parts["crash"]["cap"],
-              "fullpos": parts["fullpos"]["cap"]}
+              "fullpos": parts["fullpos"]["cap"],
+              "phase": parts["phase"]["cap"]}
     exposure = min(coeffs.values())
     driver = min(coeffs, key=lambda k: coeffs[k])
     return {"exposure": round(exposure, 3), "driver": driver,
@@ -147,6 +150,10 @@ def load_returns(n: int = 20) -> list[float]:
             if isinstance(r.get("avg_return_pct"), (int, float))]
     return vals
 
+
+# 🧭 周期→暴露（2026-11-12 两篇方法论并入）：主升多做、退潮少做、冰点几乎不做
+PHASE_CAP = {"advancing": 1.0, "bottom": 0.6, "high_vol": 0.5, "ebbing": 0.2, "unknown": 0.8}
+PHASE_EXPOSURE = os.environ.get("PHASE_EXPOSURE", "1") != "0"
 
 MIN_EDGE_SAMPLES = 30      # ⛔ 样本 <30 不调参（§6 护栏）→ 赢面不出结论
 
@@ -171,6 +178,21 @@ def rolling_edge(n: int = 20, *, min_samples: int = MIN_EDGE_SAMPLES) -> dict[st
     wr = len(wins) / len(rets)
     odds = (sum(wins) / len(wins)) / abs(sum(losses) / len(losses)) if wins and losses else None
     return {"win_rate": round(wr, 3), "odds": round(odds, 2) if odds else None, "n": len(rets)}
+
+
+def phase_cap() -> dict[str, Any]:
+    """周期阶段 → 暴露上限（取自 core/cycle_phase，缺数据 = 0.8 不猜）。"""
+    if not PHASE_EXPOSURE:
+        return {"cap": 1.0, "phase": None, "why": "开关关闭"}
+    try:
+        from core import cycle_phase as cp
+        res = cp.phase_of()
+        phase = str(res.get("phase") or "unknown")
+        cap = PHASE_CAP.get(phase, 0.8)
+        return {"cap": cap, "phase": phase,
+                "why": f"周期 {cp.PHASE_LABEL.get(phase, phase)} → 暴露上限 {cap}"}
+    except Exception as e:  # noqa: BLE001
+        return {"cap": 0.8, "phase": None, "why": f"周期不可用（{e}）→ 0.8"}
 
 
 def snapshot(fb_path: Path | None = None) -> dict[str, Any]:

@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import os
 from typing import Any
 
 # ⚖️ 2026-11-12 口径对齐：**不用绝对 40%**（会与机械端"空间闸≤6%"结构性冲突：
@@ -38,6 +39,9 @@ def decide(rows: list[dict], views: dict[str, Any] | None = None,
     views = views or {}
     cat = catalyst_levels or {}
     llm = llm_actions or {}
+    from core.sector_hierarchy import rank_bonus as _h_bonus
+    from core.accel import rank_bonus as _a_bonus
+    from core.weak_to_strong import rank_bonus as _w_bonus
     out = []
     for r in rows:
         code = str(r.get("code"))
@@ -99,10 +103,19 @@ def _buyable_gap(code: str, gap) -> bool:
     return float(gap) < seal
 
 
+MAX_DAILY_PICKS = int(os.environ.get("MAX_DAILY_PICKS", "2") or 2)   # 少即是多（文档原则 6）
+
+
 def decide_tracks(rows: list[dict], views: dict[str, Any] | None = None,
                   catalyst_levels: dict[str, str] | None = None,
-                  llm_actions: dict[str, dict] | None = None) -> list[dict]:
+                  llm_actions: dict[str, dict] | None = None,
+                  hierarchy: dict[str, dict] | None = None,
+                  accel: dict[str, dict] | None = None,
+                  weak_to_strong: dict[str, dict] | None = None) -> list[dict]:
     views = views or {}
+    from core.sector_hierarchy import rank_bonus as _h_bonus
+    from core.accel import rank_bonus as _a_bonus
+    from core.weak_to_strong import rank_bonus as _w_bonus
     cat = catalyst_levels or {}
     llm = llm_actions or {}
     out = []
@@ -116,9 +129,13 @@ def decide_tracks(rows: list[dict], views: dict[str, Any] | None = None,
         level = str(cat.get(theme) or "unknown")
         act = str((llm.get(code) or {}).get("action") or "").lower()
         thesis = str((llm.get(code) or {}).get("thesis") or "")
+        role = str((hierarchy or {}).get(code, {}).get("role") or "")
+        ast = str((accel or {}).get(code, {}).get("state") or "未知")
+        wst = str((weak_to_strong or {}).get(code, {}).get("state") or "")
+        bonus = _h_bonus(role) + _a_bonus(ast) + _w_bonus(wst)
         base = {"code": code, "name": r.get("name"), "theme": theme, "boards": b,
-                "gap": r.get("gap"), "pct": pct, "mech": mech, "catalyst": level, "llm": act or None}
-        # 低吸轨：机械过 + 高于板位均值 + 催化不弱 + LLM 不反对
+                "gap": r.get("gap"), "pct": pct, "mech": mech, "catalyst": level, "llm": act or None,
+                "role": role or None, "accel": ast, "w2s": wst or None, "bonus": bonus}
         # 低吸轨：机械闸**自己**说了算（晋级率只作展示，不再二次卡它）
         if mech == "participate" and level != "weak" and act != "skip":
             out.append({**base, "track": "低吸轨", "conclusion": "可买",
@@ -135,12 +152,14 @@ def decide_tracks(rows: list[dict], views: dict[str, Any] | None = None,
             why = ("晋级率 %s < 打板门槛 %.1f" % (pct, TOP_BAND.get(b, 37.5)))
             out.append({**base, "track": "—", "conclusion": "观察", "why": why})
     order = {"可买": 0, "观察": 1}
-    out.sort(key=lambda x: (order.get(x["conclusion"], 9), -(x.get("pct") or 0)))
+    out.sort(key=lambda x: (order.get(x["conclusion"], 9),
+                            -((x.get("pct") or 0) + (x.get("bonus") or 0))))
     n = 0
+    cap = MAX_DAILY_PICKS if MAX_DAILY_PICKS > 0 else 10 ** 6
     for x in out:
-        if x["conclusion"] == "可买" and n >= 2:
+        if x["conclusion"] == "可买" and n >= cap:
             x["conclusion"] = "观察"
-            x["why"] = "超出名额 2（按晋级率排序靠后）"
+            x["why"] = f"超出当日名额 {cap}（少即是多·文档原则 6）"
         if x["conclusion"] == "可买":
             n += 1
             x["priority"] = f"P{n}"
