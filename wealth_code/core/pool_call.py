@@ -222,9 +222,13 @@ POOL_CALL_GENE_LOOKBACK_DAYS = int(
 #   `_lo_top` 低开例外（低开 room 恒 > 涨停一半，天然不触发）。
 POOL_CALL_HIGH_GAP_REJECT = os.environ.get("POOL_CALL_HIGH_GAP_REJECT", "1") != "0"
 try:
-    HIGH_GAP_ROOM_MIN = float(os.environ.get("POOL_CALL_HIGH_GAP_ROOM", "0.5"))
+    HIGH_GAP_ROOM_MIN = float(os.environ.get("POOL_CALL_HIGH_GAP_ROOM", "0.4"))
 except ValueError:
-    HIGH_GAP_ROOM_MIN = 0.5
+    HIGH_GAP_ROOM_MIN = 0.4
+# 🔓 2026-11-12 用户「稍微倾斜优化，不用卡这么死」：0.5 → 0.4
+#    即「离涨停不足 4 个点才拒」≈ 允许高开到 +6%（原来 +5%）。
+#    实证：日出东方昨日一字、今日开 +5.26% 差 0.26 点被拒，随后涨停。
+#    回退：`POOL_CALL_HIGH_GAP_ROOM=0.5`（原口径）或 `1.0`（关闭）。
 
 # ── 🧮 当日整体开盘偏移修正 DEV（2026-11-06 用户「今天受外盘影响…低开是可以理解的」）──
 # 病根：`DEV = gap − E` 是**绝对**判据。外盘砸下来那天池内中位开幅 −1.5%，每只票的
@@ -375,6 +379,11 @@ CATALYST_SORT_WEIGHT = os.environ.get("CATALYST_SORT_WEIGHT", "1") != "0"
 CATALYST_POSITION_WEIGHT = os.environ.get("CATALYST_POSITION_WEIGHT", "1") != "0"
 CATALYST_RANK = {"strong": 2.0, "normal": 1.0, "unknown": 1.0, "weak": 0.0}
 CATALYST_SIZE = {"strong": 1.0, "normal": 0.85, "unknown": 1.0, "weak": 0.6}
+# 🔓 2026-11-12 用户「稍微倾斜优化，不用卡这么死」：
+#    同线二排比核心高开 ≥5 个点（核心明显转弱）→ 允许二排进裁决（半仓）。
+#    ⛔ 不是「核心买不到就推二排」；二排仍须自己量能/空间达标。
+POOL_CALL_CORE_WEAK_SECOND = os.environ.get("POOL_CALL_CORE_WEAK_SECOND", "1") != "0"
+CORE_WEAK_SECOND_DIFF = float(os.environ.get("POOL_CALL_CORE_WEAK_SECOND_DIFF", "5") or 5)
 # 🧊 2026-11-11 用户 D：一字板允许进接力池，但「没有换手」→ 明天买点要观察 + 降权。
 #    shadow 只标注；live（默认开）在分配仓位时**减半**并写进理由。
 POOL_CALL_ONE_WORD_DISCOUNT = os.environ.get("POOL_CALL_ONE_WORD_DISCOUNT", "1") == "1"
@@ -1722,6 +1731,14 @@ def call_pool(candidates: dict[str, Any] | None,
                 _dev_env_info["applied"] = True
         _dev_env_info["offset"] = round(_dev_env_offset, 2)
 
+    # 每条线核心与二排的竞价幅度对照（供「核心转弱→允许二排」判定）
+    _gap_by_code: dict[str, float] = {}
+    for _c in pool:
+        _code = str(_c.get("code") or "").strip()
+        _g = _gap_of(qs.get(_code))
+        if _code and isinstance(_g, (int, float)):
+            _gap_by_code[_code] = float(_g)
+
     for c in pool:
         code = str(c.get("code") or "").strip()
         name = str(c.get("name") or "")
@@ -1952,11 +1969,26 @@ def call_pool(candidates: dict[str, Any] | None,
                     "is_core": rank == 1,
                 }
                 if rank > 1:
-                    marks[code] = {**base, "view": "watch", "core_first_gate": True,
+                    # 🔓 2026-11-12 用户「核心弱了就降一档看看」：
+                    #    同线二排比核心高开 ≥5 个点（核心明显转弱）→ 允许二排进裁决，
+                    #    但必须自己量能达标、空间够（后面各闸照旧），仓位打半仓。
+                    #    ⛔ 不是「核心买不到就推二排」，是「核心走弱、二排独立走强」。
+                    _cg = _gap_by_code.get(str(leader_code or ""))
+                    _allow2 = bool(
+                        POOL_CALL_CORE_WEAK_SECOND
+                        and isinstance(gap, (int, float)) and isinstance(_cg, (int, float))
+                        and (float(gap) - float(_cg)) >= CORE_WEAK_SECOND_DIFF
+                    )
+                    if _allow2:
+                        base["core_weak_second"] = True
+                        base["core_weak_core_gap"] = round(float(_cg), 2)
+                        base["position_cap"] = min(float(base.get("position_cap") or 1.0), 0.5)
+                    else:
+                        marks[code] = {**base, "view": "watch", "core_first_gate": True,
                                    "dragon_gate": "deputy",
-                                   "reason": (f"同真实题材核心是{leader_name}，同板数不等于同地位；"
-                                              "不因核心开盘不可买而改推非核心 → 只观察")}
-                    continue
+                                       "reason": (f"同真实题材核心是{leader_name}，同板数不等于同地位；"
+                                                  "不因核心开盘不可买而改推非核心 → 只观察")}
+                        continue
 
         from core.two_pool import observation_only, recheck_class, all_tradeable_enabled, height_observation
         if height_observation(c):
@@ -1988,10 +2020,10 @@ def call_pool(candidates: dict[str, Any] | None,
                                "reason": c.get("watch_reason") or "板块观察参照，不参与交易"}
                 continue
             # 🕯 一字板次日低吸（2026-11-12 用户「毕竟它是光模块的…应该能低吸到」）：
-            #    昨天一字（买不到）的核心，今天开在 +2%~+5% → 允许走完整裁决链（同一套闸）。
+            #    昨天一字（买不到）的核心，今天开在 +2%~+6%（与空间闸 0.4 同口径） → 允许走完整裁决链（同一套闸）。
             _owg = str(c.get("watch_group") or "")
             _ow_low_gap = (_owg in ("一字核心", "一字龙头")
-                           and isinstance(gap, (int, float)) and 2.0 <= float(gap) <= 5.0)
+                           and isinstance(gap, (int, float)) and 2.0 <= float(gap) <= 6.0)
             if _ow_low_gap:
                 _recheck["verdict"] = "一字次日低吸窗口·进入完整竞价裁决"
                 base["recheck_class"] = "state"
@@ -2010,7 +2042,7 @@ def call_pool(candidates: dict[str, Any] | None,
                                  and float(gap) >= (19.5 if c.get("is_20cm") else 9.5))
                 if _owg in ("一字核心", "一字龙头") and isinstance(gap, (int, float)):
                     _why = (f"昨日一字，今日开 {float(gap):+.2f}%"
-                            "（低吸窗口 +2%~+5% 之外）")
+                            "（低吸窗口 +2%~+6% 之外）")
                 elif _cls == "restricted":
                     _why = "盘后没过接力准入"
                 elif _sealed_today:
