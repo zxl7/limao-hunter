@@ -58,6 +58,12 @@ TEMPLATE = """今天是 {day}。请评估下面这些题材的**催化强度**�
 {{"themes": {{"题材名": {{"catalyst": 0.0-1.0, "level": "strong|normal|weak|unknown",
   "basis": "一句话依据", "sources": ["来源1"]}}}}}}
 
+交易口径（来自交易员技能，必须遵守）：
+- 情绪第一：题材只是「方向」，不能替代情绪；情绪退潮时强题材也可能核按钮。
+- 题材逻辑只支撑首板/二板；三板以上讲的是情绪和资金，不再讲逻辑。
+- 流通盘 30~50 亿最容易走出连板（数据：晋级率 41.5%，>100 亿只有 19%）。
+- 打分只回答「这条线明天值不值得关注」，⛔ 不回答买哪只、买不买。
+
 判分口径：
 - strong (>=0.65)：有明确政策/产业/公司级催化，且能解释这条线今天的强度
 - normal (0.35~0.65)：只有间接或常规催化
@@ -154,6 +160,8 @@ def call_llm(prompt: str) -> dict | None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="题材催化强度（LLM）")
     ap.add_argument("--date", default=None)
+    ap.add_argument("--next", action="store_true",
+                    help="写下一交易日（盘后跑用这个；09:25 读的就是执行日文件）")
     ap.add_argument("--dry-run", action="store_true", help="只打印 prompt，不调用")
     ap.add_argument("--validate", default=None, help="校验已有 ai_advice 文件")
     ap.add_argument("--write-stdin", action="store_true",
@@ -197,7 +205,17 @@ def main(argv=None) -> int:
             print(f"  {name}: {v['level']} ({v['catalyst']}) {v['basis'][:40]}")
         return 0
 
-    day = args.date or _bj().strftime("%Y-%m-%d")
+    if args.date:
+        day = args.date
+    elif args.next:
+        try:
+            sys.path.insert(0, str(ROOT))
+            from common.trading_calendar import next_a_share_trading_day
+            day = next_a_share_trading_day(_bj().strftime("%Y-%m-%d")) or _bj().strftime("%Y-%m-%d")
+        except Exception:  # noqa: BLE001
+            day = _bj().strftime("%Y-%m-%d")
+    else:
+        day = _bj().strftime("%Y-%m-%d")
     prompt = build_prompt(day)
     if args.dry_run:
         print(prompt)
