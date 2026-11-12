@@ -243,3 +243,11 @@ if [[ "$TODAY_D" != "$LAST_ARCH" ]]; then
   find "$ARCH_DIR" -type f -name "*.log" -mtime +10 -delete 2>/dev/null
   echo "[$(date '+%H:%M:%S')] logs archived → logs/ (retain=10d)" >> "$LOG"
 fi
+
+# 🔔 一进二打板提醒（2026-11-12 用户「一进二打板·二进三定心·提前提醒」）
+#    读上一交易日候选 `cache/first_to_second_<date>.json`，盘中每轮检查实时涨幅：
+#    逼近涨停 → 「⚡ 可打板准备」；封板 → 「🔔 已封板」。每票每档只推一次。
+#    ⛔ 只提醒不下单；非交易时段脚本自行跳过；开关 ENABLE_FIRST_TO_SECOND_ALERT=0。
+if [ "${ENABLE_FIRST_TO_SECOND_ALERT:-1}" != "0" ]; then
+  "$PY" scripts/first_to_second_alert.py >> cache/pulse_snapshots/fts_alert.log 2>&1 || true
+fi
