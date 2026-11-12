@@ -234,20 +234,35 @@ def test_first_board_with_carry_still_goes_watch():
 
 
 # ── ④ 两条豁免：缺数据 / 小题材 ─────────────────────────────────────────
-def test_theme_missing_group_is_not_eliminated():
-    """⛔ 题材取不到 = 数据缺失，不是「它是杂毛」→ 全留，不许拿缺失当证据砍票。"""
-    relay = [_row("600001", "无题材甲", 2, 3, theme=""),
-             _row("600002", "无题材乙", 2, 2, theme=""),
-             _row("600003", "无题材丙", 1, 1, theme="")]
+def test_theme_missing_group_is_dropped():
+    """🔴 2026-11-12 用户改口径：「缺题材归属的直接 pass，不该进裁决池」。
 
+    ⛔ 旧口径（缺数据≠不利证据，全留）已废止；回退 `POOL_ADMIT_REQUIRE_THEME=0`。
+    """
+    import os
+    relay = [_row("600001", "无题材甲", 2, 3, theme=""),
+             _row("600002", "无题材乙", 2, 2, theme="")]
     for r0 in relay:
         r0["core_theme"] = ""
         r0["theme_em_name"] = None
         r0["theme_name"] = None
+    os.environ.pop("POOL_ADMIT_REQUIRE_THEME", None)
     r, w, diag = pa.admit(relay, [])
-    assert len(r) + len(w) == 3
-    assert diag["theme_missing"] == 3
-    assert diag["dropped"] == 0
+    assert not (r + w)
+    assert set(diag["theme_dropped"]) == {"无题材甲", "无题材乙"}
+
+
+def test_theme_missing_switch_rolls_back():
+    """回退：POOL_ADMIT_REQUIRE_THEME=0 → 缺题材仍全留（旧口径）。"""
+    import os
+    os.environ["POOL_ADMIT_REQUIRE_THEME"] = "0"
+    try:
+        relay = [_row("600001", "无题材甲", 2, 3, theme="")]
+        relay[0]["core_theme"] = ""
+        r, w, _ = pa.admit(relay, [])
+        assert {x["name"] for x in r + w} == {"无题材甲"}
+    finally:
+        os.environ.pop("POOL_ADMIT_REQUIRE_THEME", None)
 
 
 def test_small_line_is_not_eliminated():

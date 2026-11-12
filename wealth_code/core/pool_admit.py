@@ -71,6 +71,9 @@ BIG_LINE_MATES_ENV = "POOL_ADMIT_BIG_MATES"
 GENE_MIN_ZT_ENV = "POOL_ADMIT_GENE_MIN_ZT"
 GENE_MAX_LBC_ENV = "POOL_ADMIT_GENE_MAX_LBC"
 GENE_DIR = "zt_genes"
+# 🚫 题材缺失不进池（2026-11-12 用户：「缺题材归属的直接 pass」）。
+#    ⛔ 与旧「缺数据≠不利证据」冲突 → 用户明确要求优先；回退 `POOL_ADMIT_REQUIRE_THEME=0`。
+REQUIRE_THEME_ENV = "POOL_ADMIT_REQUIRE_THEME"
 
 DEFAULT_PER_LINE = 3
 # ↳ 2026-11-11 用户「C 这个可以放宽到三个身位」→ 默认 3（每题材留前 3）。
@@ -491,6 +494,18 @@ def admit(relay: list[dict[str, Any]],
         _kept.append(r)
     pool = _kept
 
+    # 🚫 题材缺失闸（2026-11-12 用户）：没有真题材归属 → 不进池。
+    theme_dropped: list[str] = []
+    if str(os.environ.get(REQUIRE_THEME_ENV, "1")).strip().lower() not in ("0", "false", "off", "no"):
+        _t_keep: list[dict[str, Any]] = []
+        for r in pool:
+            _ct = str((r or {}).get("core_theme") or "").strip().lower()
+            if _ct in _THEME_EMPTY:
+                theme_dropped.append(str((r or {}).get("name") or (r or {}).get("code") or ""))
+                continue
+            _t_keep.append(r)
+        pool = _t_keep
+
     # 🧬 股性闸（2026-11-11 用户「股性差的不要推」）：涨停少 + 从没连过板 → 不进池。
     _g_min, _g_lbc = gene_min_zt(), gene_max_lbc()
     gene_dropped: list[str] = []
@@ -658,6 +673,7 @@ def admit(relay: list[dict[str, Any]],
         # 🎯 2026-11-11 用户 A：炸板 >5 不进池
         "max_zbc": _zbc_cap,
         "zbc_dropped": zbc_dropped,
+        "theme_dropped": theme_dropped,
         "gene_min_zt": _g_min,
         "gene_max_lbc": _g_lbc,
         "gene_dropped": gene_dropped,

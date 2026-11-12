@@ -98,3 +98,24 @@ def pytest_configure(config):
         target = TMP_DIR
     target.mkdir(parents=True, exist_ok=True)
     config.option.basetemp = str(target)
+
+
+# ── 2026-11-12 新增两道池子硬闸（首板只看不买 / 缺题材不裁决）───────────────
+# 历史契约测试的 fixture 大量是「1 板 + 没有 core_theme」的构造票，锁的是旧行为；
+# 这里默认把两道新闸**关掉**（=旧口径），只有专项测试模块显式打开验证新口径。
+NEW_POOL_GATE_MODULES = {"test_first_board_and_theme_gate"}
+
+
+@pytest.fixture(autouse=True)
+def _legacy_pool_gates_for_old_contracts(request, monkeypatch):
+    mod = request.module.__name__.rsplit(".", 1)[-1]
+    if mod in NEW_POOL_GATE_MODULES:
+        return
+    try:
+        from core import pool_call
+    except Exception:  # noqa: BLE001
+        return
+    for attr, val in (("POOL_CALL_FIRST_BOARD_BUY", True),
+                      ("POOL_CALL_REQUIRE_THEME", False)):
+        if hasattr(pool_call, attr):
+            monkeypatch.setattr(pool_call, attr, val)

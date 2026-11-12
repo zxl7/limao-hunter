@@ -371,6 +371,16 @@ CATALYST_MIN_LEVEL = os.environ.get("CATALYST_MIN_LEVEL", "normal").strip().lowe
 # 🧊 2026-11-11 用户 D：一字板允许进接力池，但「没有换手」→ 明天买点要观察 + 降权。
 #    shadow 只标注；live（默认开）在分配仓位时**减半**并写进理由。
 POOL_CALL_ONE_WORD_DISCOUNT = os.environ.get("POOL_CALL_ONE_WORD_DISCOUNT", "1") == "1"
+# 🚫 首板只看不买（2026-11-12 用户：「三钢闽光明明写的是只观察，结果被买了」）。
+#    判据：`watch_group == "首板观察"` 或（`boards==1` 且不是新方向首板槽）。
+#    回退：`POOL_CALL_FIRST_BOARD_BUY=1`。
+POOL_CALL_FIRST_BOARD_BUY = os.environ.get("POOL_CALL_FIRST_BOARD_BUY", "0") == "1"
+
+# 🚫 题材缺失不裁决（2026-11-12 用户：「缺题材归属的直接 pass，不该进裁决池」）。
+#    判据：`core_theme` 缺失或占位（"", "-", "—", "其他", "无"）。
+#    ⛔ 只挡「没有题材归属」的票，行业兜底（theme=普钢 这类）不算真题材。
+POOL_CALL_REQUIRE_THEME = os.environ.get("POOL_CALL_REQUIRE_THEME", "1") == "1"
+_THEME_MISSING = {"", "-", "—", "其他", "无", "未知", "none", "null"}
 BREADTH_MIN_SIZE = 8          # 少于这个家数的线不判广度（百分比无意义）
 BREADTH_DIVERGE_UNDER = 0.40  # 水下占比 ≥40% → 分化
 CORE_GATE_MIN_GAP = 2
@@ -2668,6 +2678,22 @@ def call_pool(candidates: dict[str, Any] | None,
             _filtered_by_state.append(code)
             marks[code] = {**base, "view": "watch",
                            "reason": "竞价未达系统强势档 → 人工二次机会，系统不记录"}
+            continue
+        # 🚫 题材缺失不裁决（2026-11-12 用户「缺题材直接 pass」）
+        if POOL_CALL_REQUIRE_THEME:
+            _ct = str(c.get("core_theme") or "").strip().lower()
+            if _ct in _THEME_MISSING:
+                marks[code] = {**base, "view": "watch", "core_theme": c.get("core_theme"),
+                               "reason": "缺题材归属（core_theme 为空/占位·行业兜底不算）→ 不进裁决，不买"}
+                continue
+        # 🚫 首板只看不买（2026-11-12 用户「明明写只观察，结果被买了」）
+        if (not POOL_CALL_FIRST_BOARD_BUY
+                and (str(c.get("watch_group") or "") == "首板观察"
+                     or (str(c.get("boards") or "").strip() in ("1", "1.0")
+                         and not c.get("new_direction_line")))):
+            marks[code] = {**base, "view": "watch",
+                           "watch_group": c.get("watch_group"),
+                           "reason": "首板只看不买（2026-11-11 口径：尽量从 2 板开始看）"}
             continue
         entries.append({**base, "view": "participate"})
         marks[code] = {**base, "view": "participate"}
