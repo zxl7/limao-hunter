@@ -119,6 +119,22 @@ def _maybe_push_plan(day: str, *, dry: bool) -> None:
     if not rows:
         rows = ["今天没有≥40% 概率的晋级标的（说明竞价普遍弱）。"]
     _push("🥇 竞价晋级预案", rows, dry=dry)
+    # 🔒 按晋级率排序登记买入（只登记，人工下单），并把建仓明细并进同一张卡
+    try:
+        import subprocess
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "streak_holdings.py"),
+                        "--open", "--day", day], check=False, timeout=60)
+        hp = ROOT / "cache" / "streak_holdings.json"
+        holds = json.loads(hp.read_text(encoding="utf-8")) if hp.exists() else {}
+        opened = [h for h in (holds.get("open") or []) if h.get("entry_date") == day]
+        if opened:
+            body = ["**🔒 今日建仓（按晋级率排序·不提前退出）**"]
+            for h in opened:
+                body.append(f"{h['priority']} {h['name']}({h['code']}) 晋级率 {h['entry_pct']}% "
+                            f"· {h['status']} · 断板提示：收盘未涨停即退出")
+            _push("🔒 今日建仓", body, dry=dry)
+    except Exception as e:  # noqa: BLE001
+        print(f"[fts] 开仓登记失败：{e}")
     st["_plan_pushed"] = True
     _save_state(day, st)
 

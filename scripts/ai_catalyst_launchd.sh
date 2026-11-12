@@ -24,6 +24,9 @@ cd "$ROOT" || exit 1
 #    ⛔ 只读计算，不依赖 LLM key；失败不影响后续催化链。
 "$PY" scripts/first_to_second_watch.py >> "$LOG" 2>&1 || log "first_to_second_watch 失败（不影响主链）"
 
+# 🔒 持仓结算：断板（收盘未涨停）→ 退出并推卡
+"$PY" scripts/streak_holdings.py --settle --push >> "$LOG" 2>&1 || log "streak_holdings 结算失败（不影响主链）"
+
 [ -f "$ENVF" ] || { log "未配置 ${ENVF}（缺 LLM_API_KEY）→ 跳过"; exit 0; }
 # shellcheck disable=SC1090
 . "$ENVF"
