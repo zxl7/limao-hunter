@@ -44,8 +44,9 @@ DEFAULT_ODDS = 1.5          # 赔率缺失时的中性值（原版默认 1.5）
 def edge_tier(win_rate: float | None, odds: float | None = None) -> dict[str, Any]:
     """`edge = 胜率 × 赔率` → 五档仓位上限。缺胜率 → 正常区（不猜）。"""
     if win_rate is None:
-        return {"edge": None, "tier": "未知区", "max_position": 0.50,
-                "why": "缺胜率样本 → 按正常区（不猜）"}
+        # ⛔ 没有样本 ≠ 利空：不约束（返回 1.0），否则会莫名其妙把所有仓位砍半
+        return {"edge": None, "tier": "未知区", "max_position": 1.0,
+                "why": "赢面无样本 → 不约束（不猜）"}
     p = max(0.0, min(1.0, float(win_rate)))
     o = float(odds) if isinstance(odds, (int, float)) and odds > 0 else DEFAULT_ODDS
     edge = round(p * o, 3)
@@ -99,19 +100,25 @@ def fullpos_cap(*, index_ok: bool | None = None,
     """满仓三条件；任一不满足 → 上限 0.8（原版：不允许满仓）。"""
     checks = {"index": index_ok, "sector": sector_ok, "stock": stock_ok}
     if any(v is None for v in checks.values()):
-        return {"cap": 0.8, "passed": False,
-                "why": "三条件数据不全（指数/板块/个股）→ 不允许满仓（0.8 上限）"}
+        # ⛔ 缺数据不猜、也不静默砍 20%：不约束（1.0），只记录"未能验证"。
+        #    等指数/板块数据接上后，本项才真正成为约束。
+        return {"cap": 1.0, "passed": False,
+                "why": "三条件数据不全（缺指数/板块）→ 不约束（缺数据不猜）"}
     if all(checks.values()):
         return {"cap": 1.0, "passed": True, "why": "三条件共振"}
     return {"cap": 0.8, "passed": False, "why": "三条件未全过 → 0.8 上限"}
 
 
 def combine(*, win_rate: float | None = None, odds: float | None = None,
+            edge_samples: int | None = None,
             returns: list[float] | None = None,
             fb: dict[str, Any] | None = None,
             index_ok: bool | None = None, sector_ok: bool | None = None,
             stock_ok: bool | None = None) -> dict[str, Any]:
     """四条的**取小**（不叠乘，避免过度收缩）。"""
+    # ⛔ 样本 <30 → 赢面不出结论（按正常区 0.5），避免小样本把仓位打到 0
+    if edge_samples is not None and edge_samples < MIN_EDGE_SAMPLES:
+        win_rate = None
     parts = {
         "edge": edge_tier(win_rate, odds),
         "streak": streak_coeff(list(returns or [])),
@@ -141,8 +148,11 @@ def load_returns(n: int = 20) -> list[float]:
     return vals
 
 
-def rolling_edge(n: int = 20) -> dict[str, Any]:
-    """近 n 日账本 → 胜率 / 赔率（赔率 = 平均盈利 / |平均亏损|）。"""
+MIN_EDGE_SAMPLES = 30      # ⛔ 样本 <30 不调参（§6 护栏）→ 赢面不出结论
+
+
+def rolling_edge(n: int = 20, *, min_samples: int = MIN_EDGE_SAMPLES) -> dict[str, Any]:
+    """近 n 日账本 → 胜率 / 赔率；样本 < min_samples → 返回 None（不猜）。"""
     p = ROOT / "wealth_code" / "cache" / "ai_nav_history.jsonl"
     try:
         rows = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
@@ -153,8 +163,9 @@ def rolling_edge(n: int = 20) -> dict[str, Any]:
         for s in (r.get("stocks") or []):
             if isinstance(s.get("return_pct"), (int, float)):
                 rets.append(float(s["return_pct"]))
-    if len(rets) < 10:
-        return {"win_rate": None, "odds": None, "n": len(rets)}
+    if len(rets) < min_samples:
+        return {"win_rate": None, "odds": None, "n": len(rets),
+                "why": f"样本 {len(rets)} < {min_samples}，赢面不出结论（按正常区）"}
     wins = [x for x in rets if x > 0]
     losses = [x for x in rets if x < 0]
     wr = len(wins) / len(rets)

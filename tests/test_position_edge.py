@@ -22,7 +22,8 @@ def test_edge_tiers():
 
 def test_edge_missing_is_neutral():
     r = pe.edge_tier(None)
-    assert r["max_position"] == 0.5 and "不猜" in r["why"]
+    # 无样本不约束（⛔ 不因"不知道"砍半仓）
+    assert r["max_position"] == 1.0 and "不猜" in r["why"]
 
 
 def test_streak_rule():
@@ -39,8 +40,9 @@ def test_crash_cap():
 
 
 def test_fullpos_requires_data():
-    # 缺数据 → 不许满仓（0.8），⛔ 不猜
-    assert pe.fullpos_cap()["cap"] == 0.8
+    # 缺数据 → 不约束（⛔ 不猜，也不静默砍 20%）
+    assert pe.fullpos_cap()["cap"] == 1.0
+    assert pe.fullpos_cap()["passed"] is False
     assert pe.fullpos_cap(index_ok=True, sector_ok=True, stock_ok=True)["cap"] == 1.0
     assert pe.fullpos_cap(index_ok=True, sector_ok=False, stock_ok=True)["cap"] == 0.8
 
