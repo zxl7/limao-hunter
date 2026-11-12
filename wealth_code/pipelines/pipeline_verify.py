@@ -761,6 +761,25 @@ def run_verify(
                     sector_gap=_sgc_ctx,
                     code_theme=_code_theme_pos,
                     relay_plan=_relay_plan)
+                # 🥇 晋级预案（2026-11-12 用户「竞价这里也要 1进2 / 2进3 预案」）
+                #    只读：上一交易日首板→一进二、2板→二进三；按当日竞价档给历史晋级率。
+                try:
+                    sys.path.insert(0, str(ROOT.parent / "scripts"))
+                    import promotion_plan as _pp
+                    _plan = _pp.build(trade_date10)
+                    _rows = _plan.get("rows") or []
+                    _l1 = [r for r in _rows if r["boards"] == 1 and r["likely"]][:3]
+                    _l2 = [r for r in _rows if r["boards"] == 2 and r["likely"]][:3]
+                    pool_res.setdefault("meta", {})["promotion_plan"] = {
+                        "count": _plan.get("count"), "prev": _plan.get("prev"),
+                        "likely_1to2": _l1, "likely_2to3": _l2}
+                    def _fmt(rs):
+                        return "、".join(f"{r['name']} {r['gap']:+.1f}%→{r['pct']:.0f}%" for r in rs) or "无"
+                    print(f"[VERIFY] 一进二预案（大概率）：{_fmt(_l1)}")
+                    print(f"[VERIFY] 二进三预案（大概率）：{_fmt(_l2)}")
+                except Exception as _e:  # noqa: BLE001
+                    print(f"[VERIFY] 晋级预案跳过：{_e}")
+
                 # ⚖️ 仓位/暴露控制（2026-11-12 吸收 quant-review 四条优点）
                 #    edge 五档 / 连续走弱降档 / 崩盘预警 / 满仓三条件 → 取小。
                 #    `EXPOSURE_MODE=off|shadow|live`（默认 shadow：只记录，不改仓位）。

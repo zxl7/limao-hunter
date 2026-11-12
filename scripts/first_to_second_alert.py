@@ -92,6 +92,37 @@ def _push(title: str, rows: list[str], *, dry: bool) -> None:
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def _maybe_push_plan(day: str, *, dry: bool) -> None:
+    """09:26~09:40 推一次「晋级预案」卡（一进二/二进三 大概率）。"""
+    now = datetime.now().time()
+    if not (time(9, 26) <= now <= time(9, 40)):
+        return
+    st = _load_state(day)
+    if st.get("_plan_pushed"):
+        return
+    try:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import promotion_plan as pp
+        res = pp.build(day)
+    except Exception as e:  # noqa: BLE001
+        print(f"[fts] 预案失败：{e}")
+        return
+    l1 = [r for r in (res.get("rows") or []) if r["boards"] == 1 and r["likely"]][:4]
+    l2 = [r for r in (res.get("rows") or []) if r["boards"] == 2 and r["likely"]][:4]
+    rows = []
+    if l2:
+        rows.append("**🔁 二进三**（定心·不加仓）：")
+        rows += [f"  {r['name']} 竞价{r['gap']:+.1f}% → 晋级 {r['pct']:.0f}%" for r in l2]
+    if l1:
+        rows.append("**🥇 一进二**（可打板）：")
+        rows += [f"  {r['name']} 竞价{r['gap']:+.1f}% → 晋级 {r['pct']:.0f}%〔{r.get('theme') or ''}〕" for r in l1]
+    if not rows:
+        rows = ["今天没有≥40% 概率的晋级标的（说明竞价普遍弱）。"]
+    _push("🥇 竞价晋级预案", rows, dry=dry)
+    st["_plan_pushed"] = True
+    _save_state(day, st)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
@@ -104,6 +135,7 @@ def main(argv=None) -> int:
     if not a.ignore_hours and not _is_trading_time(now):
         return 0
     day = _today()
+    _maybe_push_plan(day, dry=a.dry_run)
     watch = _load_watch(day, a.watch_date)
     picks = watch.get("picks") or []
     if not picks:
