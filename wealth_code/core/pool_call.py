@@ -380,6 +380,13 @@ POOL_CALL_FIRST_BOARD_BUY = os.environ.get("POOL_CALL_FIRST_BOARD_BUY", "0") == 
 #    判据：`core_theme` 缺失或占位（"", "-", "—", "其他", "无"）。
 #    ⛔ 只挡「没有题材归属」的票，行业兜底（theme=普钢 这类）不算真题材。
 POOL_CALL_REQUIRE_THEME = os.environ.get("POOL_CALL_REQUIRE_THEME", "1") == "1"
+# 🧓 老票高位节点（2026-11-12 用户：「像光洋这种老票，3 板是一个节点…这个位置只观察不要买」）。
+#    判据：近一年涨停 ≥8 次（股性老练）∧ 当前 ≥3 板 → 只观察，不买。
+#    ⛔ 只挡「老票的高位节点」，不挡新股/次新首板连板（它们没有历史包袱）。
+#    数据 `cache/zt_genes/gene_<code>.json`。
+POOL_CALL_OLD_STOCK_MIN_ZT = int(os.environ.get("POOL_CALL_OLD_STOCK_MIN_ZT", "8") or 8)
+POOL_CALL_OLD_STOCK_MIN_BOARDS = int(os.environ.get("POOL_CALL_OLD_STOCK_MIN_BOARDS", "3") or 3)
+POOL_CALL_OLD_STOCK_OBSERVE = os.environ.get("POOL_CALL_OLD_STOCK_OBSERVE", "1") != "0"
 _THEME_MISSING = {"", "-", "—", "其他", "无", "未知", "none", "null"}
 BREADTH_MIN_SIZE = 8          # 少于这个家数的线不判广度（百分比无意义）
 BREADTH_DIVERGE_UNDER = 0.40  # 水下占比 ≥40% → 分化
@@ -834,6 +841,18 @@ def load_theme_momentum(day: str, root: Path | None = None) -> dict[str, dict[st
     if not isinstance(themes, dict):
         return {}
     return {str(k): v for k, v in themes.items() if isinstance(v, dict)}
+
+
+def _gene_zt_n(code: str) -> int | None:
+    """读个股近一年涨停次数（`cache/zt_genes/gene_<code>.json`）；缺档案 → None。"""
+    import json as _json
+    try:
+        from pathlib import Path as _P
+        root = _P(__file__).resolve().parents[2]
+        d = _json.loads((root / "cache" / "zt_genes" / f"gene_{code}.json").read_text(encoding="utf-8"))
+        return int(d.get("zt_n") or 0)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def load_line_cores(date10: str, *, days: int = LINE_CORE_LOOKBACK_DAYS,
@@ -2696,6 +2715,21 @@ def call_pool(candidates: dict[str, Any] | None,
                 marks[code] = {**base, "view": "watch", "core_theme": c.get("core_theme"),
                                "reason": "缺题材归属（core_theme 为空/占位·行业兜底不算）→ 不进裁决，不买"}
                 continue
+        # 🧓 老票高位节点只观察（2026-11-12 用户「光洋这种老票 3 板是个节点，别买」）
+        if POOL_CALL_OLD_STOCK_OBSERVE:
+            try:
+                _b = int(c.get("boards"))
+            except (TypeError, ValueError):
+                _b = 0
+            if _b >= POOL_CALL_OLD_STOCK_MIN_BOARDS:
+                _ztn = _gene_zt_n(code)
+                if _ztn is not None and _ztn >= POOL_CALL_OLD_STOCK_MIN_ZT:
+                    marks[code] = {**base, "view": "watch", "old_stock_node": True,
+                                   "gene_zt_n": _ztn,
+                                   "reason": (f"老票高位节点：近一年涨停 {_ztn} 次、"
+                                              f"现已 {_b} 板 → 只观察，不买"
+                                              "（2026-11-12 用户口径）")}
+                    continue
         # 🚫 首板只看不买（2026-11-12 用户「明明写只观察，结果被买了」）
         if (not POOL_CALL_FIRST_BOARD_BUY
                 and (str(c.get("watch_group") or "") == "首板观察"
