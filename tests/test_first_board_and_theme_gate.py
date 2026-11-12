@@ -64,3 +64,37 @@ def test_new_direction_first_board_still_buyable(monkeypatch):
     c = _cand(new_direction_line="光通信", core_theme="光通信")
     res = pc.call_pool({"relay": [c], "watch": []}, _quotes(), plan={}, stance="normal")
     assert res["views"]["002110"]["view"] == "participate"
+
+
+def test_catalyst_position_weight(monkeypatch):
+    """2026-11-12 用户选 A：催化分进仓位（strong 1.0 / normal 0.85 / weak 0.6）。"""
+    monkeypatch.setattr(pc, "POOL_CALL_FIRST_BOARD_BUY", True, raising=False)
+    monkeypatch.setattr(pc, "POOL_CALL_REQUIRE_THEME", True, raising=False)
+    monkeypatch.setattr(pc, "CATALYST_POSITION_WEIGHT", True, raising=False)
+    cat = {"mode": "live", "themes": {"机器人": {"level": "weak"}}}
+    c = _cand(boards=2, core_theme="机器人", theme="机器人", line_rank=1, line_is_core=True)
+    res = pc.call_pool({"relay": [c], "watch": []}, _quotes(), plan={}, stance="normal",
+                       catalyst=cat)
+    v = res["views"]["002110"]
+    assert v["catalyst_level"] == "weak"
+    assert v["position_cap"] <= 0.3 + 1e-6
+
+
+def test_catalyst_sort_weight_only_breaks_ties(monkeypatch):
+    """催化只做同分键，⛔ 不能把低板票顶到高板前面。"""
+    monkeypatch.setattr(pc, "POOL_CALL_FIRST_BOARD_BUY", True, raising=False)
+    monkeypatch.setattr(pc, "POOL_CALL_REQUIRE_THEME", True, raising=False)
+    monkeypatch.setattr(pc, "CATALYST_SORT_WEIGHT", True, raising=False)
+    cat = {"mode": "live", "themes": {"机器人": {"level": "strong"},
+                                      "光通信": {"level": "weak"}}}
+    a = _cand("002708", "同档弱催化", boards=2, core_theme="光通信", theme="光通信",
+              line_rank=1, line_is_core=True)
+    b = _cand("002709", "同档强催化", boards=2, core_theme="机器人", theme="机器人",
+              line_rank=1, line_is_core=True)
+    res = pc.call_pool({"relay": [a, b], "watch": []},
+                       {**_quotes("002708", 3.0), **_quotes("002709", 3.0)},
+                       plan={}, stance="normal", catalyst=cat)
+    parts = [c for c, v in res["views"].items() if v.get("view") == "participate"]
+    assert len(parts) == 2, parts
+    # 同板数同身位 → 催化 strong 的先排（只做同分键）
+    assert list(res["views"].keys())[0] in ("002709", "002708")

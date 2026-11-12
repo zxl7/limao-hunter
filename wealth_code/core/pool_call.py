@@ -368,6 +368,13 @@ AI_TILT_ABSTAIN_P = float(os.environ.get("AI_TILT_ABSTAIN_P", "0.28") or 0.28)
 #    shadow（默认）= 只记录每只参与票所属题材的催化等级；live = 低于门槛不做。
 CATALYST_MODE = os.environ.get("CATALYST_MODE", "shadow").strip().lower()
 CATALYST_MIN_LEVEL = os.environ.get("CATALYST_MIN_LEVEL", "normal").strip().lower()
+# ⚖️ 2026-11-12 用户选 A：催化分**进权重**（排序 + 仓位），默认开。
+#    · 排序：同档内 strong 优先（⛔ 只做同分键，不推翻板数/身位/核心）
+#    · 仓位：strong 1.0 / normal 0.85 / weak 0.6 / unknown 1.0（不罚"不知道"）
+CATALYST_SORT_WEIGHT = os.environ.get("CATALYST_SORT_WEIGHT", "1") != "0"
+CATALYST_POSITION_WEIGHT = os.environ.get("CATALYST_POSITION_WEIGHT", "1") != "0"
+CATALYST_RANK = {"strong": 2.0, "normal": 1.0, "unknown": 1.0, "weak": 0.0}
+CATALYST_SIZE = {"strong": 1.0, "normal": 0.85, "unknown": 1.0, "weak": 0.6}
 # 🧊 2026-11-11 用户 D：一字板允许进接力池，但「没有换手」→ 明天买点要观察 + 降权。
 #    shadow 只标注；live（默认开）在分配仓位时**减半**并写进理由。
 POOL_CALL_ONE_WORD_DISCOUNT = os.environ.get("POOL_CALL_ONE_WORD_DISCOUNT", "1") == "1"
@@ -2741,6 +2748,17 @@ def call_pool(candidates: dict[str, Any] | None,
         marks[code] = {**base, "view": "participate"}
 
     # ── 排序 + 名额截取 ────────────────────────────────────────────────────
+    # ⚖️ 催化排序权重：先建 code→rank（用候选行的真实题材，不是展示名）
+    _cat_rank: dict[str, float] = {}
+    if catalyst and CATALYST_SORT_WEIGHT:
+        _lv = {str(k): str((v or {}).get("level") or "unknown")
+               for k, v in (catalyst.get("themes") or {}).items()}
+        for _r in (candidates.get("relay") or []) + (candidates.get("watch") or []):
+            _code = str((_r or {}).get("code") or "")
+            _th = str((_r or {}).get("core_theme") or (_r or {}).get("theme") or "").strip()
+            if _code and _th:
+                _cat_rank[_code] = CATALYST_RANK.get(_lv.get(_th, "unknown"), 1.0)
+
     def _key(x: dict[str, Any]) -> tuple:
         b = x.get("boards")
         try:
@@ -2783,6 +2801,8 @@ def call_pool(candidates: dict[str, Any] | None,
             #    ⚠️ POOL_CALL_UNLIMITED_SLOTS=1 时名额不截断 → 本项只影响 quota_rank/卡面顺序；
             #       真正生效的降权是末尾的 position_cap（仓位），别把它当成「少推一只」。
             x.get("gap_weight") if isinstance(x.get("gap_weight"), (int, float)) else 1.0,
+            # ⚖️ 题材催化（LLM）：同档内 strong 优先，⛔ 只做同分键
+            _cat_rank.get(str(x.get("code") or ""), 1.0),
         )
 
     from core import leader_cycle
@@ -2967,6 +2987,11 @@ def call_pool(candidates: dict[str, Any] | None,
                 if isinstance(_pw, (int, float)) and 0 < float(_pw) < 1:
                     _scale = min(_scale, float(_pw))
             _cap = round(_even_cap * _scale, 4)
+            # ⚖️ 题材催化仓位权重（strong 1.0 / normal 0.85 / weak 0.6 / unknown 1.0）
+            _cat_mult = 1.0
+            if CATALYST_POSITION_WEIGHT and _v.get("catalyst_level"):
+                _cat_mult = CATALYST_SIZE.get(str(_v["catalyst_level"]), 1.0)
+                _cap = round(_cap * _cat_mult, 4)
             # 🧊 一字板无换手：仓位减半（2026-11-11 用户 D）
             _one_word = bool(_v.get("is_one_word")) and POOL_CALL_ONE_WORD_DISCOUNT
             if _one_word:
@@ -2997,7 +3022,9 @@ def call_pool(candidates: dict[str, Any] | None,
                 else f"（{_n_pick}只均分·每只上限 {_rl.pct_of(_cap)}）")
             _ow_note = ("（一字板无换手，先观察能否开板换手，仓位减半）"
                         if _one_word else "")
-            _v["reason"] = ((_v.get("reason") or "") + _alloc_note + _gw_note + _pw_note + _ow_note)
+            _cat_note = ("" if _cat_mult >= 1 else
+                         f"（题材催化 {_v.get('catalyst_level')} → 仓位 ×{_cat_mult}）")
+            _v["reason"] = ((_v.get("reason") or "") + _alloc_note + _gw_note + _pw_note + _ow_note + _cat_note)
     elif _single_pick and isinstance(_single_cap, (int, float)) and _single_cap > 0:
         _code = _participants[0]
         _v = marks[_code]
@@ -3013,6 +3040,12 @@ def call_pool(candidates: dict[str, Any] | None,
             _cap = round(float(_cap) * 0.5, 4)
             _v["reason"] = ((_v.get("reason") or "")
                             + "（一字板无换手，先观察能否开板换手，仓位减半）")
+        if CATALYST_POSITION_WEIGHT and _v.get("catalyst_level"):
+            _cm = CATALYST_SIZE.get(str(_v["catalyst_level"]), 1.0)
+            if _cm < 1:
+                _cap = round(float(_cap) * _cm, 4)
+                _v["reason"] = ((_v.get("reason") or "")
+                                + f"（题材催化 {_v['catalyst_level']} → 仓位 ×{_cm}）")
         _v["position_cap"] = round(_cap, 4)
         _v["single_pick"] = True
         # 交易纪律同步：竞价理由直说「今天只有这一只 + 单票上限」，与卡面/账本同值。
@@ -3253,18 +3286,7 @@ def call_pool(candidates: dict[str, Any] | None,
                 "market": _ac2.market_verdict([a.get("attitude") for a in _anchors.values()]),
             },
             # 🧠 智能层留痕（2026-11-11）：两套名单 + 分数 + 是否改序
-            # 🧪 题材催化强度（LLM）：shadow 只留痕
-        "catalyst": (None if catalyst is None else {
-            "mode": CATALYST_MODE,
-            "min_level": CATALYST_MIN_LEVEL,
-            "source": catalyst.get("source"),
-            "model": catalyst.get("model"),
-            "levels": {str(k): (v or {}).get("level") for k, v in
-                       (catalyst.get("themes") or {}).items()},
-            "by_pick": {c: v.get("catalyst_level") for c, v in marks.items()
-                        if v.get("catalyst_level")},
-        }),
-        # 🚦 三态留痕（2026-11-11）：只做展示与复盘，⛔ 不参与任何判据
+            # 🚦 三态留痕（2026-11-11）：只做展示与复盘，⛔ 不参与任何判据
             "trade_states": {c: v.get("trade_state") for c, v in marks.items()
                              if v.get("trade_state")},
             # 🧾 替补留痕：今天买了、但这条线的核心没买
@@ -3298,6 +3320,18 @@ def call_pool(candidates: dict[str, Any] | None,
             "theme_confidence": relay_plan.get("theme_confidence"),
             # 🎯 单票场景上限（2026-11-04）：与卡面/账本同源，禁在下游另算
             "single_pick_cap": _single_cap,
+        }),
+        # 🧪 题材催化强度（LLM · 顶层）：mode/levels/by_pick
+        # 🧪 题材催化强度（LLM）：shadow 只留痕
+        "catalyst": (None if catalyst is None else {
+            "mode": CATALYST_MODE,
+            "min_level": CATALYST_MIN_LEVEL,
+            "source": catalyst.get("source"),
+            "model": catalyst.get("model"),
+            "levels": {str(k): (v or {}).get("level") for k, v in
+                       (catalyst.get("themes") or {}).items()},
+            "by_pick": {c: v.get("catalyst_level") for c, v in marks.items()
+                        if v.get("catalyst_level")},
         }),
         # 🧠 智能层留痕（顶层）：两套名单 + p_win + 是否改序
         **({"ai_layer": _ai_info} if _ai_info is not None else {}),

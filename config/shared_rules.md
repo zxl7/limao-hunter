@@ -5632,3 +5632,17 @@ fbt/seal/hs)。⛔ 不带它就算不出锚点的预期，DEV 永远为 None —
 `core/theme_auction_radar.py`：按封板时间分层（≤10:00 早封 / 晚封）统计
 红开率、中位涨幅、一字数，判 `broad`（普涨）/ `early_only`（只认早封）/
 `strong_early` / `mild`。写 `pool_call.meta.theme_auction`，⛔ 不参与买入判据。
+
+### 9）2026-11-12 · LLM 催化分进权重（用户选 A）
+
+| 项 | 值 | 回退 |
+|---|---|---|
+| 排序 | 同分键内 `strong` 优先（⛔ 不推翻板数/身位/核心） | `CATALYST_SORT_WEIGHT=0` |
+| 仓位 | strong 1.0 / normal 0.85 / weak 0.6 / **unknown 1.0（不罚"不知道"）** | `CATALYST_POSITION_WEIGHT=0` |
+| 留痕 | `meta.catalyst.{levels, by_pick}` | — |
+| 数据 | `cache/ai_advice_<执行日>.json`（15:35 launchd 生成，gpt-6.1-sol） | — |
+
+**实测**：11-11 重跑，金杯/华培（机器人 strong）仓位 0.5 不变；
+把机器人临时改成 weak 后 → 仓位 0.3，理由写「题材催化 weak → 仓位 ×0.6」。
+
+⛔ 前提：历史新闻没存 → 催化层**无法回测**，只能向前积累；先跑 20 天再评价。
