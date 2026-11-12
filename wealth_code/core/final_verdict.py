@@ -23,7 +23,11 @@ from __future__ import annotations
 
 from typing import Any
 
-LIKELY_MIN = 40.0
+# ⚖️ 2026-11-12 口径对齐：**不用绝对 40%**（会与机械端"空间闸≤6%"结构性冲突：
+#    1板 5~6% 档历史仅 37.5%，永远够不到 40%）。改为**板位基准线**：
+#    高于该板位的历史平均晋级率才值得打。数据见 `promotion_odds.rates()['overall']`。
+BASE_FLOOR = {1: 16.3, 2: 33.6}      # 40 日实测：1→2 16.3%，2→3 33.6%
+LIKELY_MIN = 40.0                     # 仅作展示用的"高概率"标签
 
 
 def decide(rows: list[dict], views: dict[str, Any] | None = None,
@@ -37,18 +41,20 @@ def decide(rows: list[dict], views: dict[str, Any] | None = None,
     out = []
     for r in rows:
         code = str(r.get("code"))
+        _b = int(r.get("boards") or 1)
+        _floor = BASE_FLOOR.get(_b, 16.3)
         v = views.get(code) or {}
         mech = str(v.get("view") or "not_in_pool")
         pct = r.get("pct")
         theme = str(r.get("theme") or "")
         level = str(cat.get(theme) or "unknown")
         mech_ok = mech == "participate"
-        pct_ok = isinstance(pct, (int, float)) and float(pct) >= likely_min
+        pct_ok = isinstance(pct, (int, float)) and float(pct) >= _floor
         cat_ok = level != "weak"
         act = str((llm.get(code) or {}).get("action") or "").lower()
         thesis = str((llm.get(code) or {}).get("thesis") or "")
         if not pct_ok:
-            conclusion, why = "不买", f"晋级率 {pct}% < {likely_min:.0f}%"
+            conclusion, why = "不买", f"晋级率 {pct}% < {_b}板基准 {_floor:.1f}%"
         elif mech == "skip":
             conclusion, why = "不买", f"机械否决：{v.get('reason') or 'skip'}"
         elif act == "skip":
@@ -74,4 +80,70 @@ def decide(rows: list[dict], views: dict[str, Any] | None = None,
     out.sort(key=lambda x: (order.get(x["conclusion"], 9), -(x.get("pct") or 0)))
     for i, x in enumerate(out, 1):
         x["priority"] = f"P{i}" if x["conclusion"] == "可买" else "—"
+    return out
+
+
+# ── 双轨（2026-11-12 口径不打架的关键）────────────────────────────────
+# 冲突根源：机械端「空间闸 ≤6% / DEV」偏好低开低吸；打板轨要求高开（≥5~7% 才有高晋级率）。
+# 两者**不能互相否决**，否则永远 0 单。解法：拆成两条独立轨，各自出「可买」，卡片分栏。
+#
+# 打板轨门槛 = 该板位**机械可达的最高档**（5~7% 档）历史晋级率：
+TOP_BAND = {1: 37.5, 2: 50.0}
+
+
+def _buyable_gap(code: str, gap) -> bool:
+    """竞价能不能买到：封死（≈涨停）就买不到 —— 与机械端「竞价封死」同一口径。"""
+    if not isinstance(gap, (int, float)):
+        return False
+    seal = 19.5 if str(code).startswith(("30", "68")) else 9.5
+    return float(gap) < seal
+
+
+def decide_tracks(rows: list[dict], views: dict[str, Any] | None = None,
+                  catalyst_levels: dict[str, str] | None = None,
+                  llm_actions: dict[str, dict] | None = None) -> list[dict]:
+    views = views or {}
+    cat = catalyst_levels or {}
+    llm = llm_actions or {}
+    out = []
+    for r in rows:
+        code = str(r.get("code"))
+        v = views.get(code) or {}
+        mech = str(v.get("view") or "not_in_pool")
+        pct = r.get("pct")
+        b = int(r.get("boards") or 1)
+        theme = str(r.get("theme") or "")
+        level = str(cat.get(theme) or "unknown")
+        act = str((llm.get(code) or {}).get("action") or "").lower()
+        thesis = str((llm.get(code) or {}).get("thesis") or "")
+        base = {"code": code, "name": r.get("name"), "theme": theme, "boards": b,
+                "gap": r.get("gap"), "pct": pct, "mech": mech, "catalyst": level, "llm": act or None}
+        # 低吸轨：机械过 + 高于板位均值 + 催化不弱 + LLM 不反对
+        # 低吸轨：机械闸**自己**说了算（晋级率只作展示，不再二次卡它）
+        if mech == "participate" and level != "weak" and act != "skip":
+            out.append({**base, "track": "低吸轨", "conclusion": "可买",
+                        "why": f"机械过（晋级率 {pct}% 仅参考）+催化{level}"})
+        # 打板轨：高开档（≥该板位可达最高档）+ 催化不弱 + LLM 不反对
+        elif isinstance(pct, (int, float)) and float(pct) >= TOP_BAND.get(b, 37.5) \
+                and _buyable_gap(code, r.get("gap")) \
+                and b <= 3 and "ST" not in str(r.get("name") or "").upper() \
+                and level != "weak" and act != "skip":
+            out.append({**base, "track": "打板轨", "conclusion": "可买",
+                        "why": f"竞价{pct}%≥{TOP_BAND.get(b,37.5):.1f}（{b}板最高档）+催化{level}"
+                               + (f"+LLM：{thesis}" if act == "buy" and thesis else "")})
+        else:
+            why = ("晋级率 %s < 打板门槛 %.1f" % (pct, TOP_BAND.get(b, 37.5)))
+            out.append({**base, "track": "—", "conclusion": "观察", "why": why})
+    order = {"可买": 0, "观察": 1}
+    out.sort(key=lambda x: (order.get(x["conclusion"], 9), -(x.get("pct") or 0)))
+    n = 0
+    for x in out:
+        if x["conclusion"] == "可买" and n >= 2:
+            x["conclusion"] = "观察"
+            x["why"] = "超出名额 2（按晋级率排序靠后）"
+        if x["conclusion"] == "可买":
+            n += 1
+            x["priority"] = f"P{n}"
+        else:
+            x["priority"] = "—"
     return out
