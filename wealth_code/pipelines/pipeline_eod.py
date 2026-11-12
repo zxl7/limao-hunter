@@ -2682,6 +2682,28 @@ def run_eod(
                   + "、".join(str(x.get("name")) for x in _unq[:12])
                   + ("…" if len(_unq) > 12 else ""))
 
+    # ══════════════════════════════════════════════════════════════════════
+    # 🥈 第二波高位节点（2026-11-12 用户「最近一个月第一波走完了，第二波三板危险」）
+    # ══════════════════════════════════════════════════════════════════════
+    # 前移到建池层：卡面与 09:25 裁决必须是同一个身份，⛔ 不允许「卡面可买、裁决只观察」。
+    # 判据见 `core/second_wave.py`；⛔ 只改身份/展示，不改任何买入判据本身。
+    try:
+        from core import second_wave as _sw
+        _sw_hit = []
+        for _r in (relay + watch):
+            _hit = _sw.second_wave(_r.get("boards"), str(_r.get("code") or ""))
+            if not _hit:
+                continue
+            _r.update(participation_eligibility="observe_only", buyable=False,
+                      watch_only=True, watch_group="第二波节点",
+                      watch_reason=_hit["note"],
+                      second_wave_node=True, prior_wave_zt=_hit["prior"])
+            _sw_hit.append(str(_r.get("name") or ""))
+        if _sw_hit:
+            print("[EOD] 🥈 第二波高位节点·只观察：" + "、".join(_sw_hit))
+    except Exception as _e:  # noqa: BLE001
+        print(f"[EOD] 🥈 第二波节点判定降级（不影响主链）：{_e}")
+
     # 🧭 市场级题材强度（2026-11-11 用户拍板 B）：回答「昨天整个市场哪几条线真强」。
     #    ⛔ 只写 diagnostics + 展示字段 theme_rank/theme_metrics；不改 relay_rank、
     #       dragon_rank、relay 数组顺序、任何准入闸 / DEV / 量能 / quota / 仓位 P0。
