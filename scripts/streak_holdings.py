@@ -60,6 +60,11 @@ def main(argv=None) -> int:
     if a.open:
         import promotion_plan as pp
         plan = pp.build(day)
+        # 只登记「最终结论=可买」的票（有 verdicts 时）
+        _v = plan.get("verdicts")
+        if _v:
+            _ok = {str(x.get("code")) for x in _v if x.get("conclusion") == "可买"}
+            plan = {**plan, "rows": [r for r in (plan.get("rows") or []) if str(r.get("code")) in _ok]}
         qp = ROOT / "wealth_code" / "cache" / f"auction_quotes-{day}.json"
         quotes = json.loads(qp.read_text(encoding="utf-8")) if qp.exists() else {}
         h, opened = sh.open_positions(h, plan.get("rows") or [], quotes, day)

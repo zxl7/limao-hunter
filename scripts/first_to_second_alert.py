@@ -92,88 +92,93 @@ def _push(title: str, rows: list[str], *, dry: bool) -> None:
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def compose(day: str, *, run_llm: bool = True, register: bool = False,
+            dry: bool = False) -> tuple[str, list[str]]:
+    """一张卡：最终裁决 + 晋级预案 + 持仓/断板。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import promotion_plan as pp
+    res = pp.build(day)
+    rows_all = res.get("rows") or []
+    l1 = [r for r in rows_all if r["boards"] == 1 and r["likely"]][:4]
+    l2 = [r for r in rows_all if r["boards"] == 2 and r["likely"]][:4]
+
+    llm: dict = {}
+    if run_llm:
+        try:
+            import subprocess
+            subprocess.run([sys.executable, str(ROOT / "scripts" / "ai_trader_judge.py"),
+                            "--date", day], check=False, timeout=180)
+            tp = ROOT / "cache" / f"ai_trade_{day}.json"
+            if tp.exists():
+                llm = {str(x.get("code")): x for x in
+                       (json.loads(tp.read_text(encoding="utf-8")).get("picks") or [])}
+        except Exception as e:  # noqa: BLE001
+            print(f"[fts] LLM 裁决失败：{e}")
+
+    sys.path.insert(0, str(ROOT / "wealth_code"))
+    from core import final_verdict as fv
+    freeze = {}
+    fz = ROOT / "wealth_code" / "cache" / f"pool_call-{day}.json"
+    if fz.exists():
+        freeze = json.loads(fz.read_text(encoding="utf-8")).get("views") or {}
+    catp = ROOT / "cache" / f"ai_advice_{day}.json"
+    lv = {}
+    if catp.exists():
+        lv = {k: (v or {}).get("level") for k, v in
+              (json.loads(catp.read_text(encoding="utf-8")).get("themes") or {}).items()}
+    vs = fv.decide(rows_all, freeze, lv, llm)
+    buys = [v for v in vs if v["conclusion"] == "可买"]
+
+    body: list[str] = []
+    body.append("**🧠 最终裁决**" + ("：" if buys else "：今天不买"))
+    if buys:
+        for v in buys[:3]:
+            body.append(f"  {v['priority']} {v['name']}({v['code']}) 晋级{v['pct']:.0f}% "
+                        f"· 催化{v['catalyst']} · {v['why'][:48]}")
+    else:
+        reason = "机械未过 / 晋级率不足 / 催化弱 / LLM 放弃"
+        body.append(f"  —— 四层无一同时满足（{reason}）")
+
+    if l2:
+        body.append("**🔁 二进三（定心·不加仓）**")
+        body += [f"  {r['name']} 竞价{r['gap']:+.1f}% → 晋级 {r['pct']:.0f}%" for r in l2]
+    if l1:
+        body.append("**🥇 一进二（可打板）**")
+        body += [f"  {r['name']} 竞价{r['gap']:+.1f}% → 晋级 {r['pct']:.0f}%〔{r.get('theme') or ''}〕"
+                 for r in l1]
+
+    if register and buys:
+        try:
+            import subprocess
+            subprocess.run([sys.executable, str(ROOT / "scripts" / "streak_holdings.py"),
+                            "--open", "--day", day], check=False, timeout=60)
+        except Exception as e:  # noqa: BLE001
+            print(f"[fts] 开仓登记失败：{e}")
+
+    hp = ROOT / "cache" / "streak_holdings.json"
+    holds = json.loads(hp.read_text(encoding="utf-8")) if hp.exists() else {}
+    opened = [h for h in (holds.get("open") or []) if h.get("entry_date") == day]
+    if opened:
+        body.append("**🔒 今日建仓（按晋级率·不提前退出）**")
+        for h in opened:
+            body.append(f"  {h['priority']} {h['name']}({h['code']}) 晋级率 {h['entry_pct']}% "
+                        f"· {h['status']} · 断板提示：收盘未涨停→T+1 开盘卖")
+    pend = [h for h in (holds.get("open") or []) if h.get("status") == "待退出（T+1）"]
+    for h in pend:
+        body.append(f"  ⚠️ {h['name']}({h['code']}) 昨断板 → 今开盘卖出（T+1）")
+
+    return "🧠 09:26 竞价裁决", body
+
+
 def _maybe_push_plan(day: str, *, dry: bool) -> None:
-    """09:26~09:40 推一次「晋级预案」卡（一进二/二进三 大概率）。"""
     now = datetime.now().time()
     if not (time(9, 26) <= now <= time(9, 40)):
         return
     st = _load_state(day)
     if st.get("_plan_pushed"):
         return
-    try:
-        sys.path.insert(0, str(ROOT / "scripts"))
-        import promotion_plan as pp
-        res = pp.build(day)
-    except Exception as e:  # noqa: BLE001
-        print(f"[fts] 预案失败：{e}")
-        return
-    l1 = [r for r in (res.get("rows") or []) if r["boards"] == 1 and r["likely"]][:4]
-    l2 = [r for r in (res.get("rows") or []) if r["boards"] == 2 and r["likely"]][:4]
-    rows = []
-    # 🧩 若 09:25 已融合三层（机械×晋级率×催化），先报"最终可买"
-    _buy = [v for v in (res.get("verdicts") or []) if v.get("conclusion") == "可买"]
-    if _buy:
-        rows.append("**🧩 最终可买**（机械过 + 晋级率≥40% + 催化不弱）：")
-        rows += [f"  {v.get('priority')} {v.get('name')}({v.get('code')}) 晋级{v.get('pct'):.0f}%·催化{v.get('catalyst')}"
-                 for v in _buy[:4]]
-    if l2:
-        rows.append("**🔁 二进三**（定心·不加仓）：")
-        rows += [f"  {r['name']} 竞价{r['gap']:+.1f}% → 晋级 {r['pct']:.0f}%" for r in l2]
-    if l1:
-        rows.append("**🥇 一进二**（可打板）：")
-        rows += [f"  {r['name']} 竞价{r['gap']:+.1f}% → 晋级 {r['pct']:.0f}%〔{r.get('theme') or ''}〕" for r in l1]
-    if not rows:
-        rows = ["今天没有≥40% 概率的晋级标的（说明竞价普遍弱）。"]
-    _push("🥇 竞价晋级预案", rows, dry=dry)
-    # 🔒 按晋级率排序登记买入（只登记，人工下单），并把建仓明细并进同一张卡
-    try:
-        import subprocess
-        subprocess.run([sys.executable, str(ROOT / "scripts" / "streak_holdings.py"),
-                        "--open", "--day", day], check=False, timeout=60)
-        hp = ROOT / "cache" / "streak_holdings.json"
-        holds = json.loads(hp.read_text(encoding="utf-8")) if hp.exists() else {}
-        opened = [h for h in (holds.get("open") or []) if h.get("entry_date") == day]
-        if opened:
-            body = ["**🔒 今日建仓（按晋级率排序·不提前退出）**"]
-            for h in opened:
-                body.append(f"{h['priority']} {h['name']}({h['code']}) 晋级率 {h['entry_pct']}% "
-                            f"· {h['status']} · 断板提示：收盘未涨停即退出")
-            _push("🔒 今日建仓", body, dry=dry)
-    except Exception as e:  # noqa: BLE001
-        print(f"[fts] 开仓登记失败：{e}")
-
-    # 🧠 LLM 交易员裁决（多因素）→ 最终「可买」
-    try:
-        import subprocess
-        subprocess.run([sys.executable, str(ROOT / "scripts" / "ai_trader_judge.py"),
-                        "--date", day], check=False, timeout=180)
-        tp = ROOT / "cache" / f"ai_trade_{day}.json"
-        picks = (json.loads(tp.read_text(encoding="utf-8")).get("picks") or []) if tp.exists() else []
-        llm = {str(x.get("code")): x for x in picks}
-        if llm:
-            sys.path.insert(0, str(ROOT / "wealth_code"))
-            from core import final_verdict as fv
-            freeze = {}
-            fz = ROOT / "wealth_code" / "cache" / f"pool_call-{day}.json"
-            if fz.exists():
-                freeze = json.loads(fz.read_text(encoding="utf-8")).get("views") or {}
-            catp = ROOT / "cache" / f"ai_advice_{day}.json"
-            lv = {}
-            if catp.exists():
-                lv = {k: (v or {}).get("level") for k, v in
-                      (json.loads(catp.read_text(encoding="utf-8")).get("themes") or {}).items()}
-            vs = fv.decide(res.get("rows") or [], freeze, lv, llm)
-            buys = [v for v in vs if v["conclusion"] == "可买"]
-            body = ["**🧠 LLM 交易员裁决（机械×晋级率×催化×情绪）**"]
-            if buys:
-                for v in buys[:3]:
-                    body.append(f"{v['priority']} {v['name']}({v['code']}) 晋级{v['pct']:.0f}% "
-                                f"· 催化{v['catalyst']} · {v['why'][:60]}")
-            else:
-                body.append("今天没有同时满足三层的票 → **不买**")
-            _push("🧠 最终裁决", body, dry=dry)
-    except Exception as e:  # noqa: BLE001
-        print(f"[fts] LLM 裁决失败：{e}")
+    title, body = compose(day, run_llm=True, register=True, dry=dry)
+    _push(title, body, dry=dry)
     st["_plan_pushed"] = True
     _save_state(day, st)
 
@@ -183,9 +188,17 @@ def main(argv=None) -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--ignore-hours", action="store_true")
     ap.add_argument("--watch-date", help="指定候选文件日期（默认取上一交易日）")
+    ap.add_argument("--simulate", metavar="DAY", help="用指定日期数据拼一张卡并打印（不推送）")
     a = ap.parse_args(argv)
     if os.environ.get("ENABLE_FIRST_TO_SECOND_ALERT", "1") == "0":
         return 0
+    if a.simulate:
+        title, body = compose(a.simulate, run_llm=True, register=False, dry=True)
+        print(f"== {title} ==")
+        for ln in body:
+            print(ln)
+        return 0
+
     now = datetime.now()
     if not a.ignore_hours and not _is_trading_time(now):
         return 0

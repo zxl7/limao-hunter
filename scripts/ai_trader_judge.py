@@ -82,6 +82,42 @@ def build_prompt(day: str) -> str:
 """
 
 
+SYSTEM = ("你是 A 股龙头战法交易员，负责在 09:25 竞价后做买卖裁决。"
+          "只输出 JSON；每个判断必须引用给出的具体数字；不确定就 watch。")
+
+
+def call_llm(prompt: str) -> dict | None:
+    """独立调用（⛔ 不复用 ai_catalyst 的题材 system prompt）。"""
+    from ai_catalyst import _resolve_model
+    cfg = _resolve_model()
+    if not cfg:
+        print("[ai_trader] 无模型配置")
+        return None
+    try:
+        from common.http_client import http_post
+        res = http_post(
+            f"{cfg['base']}/chat/completions",
+            {"model": cfg["model"], "temperature": 0.3,
+             "messages": [{"role": "system", "content": SYSTEM},
+                          {"role": "user", "content": prompt}]},
+            timeout=90,
+            headers={"Authorization": f"Bearer {cfg['key']}", "Content-Type": "application/json"},
+        )
+        text = res["choices"][0]["message"]["content"]
+    except Exception as e:  # noqa: BLE001
+        print(f"[ai_trader] 调用失败：{e}")
+        return None
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        print(f"[ai_trader] 无 JSON：{text[:120]}")
+        return None
+    try:
+        return json.loads(text[start:end + 1])
+    except Exception as e:  # noqa: BLE001
+        print(f"[ai_trader] JSON 解析失败：{e}")
+        return None
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date")
@@ -93,7 +129,6 @@ def main(argv=None) -> int:
     if a.dry_run:
         print(prompt[:2000])
         return 0
-    from ai_catalyst import call_llm
     res = call_llm(prompt)
     if not res:
         print("[ai_trader] LLM 无返回")
