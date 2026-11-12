@@ -761,6 +761,21 @@ def run_verify(
                     sector_gap=_sgc_ctx,
                     code_theme=_code_theme_pos,
                     relay_plan=_relay_plan)
+                # 🩺 判据链体检（2026-11-12 用户「看不出今天到底用了哪些闸」）
+                #    只读：把「哪几条闸真的开了、哪几条缺数据」汇总成一行，写 meta.chain。
+                try:
+                    from core import chain_health as _ch
+                    _meta_now = pool_res.get("meta") or {}
+                    _chain = _ch.build(
+                        pool_res,
+                        catalyst=bool(_catalyst),
+                        radar=len(((_meta_now.get("theme_auction") or {}).get("lines")) or []),
+                        ai_layer=bool(_meta_now.get("ai_layer")))
+                    pool_res.setdefault("meta", {})["chain"] = _chain
+                    print(f"[VERIFY] {_chain['line']}")
+                except Exception as _e:  # noqa: BLE001
+                    print(f"[VERIFY] 判据链体检跳过：{_e}")
+
                 # 🧭 板块竞价雷达（2026-11-12 用户「看见开一字了，要看这个题材里开得怎么样」）
                 #    只写 meta（只读观察），⛔ 不参与任何买入判据。
                 try:
