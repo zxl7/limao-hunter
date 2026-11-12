@@ -18,6 +18,12 @@ LOG=$ROOT/cache/ai_catalyst_launchd.log
 
 log() { echo "[$(TZ=Asia/Shanghai date '+%F %T')] $*" >> "$LOG"; }
 
+cd "$ROOT" || exit 1
+
+# 🥇 一进二打板候选（2026-11-12）：每个交易日收盘后生成，供次日盘中提醒读取
+#    ⛔ 只读计算，不依赖 LLM key；失败不影响后续催化链。
+"$PY" scripts/first_to_second_watch.py >> "$LOG" 2>&1 || log "first_to_second_watch 失败（不影响主链）"
+
 [ -f "$ENVF" ] || { log "未配置 ${ENVF}（缺 LLM_API_KEY）→ 跳过"; exit 0; }
 # shellcheck disable=SC1090
 . "$ENVF"
