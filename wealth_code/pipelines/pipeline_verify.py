@@ -761,6 +761,28 @@ def run_verify(
                     sector_gap=_sgc_ctx,
                     code_theme=_code_theme_pos,
                     relay_plan=_relay_plan)
+                # ⚖️ 仓位/暴露控制（2026-11-12 吸收 quant-review 四条优点）
+                #    edge 五档 / 连续走弱降档 / 崩盘预警 / 满仓三条件 → 取小。
+                #    `EXPOSURE_MODE=off|shadow|live`（默认 shadow：只记录，不改仓位）。
+                try:
+                    from core import position_edge as _pe
+                    _exp = _pe.snapshot()
+                    _exp["mode"] = str(os.environ.get("EXPOSURE_MODE", "shadow")).lower()
+                    if _exp["mode"] == "live" and _exp["exposure"] < 1:
+                        for _c, _v in (pool_res.get("views") or {}).items():
+                            if _v.get("view") != "participate":
+                                continue
+                            _old = _v.get("position_cap")
+                            if isinstance(_old, (int, float)) and _old > 0:
+                                _v["position_cap"] = round(float(_old) * _exp["exposure"], 4)
+                                _v["reason"] = ((_v.get("reason") or "")
+                                                + f"（暴露系数 {_exp['exposure']}：{_exp['why']}）")
+                    pool_res.setdefault("meta", {})["exposure"] = _exp
+                    print(f"[VERIFY] 暴露系数 {_exp['exposure']}（{_exp['mode']}）"
+                          f" · 主因 {_exp['driver']} · {_exp['why']}")
+                except Exception as _e:  # noqa: BLE001
+                    print(f"[VERIFY] 暴露控制跳过：{_e}")
+
                 # 🩺 判据链体检（2026-11-12 用户「看不出今天到底用了哪些闸」）
                 #    只读：把「哪几条闸真的开了、哪几条缺数据」汇总成一行，写 meta.chain。
                 try:
