@@ -384,8 +384,12 @@ POOL_CALL_REQUIRE_THEME = os.environ.get("POOL_CALL_REQUIRE_THEME", "1") == "1"
 #    判据：近一年涨停 ≥8 次（股性老练）∧ 当前 ≥3 板 → 只观察，不买。
 #    ⛔ 只挡「老票的高位节点」，不挡新股/次新首板连板（它们没有历史包袱）。
 #    数据 `cache/zt_genes/gene_<code>.json`。
-POOL_CALL_OLD_STOCK_MIN_ZT = int(os.environ.get("POOL_CALL_OLD_STOCK_MIN_ZT", "8") or 8)
-POOL_CALL_OLD_STOCK_MIN_BOARDS = int(os.environ.get("POOL_CALL_OLD_STOCK_MIN_BOARDS", "3") or 3)
+# ⛔ 2026-11-12 10:30 用户纠正：「近一年跨度太大了」——
+#    正确口径是**最近一个月**：第一波已经走完，现在走第二波，3 板就是危险节点。
+#    判据：当前连续涨停 ≥3 天 ∧ 这波之前 20 个交易日内已有 ≥3 次涨停（第一波走完）。
+POOL_CALL_SECOND_WAVE_MIN_BOARDS = int(os.environ.get("POOL_CALL_SECOND_WAVE_MIN_BOARDS", "3") or 3)
+POOL_CALL_SECOND_WAVE_PRIOR_ZT = int(os.environ.get("POOL_CALL_SECOND_WAVE_PRIOR_ZT", "3") or 3)
+POOL_CALL_SECOND_WAVE_WINDOW = int(os.environ.get("POOL_CALL_SECOND_WAVE_WINDOW", "20") or 20)
 POOL_CALL_OLD_STOCK_OBSERVE = os.environ.get("POOL_CALL_OLD_STOCK_OBSERVE", "1") != "0"
 _THEME_MISSING = {"", "-", "—", "其他", "无", "未知", "none", "null"}
 BREADTH_MIN_SIZE = 8          # 少于这个家数的线不判广度（百分比无意义）
@@ -841,6 +845,40 @@ def load_theme_momentum(day: str, root: Path | None = None) -> dict[str, dict[st
     if not isinstance(themes, dict):
         return {}
     return {str(k): v for k, v in themes.items() if isinstance(v, dict)}
+
+
+def _prior_wave_zt(code: str, window: int = 20) -> tuple[int, int] | None:
+    """返回 `(当前连续涨停天数, 这波之前 window 日内的涨停次数)`；缺 K 线 → None。
+
+    ⛔ 涨停判定用**收盘涨幅**（10cm ≥9.8% / 20cm ≥19.7%），与账本口径一致。
+    """
+    import json as _json
+    try:
+        from pathlib import Path as _P
+        root = _P(__file__).resolve().parents[2]
+        bars = _json.loads((root / "cache" / "kline_qfq" / f"{code}.json").read_text(encoding="utf-8")).get("bars") or []
+    except Exception:  # noqa: BLE001
+        return None
+    bars = [b for b in bars if b.get("close") and b.get("date")]
+    if len(bars) < 3:
+        return None
+    flags: list[bool] = []
+    for i in range(1, len(bars)):
+        try:
+            r = float(bars[i]["close"]) / float(bars[i - 1]["close"]) - 1
+        except (TypeError, ValueError, ZeroDivisionError):
+            flags.append(False)
+            continue
+        flags.append(r >= 0.098 or r >= 0.197)
+    streak = 0
+    for ok in reversed(flags):
+        if ok:
+            streak += 1
+        else:
+            break
+    idx = len(flags) - streak
+    prior = sum(1 for x in flags[max(0, idx - window):idx] if x)
+    return streak, prior
 
 
 def _gene_zt_n(code: str) -> int | None:
@@ -2715,19 +2753,18 @@ def call_pool(candidates: dict[str, Any] | None,
                 marks[code] = {**base, "view": "watch", "core_theme": c.get("core_theme"),
                                "reason": "缺题材归属（core_theme 为空/占位·行业兜底不算）→ 不进裁决，不买"}
                 continue
-        # 🧓 老票高位节点只观察（2026-11-12 用户「光洋这种老票 3 板是个节点，别买」）
+        # 🥈 第二波 3 板危险节点（2026-11-12 用户口径：近一个月第一波走完 → 第二波 3 板只观察）
         if POOL_CALL_OLD_STOCK_OBSERVE:
-            try:
-                _b = int(c.get("boards"))
-            except (TypeError, ValueError):
-                _b = 0
-            if _b >= POOL_CALL_OLD_STOCK_MIN_BOARDS:
-                _ztn = _gene_zt_n(code)
-                if _ztn is not None and _ztn >= POOL_CALL_OLD_STOCK_MIN_ZT:
-                    marks[code] = {**base, "view": "watch", "old_stock_node": True,
-                                   "gene_zt_n": _ztn,
-                                   "reason": (f"老票高位节点：近一年涨停 {_ztn} 次、"
-                                              f"现已 {_b} 板 → 只观察，不买"
+            _pw = _prior_wave_zt(code, POOL_CALL_SECOND_WAVE_WINDOW)
+            if _pw is not None:
+                _streak, _prior = _pw
+                if (_streak >= POOL_CALL_SECOND_WAVE_MIN_BOARDS
+                        and _prior >= POOL_CALL_SECOND_WAVE_PRIOR_ZT):
+                    marks[code] = {**base, "view": "watch", "second_wave_node": True,
+                                   "prior_wave_zt": _prior, "streak": _streak,
+                                   "reason": (f"第二波高位节点：近 {POOL_CALL_SECOND_WAVE_WINDOW} 日"
+                                              f"已有 {_prior} 次涨停（第一波走完），"
+                                              f"现在第 {_streak} 板 → 只观察，不买"
                                               "（2026-11-12 用户口径）")}
                     continue
         # 🚫 首板只看不买（2026-11-12 用户「明明写只观察，结果被买了」）
