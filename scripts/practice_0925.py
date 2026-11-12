@@ -87,22 +87,26 @@ def run_day(day: str, *, use_llm: bool) -> dict:
                    (json.loads(tp.read_text(encoding="utf-8")).get("picks") or [])}
     # 🏛⚡🔄 三层
     from core import sector_hierarchy as sh2, accel as ac2, weak_to_strong as ws2
-    zt_rows = json.loads((ROOT / "cache" / "zt_history" / f"zt_{day}.json").read_text(encoding="utf-8"))["zt_list"]
+    # ⛔ 防未来函数：09:25 只可知**昨日**涨停池；用今日池会偷看收盘（2026-11-12 修）
+    _prev_day = ws2._prev_zt(day)
+    _prev_days = [d for d in _mdays() if d < day]
+    _pday = _prev_days[-1] if _prev_days else day
+    zt_rows = json.loads((ROOT / "cache" / "zt_history" / f"zt_{_pday}.json").read_text(encoding="utf-8"))["zt_list"]
     snap = {}
     try:
-        snap = json.loads((ROOT / "cache" / "theme_snapshot" / f"theme_{day}.json").read_text(encoding="utf-8")).get("mapping") or {}
+        snap = json.loads((ROOT / "cache" / "theme_snapshot" / f"theme_{_pday}.json").read_text(encoding="utf-8")).get("mapping") or {}
     except Exception:  # noqa: BLE001
         pass
     def _th(r):
         m = snap.get(str(r.get("code"))) or {}
         return str(m.get("theme_base") or m.get("theme") or r.get("core_theme") or r.get("sector") or "—")
-    hier = sh2.classify(zt_rows, _th)
+    hier = sh2.classify(zt_rows, _th)   # 昨日池 → 无未来函数
     prev = ws2._prev_zt(day)
     acc = {}
     w2s = {}
     for _r in (plan.get("rows") or []):
         _c = str(_r.get("code"))
-        acc[_c] = ac2.accel_of(_c, day)
+        acc[_c] = ac2.accel_of(_c, _pday)
         ap = (rd["quotes"].get(_c) or {}).get("auction_price")
         pc = (rd["quotes"].get(_c) or {}).get("prev_close")
         g = round((ap / pc - 1) * 100, 2) if ap and pc else None
@@ -115,7 +119,7 @@ def run_day(day: str, *, use_llm: bool) -> dict:
     for v in vs[:8]:
         ap = (rd["quotes"].get(str(v["code"])) or {}).get("auction_price")
         cl = _close(str(v["code"]), day)
-        out.append({**{k: v.get(k) for k in ("code", "name", "pct", "conclusion", "mech", "catalyst", "llm")},
+        out.append({**{k: v.get(k) for k in ("code", "name", "pct", "conclusion", "mech", "catalyst", "llm", "track", "role", "accel", "w2s")},
                     "hit_zt": str(v["code"]) in zt,
                     "ret": round((cl / ap - 1) * 100, 2) if ap and cl else None})
     return {"day": day, "views": len(views), "participate": sum(1 for v in views.values() if v.get("view") == "participate"),
@@ -134,6 +138,7 @@ def main(argv=None) -> int:
     days = days[-a.days:]
     print(f"练习 {len(days)} 天 · LLM={'off' if a.no_llm else 'on'}")
     tot = []
+    by_track: dict[str, list[float]] = {}
     for d in days:
         r = run_day(d, use_llm=not a.no_llm)
         if r.get("error"):
@@ -141,16 +146,29 @@ def main(argv=None) -> int:
             continue
         b = "、".join(f"{x['name']}({x['pct']:.0f}%)" for x in r["buys"]) or "—"
         print(f"\n{d} 机械参与{r['participate']} · 预案{r['plan']} · 可买: {b}")
-        for x in r["rows"][:4]:
-            print(f"   {x['conclusion']:<3} {x['name']:<7}{x['pct']:>5.1f}% 机械{x['mech'][:9]:<9} "
-                  f"催化{x['catalyst'][:7]:<7} {'涨停' if x['hit_zt'] else '未涨停'} "
-                  f"{'' if x['ret'] is None else f'{x['ret']:+.2f}%'}")
+        for x in r["rows"]:
+            if x["conclusion"] == "可买" or x["ret"] is not None:
+                print(f"   {x['conclusion']:<3} {x['name']:<7}{x['pct']:>5.1f}% {str(x.get('track') or '-'):<4}"
+                      f" 机械{x['mech'][:9]:<9} {'涨停' if x['hit_zt'] else '未涨停'} "
+                      f"{'' if x['ret'] is None else f'{x['ret']:+.2f}%'}")
             if x["ret"] is not None and x["conclusion"] == "可买":
                 tot.append(x["ret"])
+                by_track.setdefault(str(x.get("track") or "—"), []).append(x["ret"])
+    (ROOT / "cache" / f"practice_{len(days)}d.json").write_text(
+        json.dumps({"days": days, "trades": [t for t in globals().get("_all_trades", [])]},
+                   ensure_ascii=False, indent=1), encoding="utf-8")
     if tot:
         print(f"\n（仅统计最终「可买」）")
         print(f"\n样本 {len(tot)} 笔 · 均 {sum(tot)/len(tot):+.2f}% · 胜率 "
               f"{100*sum(1 for x in tot if x>0)/len(tot):.0f}%")
+        import statistics as _st
+        _wins = [x for x in tot if x > 0]
+        _loss = [x for x in tot if x < 0]
+        _ratio = ((sum(_wins)/len(_wins)) / abs(sum(_loss)/len(_loss))) if _wins and _loss else None
+        print(f"  中位 {_st.median(tot):+.2f}% · 盈亏比 {_ratio:.2f}" if _ratio else f"  中位 {_st.median(tot):+.2f}%")
+        print(f"  最好 {max(tot):+.2f}% · 最差 {min(tot):+.2f}%")
+        for k, v in sorted(by_track.items()):
+            print(f"  {k}：{len(v)} 笔 · 均 {sum(v)/len(v):+.2f}% · 胜率 {100*sum(1 for x in v if x>0)/len(v):.0f}%")
     return 0
 
 
