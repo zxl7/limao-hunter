@@ -122,12 +122,40 @@ def build_prompt(day: str) -> str:
     return TEMPLATE.format(day=day, themes=tlines, news=nlines)
 
 
-def call_llm(prompt: str) -> dict | None:
+def _resolve_model() -> dict | None:
+    """解析模型配置：环境变量优先，否则读 WorkBuddy 的 `~/.workbuddy/models.json`。
+
+    ⛔ key 只在运行时读取，绝不写进仓库/日志。
+    默认用 `gpt-6.1-sol`（用户 2026-11-12 指定「直接使用 GPT6.1」）。
+    """
+    want = os.environ.get("LLM_MODEL", "gpt-6.1-sol")
     key = os.environ.get("LLM_API_KEY")
-    if not key:
+    base = os.environ.get("LLM_BASE_URL")
+    if key:
+        return {"model": want, "base": (base or "https://api.deepseek.com").rstrip("/"), "key": key}
+    try:
+        from pathlib import Path as _P
+        import json as _json
+        rows = _json.loads((_P.home() / ".workbuddy" / "models.json").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
         return None
-    base = os.environ.get("LLM_BASE_URL", "https://api.deepseek.com").rstrip("/")
-    model = os.environ.get("LLM_MODEL", "deepseek-chat")
+    for m in rows:
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("id")) != want and str(m.get("name")) != want:
+            continue
+        _k, _u = str(m.get("apiKey") or ""), str(m.get("url") or "").rstrip("/")
+        if not _k or not _u:
+            return None
+        return {"model": str(m.get("id") or want), "base": _u, "key": _k}
+    return None
+
+
+def call_llm(prompt: str) -> dict | None:
+    cfg = _resolve_model()
+    if not cfg:
+        return None
+    key, base, model = cfg["key"], cfg["base"], cfg["model"]
     try:
         from common.http_client import http_post
         res = http_post(
@@ -227,7 +255,7 @@ def main(argv=None) -> int:
         return 2
     payload = {
         "schema": AA.SCHEMA, "date": day, "source": "llm",
-        "model": os.environ.get("LLM_MODEL", "deepseek-chat"),
+        "model": (_resolve_model() or {}).get("model") or os.environ.get("LLM_MODEL", "gpt-6.1-sol"),
         "generated_at": _bj().strftime("%Y-%m-%d %H:%M:%S"),
         "themes": data.get("themes") or {},
         "stocks": data.get("stocks") or {},
