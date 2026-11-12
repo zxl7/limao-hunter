@@ -197,14 +197,31 @@ def main(argv=None) -> int:
     ap.add_argument("--ignore-hours", action="store_true")
     ap.add_argument("--watch-date", help="指定候选文件日期（默认取上一交易日）")
     ap.add_argument("--simulate", metavar="DAY", help="用指定日期数据拼一张卡并打印（不推送）")
+    ap.add_argument("--llm", action="store_true", help="模拟时调用 LLM（慢）")
     a = ap.parse_args(argv)
     if os.environ.get("ENABLE_FIRST_TO_SECOND_ALERT", "1") == "0":
         return 0
     if a.simulate:
-        title, body = compose(a.simulate, run_llm=True, register=False, dry=True)
-        print(f"== {title} ==")
-        for ln in body:
-            print(ln)
+        # ⛔ 历史模拟必须用**当前代码重算机械视图**（冻结件是当时旧代码产的，不能直接用）
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import practice_0925 as P
+        r = P.run_day(a.simulate, use_llm=a.llm)
+        if r.get("error"):
+            print(f"{a.simulate} {r['error']}")
+            return 0
+        buys = [x for x in r["rows"] if x["conclusion"] == "可买"]
+        print(f"== 🧠 {a.simulate} 竞价裁决 ==")
+        print("**🧠 最终裁决**" + ("：" if buys else "：今天不买"))
+        for x in buys[:3]:
+            print(f"  {x.get('role') or ''}{x['name']}({x['code']}) 低吸轨 晋级{x['pct']:.0f}%"
+                  f" {'涨停' if x['hit_zt'] else '未涨停'} {'' if x['ret'] is None else f'{x[chr(34)+chr(34)] if False else x['ret']:+.2f}%'}")
+        if not buys:
+            print("  —— 机械未过 / 催化弱 / 已关闭打板轨")
+        obs = [x for x in r["rows"] if x["conclusion"] != "可买"][:6]
+        if obs:
+            print("**👀 观察**")
+            for x in obs:
+                print(f"  {x['name']}({x['code']}) 晋级{x['pct']:.0f}% · {str(x.get('track'))[:8]}")
         return 0
 
     now = datetime.now()
