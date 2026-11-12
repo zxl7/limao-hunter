@@ -482,6 +482,7 @@ def admit(relay: list[dict[str, Any]],
     # 🎯 炸板闸（2026-11-11 用户 A）：炸板次数 > 上限 → 直接不进池。
     _zbc_cap = max_zbc()
     zbc_dropped: list[str] = []
+    zbc_exempt: list[str] = []
     _kept: list[dict[str, Any]] = []
     for r in pool:
         try:
@@ -489,6 +490,25 @@ def admit(relay: list[dict[str, Any]],
         except (TypeError, ValueError):
             _z = 0.0
         if _z > _zbc_cap:
+            # 股性豁免（2026-11-12 用户「确实可以豁免，直接做进去」）
+            _g = _gene_of(str((r or {}).get("code") or ""))
+            _strong = False
+            if isinstance(_g, dict):
+                try:
+                    _strong = (int(_g.get("zt_n") or 0) >= 8
+                               and int(_g.get("max_lbc") or 0) >= 4)
+                except (TypeError, ValueError):
+                    _strong = False
+            if _strong:
+                _ex = dict(r or {})
+                _ex.update(participation_eligibility="observe_only", buyable=False,
+                           watch_only=True, watch_group="炸板豁免观察", zbc_exempt=True,
+                           watch_reason=(f"炸板 {int(_z)} 次，但股性极强"
+                                         f"（近一年涨停 {_g.get('zt_n')} 次 / 最高 "
+                                         f"{_g.get('max_lbc')} 连板）→ 保留观察，不直接剔"))
+                _kept.append(_ex)
+                zbc_exempt.append(str(_ex.get("name") or _ex.get("code") or ""))
+                continue
             zbc_dropped.append(str((r or {}).get("name") or (r or {}).get("code") or ""))
             continue
         _kept.append(r)
@@ -673,6 +693,7 @@ def admit(relay: list[dict[str, Any]],
         # 🎯 2026-11-11 用户 A：炸板 >5 不进池
         "max_zbc": _zbc_cap,
         "zbc_dropped": zbc_dropped,
+        "zbc_exempt": zbc_exempt,
         "theme_dropped": theme_dropped,
         "gene_min_zt": _g_min,
         "gene_max_lbc": _g_lbc,

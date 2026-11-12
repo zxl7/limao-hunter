@@ -298,10 +298,19 @@ def test_unqualified_rows_never_enter_pool(monkeypatch):
     ]
     good = row(code="000014", name="真接力", participation_eligibility="conditional",
                buyable=True, watch_group="历史连板修复")
+    # 🕯 2026-11-12 用户「一字板次日能低吸」→ 一字核心保留在池里（observe_only），
+    #    所以本用例的期望从「只剩真接力」改成「一字票保留观察、容量/孤军仍不进」。
     r, w, dropped, _ = _merge_pools([], junk + [good])
-    assert [x["name"] for x in r] == ["真接力"]
+    names = [x["name"] for x in r]
+    assert "真接力" in names
+    assert "一字票" in names, names
+    assert "容量票" not in names and "孤军票" not in names, names
+    one = next(x for x in r if x["name"] == "一字票")
+    assert one.get("participation_eligibility") == "observe_only"
+    assert not one.get("buyable")   # 缺省 None 与 False 同义：不可买
     assert not w
-    assert {x["name"] for x in dropped} == {"一字票", "容量票", "孤军票"}
+    # 一字票已改为「保留观察」，不再出现在 dropped 里
+    assert {x["name"] for x in dropped} == {"容量票", "孤军票"}
     assert all(x["dropped_kind"] == "unqualified" for x in dropped)
 
 

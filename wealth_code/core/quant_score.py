@@ -941,7 +941,9 @@ def _merge_pools(
             # 🔁 2026-11-11：状态类「待复核」票（历史连板修复 / 首板观察 / 过筛未过）不因资格线消失，
             #    留在池里由 09:25 竞价复核决定（11-06 用户「可以放进来」）。
             #    ⛔ 身份仍是 observe_only，买不买由竞价现场判；回退 `POOL_KEEP_RECHECK_STATE=0`。
-            _repair_state = (str(r.get("watch_group") or "") in ("历史连板修复", "首板观察")
+            _repair_state = (str(r.get("watch_group") or "") in (
+                                 "历史连板修复", "首板观察", "炸板豁免观察",
+                                 "一字核心", "一字龙头")
                              or str(r.get("recheck_class") or "") == "state")
             if (_repair_state
                     and os.environ.get("POOL_KEEP_RECHECK_STATE", "1") != "0"):

@@ -1969,7 +1969,17 @@ def call_pool(candidates: dict[str, Any] | None,
                                "participation_eligibility": "observe_only",
                                "reason": c.get("watch_reason") or "板块观察参照，不参与交易"}
                 continue
-            if _cls != "state" and not all_tradeable_enabled():
+            # 🕯 一字板次日低吸（2026-11-12 用户「毕竟它是光模块的…应该能低吸到」）：
+            #    昨天一字（买不到）的核心，今天开在 +2%~+6% → 允许走完整裁决链（同一套闸）。
+            _owg = str(c.get("watch_group") or "")
+            _ow_low_gap = (_owg in ("一字核心", "一字龙头")
+                           and isinstance(gap, (int, float)) and 2.0 <= float(gap) <= 6.0)
+            if _ow_low_gap:
+                _recheck["verdict"] = "一字次日低吸窗口·进入完整竞价裁决"
+                base["recheck_class"] = "state"
+                base["auction_recheck"] = _recheck
+                base["one_word_low_gap"] = True
+            if _cls != "state" and not all_tradeable_enabled() and not _ow_low_gap:
                 _gap_txt = "竞价没拿到" if gap is None else f"今早开 {gap:+.2f}%"
                 _amt_txt = (f"、竞价 {float(amt):.2f} 亿"
                             if isinstance(amt, (int, float)) else "")
