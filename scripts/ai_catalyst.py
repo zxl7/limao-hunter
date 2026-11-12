@@ -106,6 +106,62 @@ _NEWS_H = {
 }
 
 
+# 🎯 A 股题材相关过滤（2026-11-12 用户「只要与 A 股题材相关的」）
+# 目的：把「美股/美联储/地缘」这类噪声挡在 prompt 外，只留可能映射到昨日涨停线的消息。
+THEME_ALIASES = {
+    "光通信": ("光通信", "光模块", "CPO", "光芯片", "光纤", "硅光", "光传输"),
+    "国产芯片": ("芯片", "半导体", "晶圆", "存储", "DRAM", "NAND", "算力芯片", "平头哥"),
+    "云计算数据中心": ("算力", "数据中心", "云", "IDC", "液冷", "服务器"),
+    "机器人": ("机器人", "人形", "减速器", "丝杠", "灵巧手", "具身"),
+    "光伏": ("光伏", "组件", "硅料", "逆变器", "储能", "电池片"),
+    "大消费": ("消费", "白酒", "食品", "零售", "免税", "旅游"),
+    "短剧/互动影游": ("短剧", "微短剧", "影视", "传媒", "游戏", "互动影游"),
+    "天然气": ("天然气", "LNG", "燃气", "油价", "成品油"),
+    "PCB板": ("PCB", "覆铜板", "线路板", "载板"),
+    "化学原料": ("化工", "化学", "钛白粉", "纯碱"),
+    "低空经济": ("低空", "eVTOL", "无人机", "通航"),
+    "航天": ("航天", "卫星", "火箭", "商业航天"),
+    "汽车零部": ("汽车零部件", "整车", "智驾", "车灯"),
+    "房地产": ("地产", "房地产", "楼市", "物业"),
+}
+# 兜底：出现这些词的 A 股相关消息也保留（避免别名表漏掉的线）
+GENERIC_A_SHARE = ("A股", "涨停", "主力", "北向", "龙虎榜", "板块", "政策", "发布", "涨价",
+                   "中标", "订单", "重组", "获批", "上市", "扩产")
+
+
+def _theme_tokens(themes: list[str]) -> set[str]:
+    toks: set[str] = set()
+    for t in themes:
+        name = str(t or "").strip()
+        if not name or name in ("—", "-", "其他", "未知"):
+            continue
+        toks.add(name)
+        for part in name.replace("／", "/").split("/"):
+            if len(part) >= 2:
+                toks.add(part)
+        for alias in THEME_ALIASES.get(name, ()):
+            toks.add(alias)
+    return toks
+
+
+def _relevant(items: list[str], themes: list[str], *, limit: int = 40) -> list[str]:
+    """只留与昨日涨停题材相关的消息；命中题材别名优先，其次 A 股泛化词。"""
+    toks = _theme_tokens(themes)
+    strong: list[str] = []
+    weak: list[str] = []
+    for x in items:
+        s = str(x or "")
+        if not s:
+            continue
+        hits = sum(1 for t in toks if t and t in s)
+        if hits:
+            strong.append(s)
+        elif any(g in s for g in GENERIC_A_SHARE):
+            weak.append(s)
+    # 题材命中优先；不够再补 A 股泛化（上限仍是 limit）
+    return (strong + weak)[:limit]
+
+
 def _fetch_live_news(day: str, limit: int = 40) -> list[str]:
     """抓当日快讯（2026-11-12：选股宝 baoer-api 自 09-17 起域名级不可用，改走东财/同花顺）。
 
@@ -170,8 +226,9 @@ def _news(day: str) -> list[str]:
     except Exception:  # noqa: BLE001
         pass
     live = _fetch_live_news(day)
-    out = [x for x in (out + live) if x]
-    return out[:80]
+    themes = [t.get("theme") for t in _themes(day)]
+    out = [x for x in out if x]
+    return _relevant(out + live, themes, limit=40)
 
 
 def build_prompt(day: str) -> str:
