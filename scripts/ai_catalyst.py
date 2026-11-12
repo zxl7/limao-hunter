@@ -94,6 +94,65 @@ def _themes(day: str) -> list[dict]:
     return sorted(agg.values(), key=lambda x: -x["n"])
 
 
+NEWS_EM = ("https://np-listapi.eastmoney.com/comm/web/getNewsByColumns"
+           "?client=web&biz=web_news_col&column=344&order=1&needInteractData=0"
+           "&page_index=1&page_size=40&req_trace=1")
+NEWS_THS = "https://news.10jqka.com.cn/tapp/news/push/stock/?page=1&tag=&track=website&pagesize=40"
+_NEWS_H = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+}
+
+
+def _fetch_live_news(day: str, limit: int = 40) -> list[str]:
+    """抓当日快讯（2026-11-12：选股宝 baoer-api 自 09-17 起域名级不可用，改走东财/同花顺）。
+
+    ⛔ 抓不到就返回空（⛔ 不编、不用旧闻冒充今天）；结果缓存到 `cache/newsflash_live_<day>.json`。
+    """
+    import urllib.request as _u
+    cache = CACHE / f"newsflash_live_{day}.json"
+    try:
+        if cache.exists():
+            d = json.loads(cache.read_text(encoding="utf-8"))
+            if d.get("date") == day and d.get("items"):
+                return [str(x) for x in d["items"]][:limit]
+    except Exception:  # noqa: BLE001
+        pass
+    items: list[str] = []
+    try:
+        req = _u.Request(NEWS_EM, headers=_NEWS_H)
+        with _u.urlopen(req, timeout=12) as r:
+            d = json.loads(r.read().decode("utf-8", "replace"))
+        for it in ((d.get("data") or {}).get("list") or []):
+            t = str(it.get("summary") or it.get("title") or "").strip()
+            if t:
+                items.append(t)
+    except Exception:  # noqa: BLE001
+        pass
+    if not items:
+        try:
+            req = _u.Request(NEWS_THS, headers=_NEWS_H)
+            with _u.urlopen(req, timeout=12) as r:
+                d = json.loads(r.read().decode("utf-8", "replace"))
+            for it in ((d.get("data") or {}).get("list") or []):
+                t = str(it.get("title") or "").strip()
+                if t:
+                    items.append(t)
+        except Exception:  # noqa: BLE001
+            pass
+    items = items[:limit]
+    if items:
+        try:
+            cache.write_text(json.dumps({"date": day, "source": "eastmoney/ths",
+                                         "items": items}, ensure_ascii=False, indent=1),
+                             encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass
+    return items
+
+
 def _news(day: str) -> list[str]:
     """可用新闻：优先当日快照的 newsflash，其次归档文件。缺失返回空（⛔ 不编）。"""
     out: list[str] = []
@@ -110,7 +169,9 @@ def _news(day: str) -> list[str]:
         out += [str(x.get("title") or "") for x in (nf.get("newsflash") or []) if isinstance(x, dict)]
     except Exception:  # noqa: BLE001
         pass
-    return [x for x in out if x][:80]
+    live = _fetch_live_news(day)
+    out = [x for x in (out + live) if x]
+    return out[:80]
 
 
 def build_prompt(day: str) -> str:
