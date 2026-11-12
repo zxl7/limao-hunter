@@ -47,7 +47,8 @@ def _today() -> str:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--open", action="store_true")
-    ap.add_argument("--settle", action="store_true")
+    ap.add_argument("--settle", action="store_true", help="收盘发断板信号")
+    ap.add_argument("--execute", action="store_true", help="下一交易日开盘执行卖出")
     ap.add_argument("--report", action="store_true")
     ap.add_argument("--push", action="store_true", help="推送持仓/断板卡")
     ap.add_argument("--dry-run", action="store_true")
@@ -67,6 +68,22 @@ def main(argv=None) -> int:
             print(f"[开仓] {o['priority']} {o['name']}({o['code']}) 晋级率 {o['entry_pct']}% @ {o['entry_price']}")
         if not opened:
             print("[开仓] 无可登记标的（晋级率 ≥40% 且未持有）")
+
+    if a.execute:
+        opens = {}
+        for it in (h.get("open") or []):
+            code = str(it.get("code"))
+            try:
+                bars = json.loads((ROOT / "cache" / "kline_qfq" / f"{code}.json").read_text(encoding="utf-8"))["bars"]
+                hit = [b for b in bars if str(b.get("date"))[:10] == day]
+                if hit:
+                    opens[code] = float(hit[-1]["open"])
+            except Exception:  # noqa: BLE001
+                pass
+        h, done = sh.execute(h, day, opens)
+        _save(h)
+        for c in done:
+            print(f"[T+1 卖出] {c['name']}({c['code']}) 信号 {c.get('exit_signal_date')} → {day} 开盘出")
 
     if a.settle:
         zp = ROOT / "cache" / "zt_history" / f"zt_{day}.json"
@@ -108,7 +125,7 @@ def main(argv=None) -> int:
                 import subprocess
                 subprocess.run([sys.executable, str(ROOT / "scripts" / "push_card.py"), str(tmp)], check=False)
 
-    if a.report or not (a.open or a.settle or a.push):
+    if a.report or not (a.open or a.settle or a.execute or a.push):
         rows = sh.report(h)
         if not rows:
             print("[持仓] 空")

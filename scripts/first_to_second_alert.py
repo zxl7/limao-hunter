@@ -141,6 +141,39 @@ def _maybe_push_plan(day: str, *, dry: bool) -> None:
             _push("🔒 今日建仓", body, dry=dry)
     except Exception as e:  # noqa: BLE001
         print(f"[fts] 开仓登记失败：{e}")
+
+    # 🧠 LLM 交易员裁决（多因素）→ 最终「可买」
+    try:
+        import subprocess
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "ai_trader_judge.py"),
+                        "--date", day], check=False, timeout=180)
+        tp = ROOT / "cache" / f"ai_trade_{day}.json"
+        picks = (json.loads(tp.read_text(encoding="utf-8")).get("picks") or []) if tp.exists() else []
+        llm = {str(x.get("code")): x for x in picks}
+        if llm:
+            sys.path.insert(0, str(ROOT / "wealth_code"))
+            from core import final_verdict as fv
+            freeze = {}
+            fz = ROOT / "wealth_code" / "cache" / f"pool_call-{day}.json"
+            if fz.exists():
+                freeze = json.loads(fz.read_text(encoding="utf-8")).get("views") or {}
+            catp = ROOT / "cache" / f"ai_advice_{day}.json"
+            lv = {}
+            if catp.exists():
+                lv = {k: (v or {}).get("level") for k, v in
+                      (json.loads(catp.read_text(encoding="utf-8")).get("themes") or {}).items()}
+            vs = fv.decide(res.get("rows") or [], freeze, lv, llm)
+            buys = [v for v in vs if v["conclusion"] == "可买"]
+            body = ["**🧠 LLM 交易员裁决（机械×晋级率×催化×情绪）**"]
+            if buys:
+                for v in buys[:3]:
+                    body.append(f"{v['priority']} {v['name']}({v['code']}) 晋级{v['pct']:.0f}% "
+                                f"· 催化{v['catalyst']} · {v['why'][:60]}")
+            else:
+                body.append("今天没有同时满足三层的票 → **不买**")
+            _push("🧠 最终裁决", body, dry=dry)
+    except Exception as e:  # noqa: BLE001
+        print(f"[fts] LLM 裁决失败：{e}")
     st["_plan_pushed"] = True
     _save_state(day, st)
 

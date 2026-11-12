@@ -41,11 +41,19 @@ def test_settle_keeps_if_in_zt_and_exits_on_break():
         {"code": "B", "name": "乙", "entry_price": 10.0, "entry_pct": 64.5, "priority": "P1", "status": "持有中"},
         {"code": "A", "name": "甲", "entry_price": 10.0, "entry_pct": 59.3, "priority": "P2", "status": "持有中"},
     ], "closed": []}
-    h, closed = sh.settle(h, [{"code": "B", "boards": 3}], "2026-11-14", {"A": 9.0})
-    assert [x["code"] for x in closed] == ["A"]
+    # 收盘只发信号（T+1：当日不能卖）
+    h, signaled = sh.settle(h, [{"code": "B", "boards": 3}], "2026-11-14")
+    assert [x["code"] for x in signaled] == ["A"]
+    assert signaled[0]["status"] == "待退出（T+1）"
     assert h["open"][0]["code"] == "B" and h["open"][0]["boards_now"] == 3
-    assert closed[0]["exit_reason"].startswith("断板")
-    assert closed[0]["ret_pct"] == -10.0
+    # 同日不可执行
+    h, done = sh.execute(h, "2026-11-14", {"A": 9.0})
+    assert done == []
+    # 下一交易日开盘卖出
+    h, done = sh.execute(h, "2026-11-17", {"A": 9.0})
+    assert [x["code"] for x in done] == ["A"]
+    assert done[0]["exit_reason"].startswith("断板")
+    assert done[0]["ret_pct"] == -10.0
 
 
 def test_report_has_five_fields():

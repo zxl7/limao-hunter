@@ -50,3 +50,16 @@ def test_priority_only_for_buyable_sorted():
     views = {c: {"view": "participate"} for c in ("A", "B")}
     out = fv.decide(rows, views, {})
     assert [x["code"] for x in out] == ["B", "A"] and out[0]["priority"] == "P1"
+
+
+def test_llm_actions_override():
+    rows = [{"code": "A", "name": "甲", "pct": 59.3, "theme": "机器人"},
+            {"code": "B", "name": "乙", "pct": 64.5, "theme": "机器人"},
+            {"code": "C", "name": "丙", "pct": 50.0, "theme": "机器人"}]
+    views = {c: {"view": "participate"} for c in "ABC"}
+    llm = {"A": {"action": "buy", "thesis": "机器人7家+竞价8%"}, "B": {"action": "skip", "thesis": "身位高"},
+           "C": {"action": "watch", "thesis": "量能弱"}}
+    out = {x["code"]: x for x in fv.decide(rows, views, {"机器人": "strong"}, llm)}
+    assert out["A"]["conclusion"] == "可买" and "LLM" in out["A"]["why"]
+    assert out["B"]["conclusion"] == "不买" and "LLM 放弃" in out["B"]["why"]
+    assert out["C"]["conclusion"] == "观察" and "LLM 观察" in out["C"]["why"]

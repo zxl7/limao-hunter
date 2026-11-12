@@ -28,10 +28,12 @@ LIKELY_MIN = 40.0
 
 def decide(rows: list[dict], views: dict[str, Any] | None = None,
            catalyst_levels: dict[str, str] | None = None,
+           llm_actions: dict[str, dict] | None = None,
            *, likely_min: float = LIKELY_MIN) -> list[dict]:
     """rows: 晋级预案行（含 code/name/boards/pct/gap/theme）；views: pool_call 票视图。"""
     views = views or {}
     cat = catalyst_levels or {}
+    llm = llm_actions or {}
     out = []
     for r in rows:
         code = str(r.get("code"))
@@ -43,12 +45,19 @@ def decide(rows: list[dict], views: dict[str, Any] | None = None,
         mech_ok = mech == "participate"
         pct_ok = isinstance(pct, (int, float)) and float(pct) >= likely_min
         cat_ok = level != "weak"
+        act = str((llm.get(code) or {}).get("action") or "").lower()
+        thesis = str((llm.get(code) or {}).get("thesis") or "")
         if not pct_ok:
             conclusion, why = "不买", f"晋级率 {pct}% < {likely_min:.0f}%"
         elif mech == "skip":
             conclusion, why = "不买", f"机械否决：{v.get('reason') or 'skip'}"
+        elif act == "skip":
+            conclusion, why = "不买", f"LLM 放弃：{thesis or '看空'}"
+        elif act == "watch":
+            conclusion, why = "观察", f"LLM 观察：{thesis or '再看'}"
         elif mech_ok and cat_ok:
-            conclusion, why = "可买", f"机械过（{v.get('reason', 'participate')[:24]}…）+ 晋级率 {pct}% + 催化 {level}"
+            conclusion, why = "可买", (f"机械过 + 晋级率 {pct}% + 催化 {level}"
+                                       + (f" + LLM：{thesis}" if act == "buy" and thesis else ""))
         else:
             conclusion = "观察"
             bits = []
@@ -59,7 +68,8 @@ def decide(rows: list[dict], views: dict[str, Any] | None = None,
             why = "；".join(bits) or "未达可买"
         out.append({"code": code, "name": r.get("name"), "theme": theme,
                     "boards": r.get("boards"), "gap": r.get("gap"), "pct": pct,
-                    "mech": mech, "catalyst": level, "conclusion": conclusion, "why": why})
+                    "mech": mech, "catalyst": level, "llm": act or None,
+                    "conclusion": conclusion, "why": why})
     order = {"可买": 0, "观察": 1, "不买": 2}
     out.sort(key=lambda x: (order.get(x["conclusion"], 9), -(x.get("pct") or 0)))
     for i, x in enumerate(out, 1):
