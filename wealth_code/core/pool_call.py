@@ -1996,9 +1996,17 @@ def call_pool(candidates: dict[str, Any] | None,
                             if isinstance(amt, (int, float)) else "")
                 _band_txt = "、" + {"full": "量足", "soft": "量偏弱",
                                     "dry": "真没量"}.get(_rb.get("band"), "量能无数据")
-                if _cls == "restricted":
+                # ⛔ 2026-11-12 修：`is_one_word` 是**昨天**的封板形态，
+                #    今天买不买得进只看今开 gap（今天开 5% 就不是一字）。
+                #    否则「昨日一字、今日低开」的票会被永久判成「封死买不进」。
+                _sealed_today = (isinstance(gap, (int, float))
+                                 and float(gap) >= (19.5 if c.get("is_20cm") else 9.5))
+                if _owg in ("一字核心", "一字龙头") and isinstance(gap, (int, float)):
+                    _why = (f"昨日一字，今日开 {float(gap):+.2f}%"
+                            "（低吸窗口 +2%~+5% 之外）")
+                elif _cls == "restricted":
                     _why = "盘后没过接力准入"
-                elif c.get("is_one_word") is True:
+                elif _sealed_today:
                     _why = "一字封死，买不进"
                 elif "封单只占流通" in str(c.get("watch_reason") or ""):
                     _why = "最高板封单太薄"
