@@ -761,6 +761,29 @@ def run_verify(
                     sector_gap=_sgc_ctx,
                     code_theme=_code_theme_pos,
                     relay_plan=_relay_plan)
+                # 🧭 板块竞价雷达（2026-11-12 用户「看见开一字了，要看这个题材里开得怎么样」）
+                #    只写 meta（只读观察），⛔ 不参与任何买入判据。
+                try:
+                    from core import theme_auction_radar as _tar
+                    from core import sector_gap_context as _sgcr
+                    _plates_r = _sgcr.load_plates_map(date10)
+                    def _theme_of_r(c: str, r: dict):
+                        _t = (_code_theme_pos or {}).get(c)
+                        if _t:
+                            return _t
+                        try:
+                            _tt, _src = _sgcr.main_theme(c, r, _plates_r)
+                            return _tt if _src in ("plates", "theme") else ""
+                        except Exception:  # noqa: BLE001
+                            return ""
+                    _radar = _tar.build(full_zt_rows or [], quotes or {}, _theme_of_r)
+                    pool_res.setdefault("meta", {})["theme_auction"] = {
+                        "schema": _tar.SCHEMA,
+                        "lines": _radar[:12],
+                    }
+                except Exception as _e:  # noqa: BLE001
+                    print(f"[VERIFY] 板块竞价雷达跳过：{_e}")
+
                 # 📈 昨日连板 · 今晨竞价溢价榜（2026-11-04 用户）
                 _attach_premium_board(pool_res, full_zt_rows, quotes,
                                       prev_date=date10, trade_date=trade_date10)
