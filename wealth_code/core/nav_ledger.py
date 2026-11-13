@@ -110,6 +110,8 @@ def _normalize_existing_row(row: dict[str, Any]) -> dict[str, Any] | None:
         "note": str(row.get("note") or "").strip(),
         "stock_count": int(float(row.get("stock_count") or 0)),
         "avg_return_pct": avg_return_pct,
+        "account_return_pct": float(row.get("account_return_pct") if isinstance(row.get("account_return_pct"), (int, float)) else avg_return_pct),
+        "weight": str(row.get("weight") or "equal_fallback"),
         "nav": 0.0,
         "codes": [str(x).strip() for x in (row.get("codes") or []) if str(x).strip()],
         "names": [str(x).strip() for x in (row.get("names") or []) if str(x).strip()],
@@ -118,6 +120,7 @@ def _normalize_existing_row(row: dict[str, Any]) -> dict[str, Any] | None:
                 "code": str(s.get("code") or "").strip(),
                 "name": str(s.get("name") or "").strip(),
                 "return_pct": round(float(s.get("return_pct") or 0.0), 4),
+                **({"position_cap": s["position_cap"]} if isinstance(s.get("position_cap"), (int, float)) else {}),
             }
             for s in (row.get("stocks") or [])
             if isinstance(s, dict)
@@ -125,7 +128,29 @@ def _normalize_existing_row(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _build_incremental_rows_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+def _load_position_caps(trade_date: str) -> dict[str, float]:
+    """从 09:25 冻结件读每票仓位上限（2026-11-13 用户「收益要按仓位算」）。
+
+    冻结件：`wealth_code/cache/pool_call-<trade_date>.json` 的 `views[code].position_cap`。
+    缺文件/缺字段 → 返回空 dict（此时退回等权，并在行里标 `weight=equal_fallback`）。
+    """
+    import json as _json
+    p = Path(__file__).resolve().parent.parent / "cache" / f"pool_call-{trade_date}.json"
+    try:
+        views = (_json.loads(p.read_text(encoding="utf-8")) or {}).get("views") or {}
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict[str, float] = {}
+    for code, v in views.items():
+        cap = (v or {}).get("position_cap")
+        if isinstance(cap, (int, float)) and cap > 0:
+            out[str(code)] = float(cap)
+    return out
+
+
+def _build_incremental_rows_from_payload(payload: dict[str, Any],
+                                         caps: dict[str, dict[str, float]] | None = None
+                                         ) -> list[dict[str, Any]]:
     records = payload.get("records") if isinstance(payload, dict) else []
     grouped: dict[str, dict[str, Any]] = {}
 
@@ -170,6 +195,7 @@ def _build_incremental_rows_from_payload(payload: dict[str, Any]) -> list[dict[s
         item["stocks"].append(
             {"code": code, "name": name, "return_pct": round(ret, 4)}
         )
+        item.setdefault("_pairs", []).append((code, ret))
 
     out: list[dict[str, Any]] = []
     for trade_date in sorted(grouped.keys()):
@@ -178,6 +204,18 @@ def _build_incremental_rows_from_payload(payload: dict[str, Any]) -> list[dict[s
         if not returns:
             continue
         avg_return_pct = round(sum(float(x) for x in returns) / len(returns), 4)
+        # 💰 仓位加权（2026-11-13 用户）：账户收益 = Σ(仓位 × 个股收益)，未用仓位=现金(0)
+        _caps = (caps or {}).get(trade_date) or _load_position_caps(trade_date)
+        _pairs = item.get("_pairs") or []
+        _w = [(c, float(r)) for c, r in _pairs if c in _caps]
+        if _caps and _w and len(_w) == len(_pairs):
+            account_return_pct = round(sum(_caps[c] * r for c, r in _w), 4)
+            weight = "position"
+            for st in item.get("stocks") or []:
+                st["position_cap"] = round(_caps.get(str(st.get("code"))), 4) if str(st.get("code")) in _caps else None
+        else:
+            account_return_pct = avg_return_pct
+            weight = "equal_fallback"
         out.append(
             {
                 "trade_date": trade_date,
@@ -186,6 +224,8 @@ def _build_incremental_rows_from_payload(payload: dict[str, Any]) -> list[dict[s
                 "caliber": item.get("caliber") or "",
                 "stock_count": len(returns),
                 "avg_return_pct": avg_return_pct,
+                "account_return_pct": account_return_pct,
+                "weight": weight,
                 "nav": 0.0,
                 "codes": item.get("codes") or [],
                 "names": item.get("names") or [],
@@ -214,7 +254,9 @@ def _merge_ledger_rows(
     nav = implied_base
     out: list[dict[str, Any]] = []
     for row in sorted(by_key.values(), key=_ledger_sort_key):
-        avg_return_pct = float(row.get("avg_return_pct") or 0.0)
+        avg_return_pct = float(row.get("account_return_pct")
+                               if isinstance(row.get("account_return_pct"), (int, float))
+                               else (row.get("avg_return_pct") or 0.0))
         nav = round(nav * (1 + avg_return_pct / 100.0), 6)
         row = dict(row)
         row["nav"] = nav
