@@ -2209,11 +2209,23 @@ def build_card(signals, sess, now, relay=None, backseat=None, group_view=None,
 
     lines = []
     if signals:
-        top = signals[0]
-        tcol = TYPE_COLORS.get(top["type"], "red")
-        lines.append(f"**🧭 本批 {len(signals)} 只**｜最强 "
+        # ⛔ 2026-11-13 修：原来一律写「最强 signals[0]」，纯下跌批会出现
+        #    「最强 中稀有色 −8.19%」这种自相矛盾的文案。
+        #    现在按方向取：有上涨类信号 → 最强（涨幅最大）；全是下跌类 → 领跌（跌幅最大）。
+        _UP_TYPES = ("涨停", "接近涨停", "快速拉升", "炸板·回落")
+        _up = [x for x in signals if x.get("type") in _UP_TYPES]
+        if _up:
+            top = max(_up, key=lambda x: float(x.get("pct") or 0))
+            label, tcol = "最强", TYPE_COLORS.get(top["type"], "red")
+        else:
+            top = min(signals, key=lambda x: float(x.get("pct") or 0))
+            label, tcol = "领跌", "green"
+        # 单条不写摘要头（2026-11-13 用户：1 只票在头部和明细里复读两遍）
+        # 多条才写「本批 N 只｜最强/领跌」摘要；理由交给明细行。
+        if len(signals) > 1:
+            lines.append(f"**🧭 本批 {len(signals)} 只**｜{label} "
                      f"<text_tag color='{tcol}'>{top['name']}({top['code']})</text_tag> "
-                     f"{_pct_tag(top['pct'])}（{top['sector']}）｜⚡{top['reason']}｜{sess_cn}时段")
+                         f"{_pct_tag(top['pct'])}（{top['sector']}）｜{sess_cn}时段")
     for typ, title, col in (("涨停", "🔥 涨停信号", "red"),
                             ("炸板·回落", "🔥 炸板回落", "red"),
                             ("接近涨停", "🚀 接近涨停", "purple"),
@@ -2250,8 +2262,11 @@ def build_card(signals, sess, now, relay=None, backseat=None, group_view=None,
                     _seg = f"　**{_sec}** {_n}只"
                     if _zt:
                         _seg += f"(涨停{_zt})"
-                    _seg += (f"｜最强 {_top.get('name')}({_top.get('code')}) "
-                             f"{_pct_tag(float(_top.get('pct') or 0))}")
+                    # ⛔ 2026-11-13：板块内全是下跌票时不能写「最强」，改「领跌」
+                    _tp = float(_top.get("pct") or 0)
+                    _lab = "最强" if _tp > 0 else "领跌"
+                    _seg += (f"｜{_lab} {_top.get('name')}({_top.get('code')}) "
+                             f"{_pct_tag(_tp)}")
                     lines.append(_seg)
                     # 跟风（2026-10-14 用户「除了最强那只，后面还要跟一个板块跟风，列举几个个股+涨幅」）：
                     #   从后排候选里取**同板块**别的票（候选已剔除 signals → 天然不含「最强那只」），
