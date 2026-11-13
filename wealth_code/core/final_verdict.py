@@ -137,9 +137,13 @@ def decide_tracks(rows: list[dict], views: dict[str, Any] | None = None,
         level = str(cat.get(theme) or "unknown")
         act = str((llm.get(code) or {}).get("action") or "").lower()
         thesis = str((llm.get(code) or {}).get("thesis") or "")
-        role = str((hierarchy or {}).get(code, {}).get("role") or "")
-        ast = str((accel or {}).get(code, {}).get("state") or "未知")
-        wst = str((weak_to_strong or {}).get(code, {}).get("state") or "")
+        # 兼容两种输入：{code: {"role"/"state": ...}} 或 {code: "值"}
+        _h = (hierarchy or {}).get(code)
+        _a = (accel or {}).get(code)
+        _w = (weak_to_strong or {}).get(code)
+        role = str((_h.get("role") if isinstance(_h, dict) else _h) or "")
+        ast = str((_a.get("state") if isinstance(_a, dict) else _a) or "未知")
+        wst = str((_w.get("state") if isinstance(_w, dict) else _w) or "")
         bonus = _h_bonus(role) + _a_bonus(ast) + _w_bonus(wst)
         base = {"code": code, "name": r.get("name"), "theme": theme, "boards": b,
                 "gap": r.get("gap"), "pct": pct, "mech": mech, "catalyst": level, "llm": act or None,

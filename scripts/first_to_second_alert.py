@@ -82,12 +82,14 @@ def _save_state(day: str, st: dict) -> None:
 ALERT_WEBHOOK = os.environ.get("FTS_ALERT_WEBHOOK", "feishu_webhook_intraday")
 
 
-def _push(title: str, rows: list[str], *, dry: bool) -> None:
+def _push(title: str, rows: list[str], *, dry: bool, color: str = "red") -> None:
+    """卡面走短线精灵同一套样式：标题带时间、lark_md 分段、note 脚注。"""
     if not rows:
         return
-    card = {"title": title, "color": "purple",
+    _hm = datetime.now().strftime("%H:%M")
+    card = {"title": f"{title} | {_hm}", "color": color,
             "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(rows)}}],
-            "note": "一进二打板提醒 · 只提示不执行"}
+            "note": {"tag": "note", "elements": [{"tag": "lark_md", "content": f"📡 狸猫猎手 | {_hm}"}]}}
     tmp = Path("/tmp/limao_fts_card.json")
     tmp.write_text(json.dumps(card, ensure_ascii=False), encoding="utf-8")
     if dry:
@@ -141,24 +143,27 @@ def compose(day: str, *, run_llm: bool = True, register: bool = False,
     buys = [v for v in vs if v["conclusion"] == "可买"]
 
     body: list[str] = []
-    body.append("**🧠 最终裁决**" + ("：" if buys else "：今天不买"))
+    # 🎯 段：与短线精灵同款排版（全角缩进 + text_tag 染色 + ｜分隔）
     if buys:
+        body.append(f"**🎯 竞价裁决｜可买 {len(buys)} 只**：")
         for v in buys[:3]:
             _tags = "".join(x for x in (v.get("role"), v.get("accel") if v.get("accel") in ("加速", "减速") else None,
                                         "弱转强" if v.get("w2s") == "弱转强" else None) if x)
-            body.append(f"  {v['priority']} {v['name']}({v['code']}) {v['track']} 晋级{v['pct']:.0f}% "
-                        f"· 催化{v['catalyst']}" + (f" · {_tags}" if _tags else ""))
+            body.append(f"　{v['priority']} <text_tag color='red'>{v['name']}({v['code']})</text_tag> "
+                        f"晋级{v['pct']:.0f}%｜{v['track']}｜催化{v['catalyst']}"
+                        + (f"｜{_tags}" if _tags else ""))
     else:
-        reason = "机械未过 / 晋级率不足 / 催化弱 / LLM 放弃"
-        body.append(f"  —— 四层无一同时满足（{reason}）")
+        body.append("**🎯 竞价裁决｜今天不买**：")
+        body.append("　机械未过 / 晋级率不足 / 催化弱 / LLM 放弃 —— 四层无一同时满足")
 
     if l2:
-        body.append("**🔁 二进三（定心·不加仓）**")
-        body += [f"  {r['name']} 竞价{r['gap']:+.1f}% → 晋级 {r['pct']:.0f}%" for r in l2]
+        body.append("**🔁 二进三（定心·不加仓）**：")
+        body += [f"　<text_tag color='purple'>{r['name']}</text_tag> 竞价{r['gap']:+.1f}%"
+                 f"｜晋级 {r['pct']:.0f}%｜{r.get('theme') or '—'}" for r in l2]
     if l1:
-        body.append("**🥇 一进二（可打板）**")
-        body += [f"  {r['name']} 竞价{r['gap']:+.1f}% → 晋级 {r['pct']:.0f}%〔{r.get('theme') or ''}〕"
-                 for r in l1]
+        body.append("**🥇 一进二（可按板位观察）**：")
+        body += [f"　<text_tag color='purple'>{r['name']}</text_tag> 竞价{r['gap']:+.1f}%"
+                 f"｜晋级 {r['pct']:.0f}%｜{r.get('theme') or '—'}" for r in l1]
 
     if register and buys:
         try:
@@ -172,15 +177,15 @@ def compose(day: str, *, run_llm: bool = True, register: bool = False,
     holds = json.loads(hp.read_text(encoding="utf-8")) if hp.exists() else {}
     opened = [h for h in (holds.get("open") or []) if h.get("entry_date") == day]
     if opened:
-        body.append("**🔒 今日建仓（按晋级率·不提前退出）**")
+        body.append("**🔒 今日建仓（按晋级率·不提前退出）**：")
         for h in opened:
-            body.append(f"  {h['priority']} {h['name']}({h['code']}) 晋级率 {h['entry_pct']}% "
-                        f"· {h['status']} · 断板提示：收盘未涨停→T+1 开盘卖")
+            body.append(f"　<text_tag color='red'>{h['priority']} {h['name']}({h['code']})</text_tag> "
+                        f"晋级率 {h['entry_pct']}%｜{h['status']}｜断板→T+1 开盘卖")
     pend = [h for h in (holds.get("open") or []) if h.get("status") == "待退出（T+1）"]
     for h in pend:
-        body.append(f"  ⚠️ {h['name']}({h['code']}) 昨断板 → 今开盘卖出（T+1）")
+        body.append(f"　⚠️ <text_tag color='green'>{h['name']}({h['code']})</text_tag> 昨断板 → 今开盘卖出（T+1）")
 
-    return "🧠 09:26 竞价裁决", body
+    return "🧠 竞价裁决", body
 
 
 def _check_w2s(day: str, *, dry: bool) -> None:
@@ -222,7 +227,8 @@ def _check_w2s(day: str, *, dry: bool) -> None:
         return
     rows = ["**🔄 重新走强**（昨日断板/炸板 → 今日封板）"]
     for c, pct in hits[:4]:
-        rows.append(f"  🔄 {c['name']}({c['code']}) +{pct:.2f}%〔{c['theme']}·{c['prev']}〕")
+        rows.append(f"　<text_tag color='red'>{c['name']}({c['code']})</text_tag> "
+                    f"<text_tag color='red'>+{pct:.2f}%</text_tag>（{c['theme']}·{c['prev']}）")
     _push("🔄 重新走强", rows, dry=dry)
     st["_w2s_done"] = sorted(done)
     _save_state(day, st)
@@ -307,21 +313,23 @@ def main(argv=None) -> int:
         s["last_pct"] = pct
         if pct >= s_thr and not s.get("sealed"):
             s["sealed"] = True
-            sealed.append(f"🔔 <font color='red'>{p['name']}({c}) 已封板 +{pct:.2f}%"
-                          f"〔{p['theme']}·{p['mates']}家·评分{p['score']}〕</font>")
+            sealed.append(f"　<text_tag color='red'>{p['name']}({c})</text_tag> "
+                          f"<text_tag color='red'>+{pct:.2f}%</text_tag>"
+                          f"（{p['theme']}·{p['mates']}家·分{p['score']}）")
         elif pct >= a_thr and not s.get("approach"):
             s["approach"] = True
             gap = (s_thr - pct)
-            appr.append(f"⚡ <font color='purple'>{p['name']}({c}) +{pct:.2f}%"
-                        f"（距涨停 {gap:.1f} 点）〔{p['theme']}·评分{p['score']}〕</font>")
+            appr.append(f"　<text_tag color='purple'>{p['name']}({c})</text_tag> "
+                        f"<text_tag color='purple'>+{pct:.2f}%</text_tag>"
+                        f"（{p['theme']}·分{p['score']}·距板 {gap:.1f} 点）")
     _save_state(day, st)
     # 合并成一张卡（2026-11-13 用户「有机会就推」→ 减少刷屏）
     _rows = []
     if appr:
-        _rows.append("**⚡ 逼近涨停（打板准备）**")
+        _rows.append("**🚀 接近涨停**：")
         _rows += appr
     if sealed:
-        _rows.append("**🔔 已封板**")
+        _rows.append("**🔥 涨停信号**：")
         _rows += sealed
     _push("📡 一进二机会", _rows, dry=a.dry_run)
     return 0

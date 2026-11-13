@@ -117,13 +117,16 @@ def main(argv=None) -> int:
     if a.push:
         rows = sh.report(h)
         if rows:
-            lines = ["**🔒 竞价推票持仓（断板才退出）**"]
+            _hm = __import__("datetime").datetime.now().strftime("%H:%M")
+            lines = [f"**🔒 持仓跟踪｜{len(rows)} 只**："]
             for r in rows:
-                lines.append(f"{r['推荐优先级']} {r['名称']}({r['代码']}) 晋级率 {r['晋级率']}% "
-                             f"· {r['持有状态']} · {r['断板退出提示']}")
-            card = {"title": "🔒 竞价推票 · 持仓跟踪", "color": "purple",
+                _col = "red" if r["持有状态"] != "已退出" else "green"
+                lines.append(f"　<text_tag color='{_col}'>{r['推荐优先级']} {r['名称']}({r['代码']})</text_tag> "
+                             f"晋级率 {r['晋级率']}%｜{r['持有状态']}｜{r['断板退出提示']}")
+            card = {"title": f"🔒 持仓跟踪 | {_hm}", "color": "purple",
                     "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}}],
-                    "note": "规则：晋级率排序买入 · 不提前退出 · 断板（收盘未涨停）退出"}
+                    "note": {"tag": "note", "elements": [{"tag": "lark_md",
+                             "content": f"📡 狸猫猎手 | 不提前退出 · 断板收盘确认 · T+1 开盘卖 | {_hm}"}]}}
             tmp = Path("/tmp/limao_hold_card.json")
             tmp.write_text(json.dumps(card, ensure_ascii=False), encoding="utf-8")
             if a.dry_run:
