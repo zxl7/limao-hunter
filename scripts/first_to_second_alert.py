@@ -183,6 +183,51 @@ def compose(day: str, *, run_llm: bool = True, register: bool = False,
     return "🧠 09:26 竞价裁决", body
 
 
+def _check_w2s(day: str, *, dry: bool) -> None:
+    """🔄 弱转强反包：昨日断板/炸板 → 今日封板（只提醒，2 分钟节流）。"""
+    import time as _t
+    st = _load_state(day)
+    now_ts = _t.time()
+    if now_ts - float(st.get("_w2s_ts") or 0) < 120:
+        return
+    st["_w2s_ts"] = now_ts
+    _save_state(day, st)
+    try:
+        sys.path.insert(0, str(ROOT / "wealth_code"))
+        from core import w2s_watch as W2S
+        cand = W2S.candidates(day)
+    except Exception as e:  # noqa: BLE001
+        print(f"[fts] w2s 候选失败：{e}")
+        return
+    if not cand:
+        return
+    try:
+        from feedback_matrix import fetch_quotes
+        q = fetch_quotes([c["code"] for c in cand])
+    except Exception as e:  # noqa: BLE001
+        print(f"[fts] w2s 行情失败：{e}")
+        return
+    done = set(st.get("_w2s_done") or [])
+    hits = []
+    for c in cand:
+        it = q.get(c["code"]) or {}
+        pct = it.get("pct")
+        if pct is None or str(c["code"]) in done:
+            continue
+        seal = 19.5 if str(c["code"]).startswith(("30", "68")) else 9.5
+        if float(pct) >= seal:
+            hits.append((c, float(pct)))
+            done.add(str(c["code"]))
+    if not hits:
+        return
+    rows = ["**🔄 重新走强**（昨日断板/炸板 → 今日封板）"]
+    for c, pct in hits[:4]:
+        rows.append(f"  🔄 {c['name']}({c['code']}) +{pct:.2f}%〔{c['theme']}·{c['prev']}〕")
+    _push("🔄 重新走强", rows, dry=dry)
+    st["_w2s_done"] = sorted(done)
+    _save_state(day, st)
+
+
 def _maybe_push_plan(day: str, *, dry: bool) -> None:
     now = datetime.now().time()
     if not (time(9, 26) <= now <= time(9, 40)):
@@ -234,6 +279,8 @@ def main(argv=None) -> int:
         return 0
     day = _today()
     _maybe_push_plan(day, dry=a.dry_run)
+    if not a.dry_run:
+        _check_w2s(day, dry=a.dry_run)
     watch = _load_watch(day, a.watch_date)
     picks = watch.get("picks") or []
     if not picks:
