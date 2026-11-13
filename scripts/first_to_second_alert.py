@@ -77,6 +77,11 @@ def _save_state(day: str, st: dict) -> None:
     (STATE_DIR / f"fts_state_{day}.json").write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
 
 
+# ⛔ 2026-11-13 用户：「1进2、2进3 是短线精灵盘中异动，不是屠龙术群」
+#    竞价裁决卡统一走 `feishu_webhook_intraday`（与 short_spirit 同群）。
+ALERT_WEBHOOK = os.environ.get("FTS_ALERT_WEBHOOK", "feishu_webhook_intraday")
+
+
 def _push(title: str, rows: list[str], *, dry: bool) -> None:
     if not rows:
         return
@@ -88,8 +93,8 @@ def _push(title: str, rows: list[str], *, dry: bool) -> None:
     if dry:
         print(f"[dry] {title}\n" + "\n".join(rows))
         return
-    subprocess.run([sys.executable, str(PUSH), str(tmp)], check=False,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run([sys.executable, str(PUSH), "--webhook", ALERT_WEBHOOK, str(tmp)],
+                   check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def compose(day: str, *, run_llm: bool = True, register: bool = False,
