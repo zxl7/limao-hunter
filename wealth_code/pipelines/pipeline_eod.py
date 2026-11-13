@@ -2704,6 +2704,37 @@ def run_eod(
     except Exception as _e:  # noqa: BLE001
         print(f"[EOD] 🥈 第二波节点判定降级（不影响主链）：{_e}")
 
+    # 🏛 板块核心观察（2026-11-13 用户「题材与情绪核心那张卡选得准，每天并进池子」）
+    #    ⛔ 只观察不可买：核心票是「这条线的旗手」，用来对照板块异动真伪，不是买点。
+    try:
+        from core import board_core_watch as _bc
+        # 先重建核心票榜（0.3s·只读 zt_history），保证用当日数据
+        try:
+            import subprocess as _sp
+            _sp.run([sys.executable, str(ROOT.parent / "scripts" / "board_core.py"),
+                     "build", "--days", "20"], check=False, timeout=90,
+                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        except Exception:  # noqa: BLE001
+            pass
+        _exist = {str(r.get("code")) for r in (relay + watch)}
+        _cores = _bc.picks(_exist)
+        for _c in _cores:
+            watch.append({
+                "code": _c["code"], "name": _c["name"], "boards": _c["boards"],
+                "core_theme": _c.get("sector"), "sector": _c.get("sector"),
+                "participation_eligibility": "observe_only", "buyable": False,
+                "watch_only": True, "watch_group": "板块核心观察",
+                "watch_reason": (f"这条线的核心（{_c.get('sector')}·core {_c.get('core_score')}"
+                                 f"·参与{_c.get('join_rate')}%）：只看它动不动，不买"),
+                "board_core_score": _c.get("core_score"),
+                "board_core_join": _c.get("join_rate"),
+            })
+        if _cores:
+            print("[EOD] 🏛 板块核心观察：" + "、".join(
+                f"{x['name']}({x.get('sector')}·{x.get('core_score')})" for x in _cores))
+    except Exception as _e:  # noqa: BLE001
+        print(f"[EOD] 🏛 板块核心观察降级（不影响主链）：{_e}")
+
     # 🧭 市场级题材强度（2026-11-11 用户拍板 B）：回答「昨天整个市场哪几条线真强」。
     #    ⛔ 只写 diagnostics + 展示字段 theme_rank/theme_metrics；不改 relay_rank、
     #       dragon_rank、relay 数组顺序、任何准入闸 / DEV / 量能 / quota / 仓位 P0。
