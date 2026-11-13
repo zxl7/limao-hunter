@@ -268,8 +268,15 @@ def main(argv=None) -> int:
             appr.append(f"⚡ <font color='purple'>{p['name']}({c}) +{pct:.2f}%"
                         f"（距涨停 {gap:.1f} 点）〔{p['theme']}·评分{p['score']}〕</font>")
     _save_state(day, st)
-    _push("⚡ 一进二·逼近涨停（可打板准备）", appr, dry=a.dry_run)
-    _push("🔔 一进二·已封板", sealed, dry=a.dry_run)
+    # 合并成一张卡（2026-11-13 用户「有机会就推」→ 减少刷屏）
+    _rows = []
+    if appr:
+        _rows.append("**⚡ 逼近涨停（打板准备）**")
+        _rows += appr
+    if sealed:
+        _rows.append("**🔔 已封板**")
+        _rows += sealed
+    _push("📡 一进二机会", _rows, dry=a.dry_run)
     return 0
 
 

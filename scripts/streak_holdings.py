@@ -52,6 +52,8 @@ def main(argv=None) -> int:
     ap.add_argument("--report", action="store_true")
     ap.add_argument("--push", action="store_true", help="推送持仓/断板卡")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--webhook", default="feishu_webhook_intraday",
+                    help="推送目标（默认异动群；测试用 feishu_webhook_test）")
     ap.add_argument("--day")
     a = ap.parse_args(argv)
     day = a.day or _today()
@@ -128,7 +130,8 @@ def main(argv=None) -> int:
                 print("[dry] " + "\n".join(lines))
             else:
                 import subprocess
-                subprocess.run([sys.executable, str(ROOT / "scripts" / "push_card.py"), str(tmp)], check=False)
+                subprocess.run([sys.executable, str(ROOT / "scripts" / "push_card.py"),
+                                "--webhook", a.webhook, str(tmp)], check=False)
 
     if a.report or not (a.open or a.settle or a.execute or a.push):
         rows = sh.report(h)
