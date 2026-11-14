@@ -361,6 +361,8 @@ PUBLIC_ROUTES = {
     "/api/market/feedback": {"file": "cache/feedback_matrix.json", "cadence": "intraday", "desc": "涨停反馈矩阵"},
     "/api/review/panel": {"file": "cache/review_panel.json", "cadence": "daily",
                           "desc": "复盘三块面板（风险/赚钱效应/主线+LLM点评）"},
+    "/api/review/series": {"file": "cache/review_series.json", "cadence": "daily",
+                           "desc": "复盘多日序列（情绪分/涨停/跌停/最高板）"},
     "/api/market/candidates": {"file": "cache/pulse_snapshots/candidates.json", "cadence": "intraday", "desc": "候选池"},
     # 二、题材 / 资金
     "/api/theme/rotation": {"file": "cache/theme_rotation.json", "cadence": "intraday", "desc": "题材轮动"},
