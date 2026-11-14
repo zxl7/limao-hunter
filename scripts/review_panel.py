@@ -28,8 +28,10 @@ def main(argv=None) -> int:
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     d = rp.build(a.date)
-    (ROOT / "cache" / f"review_panel_{d['date']}.json").write_text(
-        json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+    body = json.dumps(d, ensure_ascii=False, indent=1)
+    (ROOT / "cache" / f"review_panel_{d['date']}.json").write_text(body, encoding="utf-8")
+    # 终端固定入口：始终写一份「最新」
+    (ROOT / "cache" / "review_panel.json").write_text(body, encoding="utf-8")
     if a.json:
         print(json.dumps(d, ensure_ascii=False))
         return 0

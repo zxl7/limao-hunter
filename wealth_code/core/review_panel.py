@@ -164,5 +164,62 @@ def build(day: str | None = None) -> dict:
         "risk": risk_block(pulse, fb, zt_prev, zt_today),
         "money": money_block(fb, zt_prev, pct),
         "themes": theme_block(day, zt_today)[:8],
+        "commentary": commentary(day),
+        "pool": pool_block(day),
         "sources": {"pulse": bool(pulse), "feedback": bool(fb), "kline": bool(pct)},
+    }
+
+
+def commentary(day: str) -> list[dict]:
+    """读取 LLM 复盘卡（`outputs/review_<date>.json`）→ 分段文本。"""
+    p = ROOT / "outputs" / f"review_{day}.json"
+    try:
+        card = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return []
+    def text_of(el) -> str:
+        if not isinstance(el, dict):
+            return ""
+        t = el.get("text")
+        if isinstance(t, dict):
+            return str(t.get("content") or "")
+        if isinstance(t, list):
+            return "".join(text_of(x) for x in t)
+        return ""
+    import re as _re
+    # 「**📉 ① 情绪演变**」这种才当标题；其余一律当正文（避免把 `**情绪分**　…` 误判成标题）
+    head_re = _re.compile(r"^\*\*[^*]{0,24}[①②③④⑤⑥⑦⑧⑨⑩][^*]{0,24}\*\*$")
+    sections: list[dict] = []
+    cur: dict | None = None
+    for el in card.get("elements") or []:
+        txt = text_of(el).strip()
+        if not txt:
+            continue
+        if head_re.match(txt):
+            cur = {"heading": txt.strip("*").strip(), "lines": []}
+            sections.append(cur)
+        elif cur is None:
+            cur = {"heading": "总览", "lines": []}
+            sections.append(cur)
+            cur["lines"].append(txt)
+        else:
+            cur["lines"].append(txt)
+    return [{"heading": s["heading"], "lines": s["lines"]} for s in sections if s["lines"] or s["heading"]]
+
+
+def pool_block(day: str) -> dict:
+    """09:25 冻结件 + 候选池：今天推了谁、买了谁。"""
+    fz = _load(ROOT / "wealth_code" / "cache" / f"pool_call-{day}.json", {})
+    views = fz.get("views") or {}
+    buys = [{"name": v.get("name"), "code": c, "cap": v.get("position_cap"),
+             "gap": v.get("gap_pct")} for c, v in views.items() if v.get("view") == "participate"]
+    watch = [{"name": v.get("name"), "code": c} for c, v in views.items() if v.get("view") == "watch"]
+    cand = _load(ROOT / "wealth_code" / "cache" / f"candidates-{day}.json", {})
+    return {
+        "relay": len(cand.get("relay") or []),
+        "watch": len(cand.get("watch") or []),
+        "buyable": buys[:6],
+        "observe": watch[:8],
+        "stance": fz.get("stance"),
+        "quota": fz.get("effective_quota") or fz.get("quota"),
     }
