@@ -149,6 +149,14 @@ def theme_block(day: str, zt: list[dict]) -> list[dict]:
     return out
 
 
+def _extras(day: str) -> dict:
+    try:
+        from core import review_extras as rx
+        return rx.build(day)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def build(day: str | None = None) -> dict:
     days = _days()
     day = day or (days[-1] if days else datetime.now().strftime("%Y-%m-%d"))
@@ -166,6 +174,9 @@ def build(day: str | None = None) -> dict:
         "themes": theme_block(day, zt_today)[:8],
         "commentary": commentary(day),
         "pool": pool_block(day),
+        # 👑 高标处境 + ⚠️ 明日跌停预判（懒加载，避免与 review_extras 循环 import）
+        "high_board": _extras(day).get("high_board"),
+        "dump_risk": _extras(day).get("dump_risk"),
         "sources": {"pulse": bool(pulse), "feedback": bool(fb), "kline": bool(pct)},
     }
 
