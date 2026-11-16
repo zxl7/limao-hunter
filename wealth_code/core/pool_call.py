@@ -1798,38 +1798,16 @@ def call_pool(candidates: dict[str, Any] | None,
     _top_line_counts = sorted(set(_theme_mates.values()), reverse=True)[:DEEP_LOW_TOP_LINES] if DEEP_LOW_TOP_LINES > 0 else []
     _top_lines = {k for k, v in _theme_mates.items() if v in _top_line_counts}
 
-    # 🧲 逐线共振分（2026-11-16）：只用「竞价已知信息」——当日池内同线票的竞价幅度
-    #    + 昨日家数 + 老龙（该线最高板）是否红开。⛔ 不用盘中数据（09:25 时点不可得）。
-    _line_max_gap: dict[str, float] = {}
-    _line_max_boards: dict[str, int] = {}
-    _line_leader_gap: dict[str, float] = {}
-    _mates_key: dict[str, int] = {}
-    for _r in (zt_rows or []):
-        _k = _line_key(_r)
-        if _k:
-            _mates_key[_k] = _mates_key.get(_k, 0) + 1
-    # 统计口径 = **昨日完整涨停池**（含首板）+ 当日报价；候选池只补漏
-    _res_rows = [dict(r) for r in (zt_rows or [])] or [dict(c) for c in pool]
-    for _r in _res_rows:
-        _ln = _line_key(_r)
-        _cd = str(_r.get("code") or "").strip().zfill(6)
-        _g = _gap_by_code.get(_cd)
-        _b = int(_r.get("boards") or 0)
-        if isinstance(_g, (int, float)):
-            if _ln not in _line_max_gap or float(_g) > _line_max_gap[_ln]:
-                _line_max_gap[_ln] = float(_g)
-            if _b >= _line_max_boards.get(_ln, 0):
-                # 该线最高板的票：红开才算「老龙抢筹」
-                _line_max_boards[_ln] = _b
-                _line_leader_gap[_ln] = float(_g)
-    _line_resonance: dict[str, dict] = {}
-    for _ln in set(list(_mates_key) + list(_line_max_gap)):
-        _f1 = 1 if (_line_max_gap.get(_ln, -99) >= RESONANCE_STRONG_GAP) else 0
-        _f2 = 1 if (_line_leader_gap.get(_ln, -99) > 0) else 0
-        _f3 = 1 if (_mates_key.get(_ln, 0) >= 3) else 0
-        _line_resonance[_ln] = {"score": _f1 + _f2 + _f3, "gap": _f1, "leader_red": _f2,
-                                "mates": _f3, "mates_n": _mates_key.get(_ln, 0)}
-    _strongest_line = max(_mates_key, key=lambda k: (_mates_key[k], _line_resonance.get(k, {}).get("score", 0)), default=None)
+    # 🧲 逐线共振分（2026-11-16 全局统一）：口径见 `core/sector_resonance.py`
+    #    统计 = 昨日完整涨停池（含首板）× 今日 09:25 报价；⛔ 不用盘中数据。
+    try:
+        from core import sector_resonance as _sr
+        _line_resonance, _strongest_line = _sr.compute(
+            (zt_rows or pool), qs, _line_key,
+            strong_gap=RESONANCE_STRONG_GAP, min_mates=3,
+        )
+    except Exception:  # noqa: BLE001 — 共振失败不阻断裁决，按「无共振」处理
+        _line_resonance, _strongest_line = {}, None
 
     for c in pool:
         code = str(c.get("code") or "").strip()
