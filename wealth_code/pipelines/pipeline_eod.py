@@ -2800,13 +2800,18 @@ def run_eod(
         for _c in _cores:
             _tday = str(_c.get("last_zt_date") or "")
             _b_today = _today_boards.get(str(_c["code"]), 0)
+            # ⛔ 2026-11-16 用户：「断板的核心票显示在这里没有意义」。
+            #    只保留**今天仍在涨停**的核心票，且身份改成正常候选（可参与 09:25 判定）——
+            #    不再是"只看不买"，因为所有票都要给买入预期判断。
+            if not _b_today:
+                continue
             watch.append({
                 "code": _c["code"], "name": _c["name"], "boards": _b_today,
-                "boards_note": ("" if _b_today else f"上次涨停 {_tday}·{_c['boards']}板（今天已断板）"),
-                "is_today_zt": bool(_b_today),
+                "boards_note": "",
+                "is_today_zt": True,
                 "core_theme": _c.get("sector"), "sector": _c.get("sector"),
-                "participation_eligibility": "observe_only", "buyable": False,
-                "watch_only": True, "watch_group": "板块核心观察",
+                "participation_eligibility": "relay_candidate", "buyable": True,
+                "watch_only": False, "watch_group": "板块核心观察",
                 "watch_reason": (f"这条线的核心（{_c.get('sector')}·core {_c.get('core_score')}"
                                  f"·参与{_c.get('join_rate')}%）：只看它动不动，不买"),
                 "board_core_score": _c.get("core_score"),
