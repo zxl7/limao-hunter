@@ -221,6 +221,22 @@ def _heat(t):
     return (t.get("zt") or 0) * 2 + (t.get("pct") or 0)
 
 
+
+def _family_pick(day_map: dict, name: str):
+    """同族改名兜底：当天没有 `name` 时，取同族里当天有数据的那个题材（只取一个）。"""
+    try:
+        from common.theme_base import THEME_FAMILIES
+    except Exception:  # noqa: BLE001
+        return None
+    for members in THEME_FAMILIES.values():
+        if name not in members:
+            continue
+        for alt in members:
+            if alt != name and alt in day_map:
+                return day_map[alt]
+    return None
+
+
 def _zt_series_of(per_day):
     """近 N 交易日该题材涨停数序列（None=当日缺席），与轮动相位同源。"""
     return [(t.get("zt") if t else None) for t in per_day]
@@ -1263,7 +1279,10 @@ def build(*, live_day=None, live_themes=None, live_codes=None):
     zt_trends = []   # 板块涨停数趋势汇总（所有曾现涨停的题材，供看板"增长趋势"卡）
     for nm in sorted(all_names):
         # 该题材在序列中每日的快照（None=当天没出现）
-        per_day = [mp.get(nm) for _, mp in series]
+        # 🔁 名字漂移兜底（2026-11-16）：板块榜叫「人形机器人」、快照叫「机器人」，
+        #    原来是「查不到就记 None」→ 序列断成 [15, null, null…]。
+        #    现在缺名字时去**同族**里找当天有数据的那个（只取一个，⛔ 不求和，避免重复计数）。
+        per_day = [mp.get(nm) or _family_pick(mp, nm) for _, mp in series]
         zt_series = _zt_series_of(per_day)
         # 🔧 题材量补全（2026-09-02 用户「优化题材量数据」）：eruption 只记热门爆发题材
         # （每日 3-5 个·isHot 过滤），成分股常以他题涨停/缺席日实际有涨停 → eruption 缺席日
