@@ -25,6 +25,10 @@ CACHE = ROOT / "cache"
 # 过宽概念：全局成分股太多，不是"炒作题材"（如 新能源汽车 1000+ 只）
 MAX_HITHINK_MEMBERS = 300
 
+# 属性标签/占位词：不是题材（选股宝常把无题材票标成「其他」）
+NON_THEME = {"其他", "其它", "—", "-", "", "ST股", "业绩增长", "重组", "次新股", "融资融券",
+             "深股通", "沪股通", "参股银行", "参股保险", "参股券商", "破净股", "高送转"}
+
 
 def _load(p: Path, default: Any = None) -> Any:
     try:
@@ -33,8 +37,13 @@ def _load(p: Path, default: Any = None) -> Any:
         return default if default is not None else {}
 
 
-def resolve(code: str, day: str | None = None, *, sector: str | None = None) -> dict:
-    """返回 {"theme": str, "source": "snapshot|library|hithink|industry|none", "note": str}"""
+def resolve(code: str, day: str | None = None, *, sector: str | None = None,
+            reason: str | None = None) -> dict:
+    """返回 {"theme": str, "source": "snapshot|library|hithink|industry|none", "note": str}
+
+    `reason`（可选）= 当日涨停原因文本（同花顺）。给了就**优先匹配原因里出现的概念**，
+    因为「这只票今天因什么涨停」比「它属于哪个最小概念」更接近真实炒作方向。
+    """
     code = str(code or "").strip().zfill(6)
     if not code:
         return {"theme": "", "source": "none", "note": "无代码"}
@@ -44,14 +53,14 @@ def resolve(code: str, day: str | None = None, *, sector: str | None = None) -> 
         snap = _load(CACHE / "theme_snapshot" / f"theme_{day}.json", {})
         row = (snap.get("mapping") or {}).get(code) or {}
         t = str(row.get("theme_base") or row.get("theme") or "").strip()
-        if t:
+        if t and t not in NON_THEME:
             return {"theme": t, "source": "snapshot", "note": ""}
 
     # 2) 选股宝历史库
     lib = _load(CACHE / "theme_library.json", {})
     e = (lib.get("entries") or {}).get(code) or {}
     t = str(e.get("theme_base_latest") or e.get("theme_latest") or "").strip()
-    if t:
+    if t and t not in NON_THEME:
         return {"theme": t, "source": "library", "note": f"取自题材库（末见 {e.get('last_day')}）"}
 
     # 3) 同花顺概念（挑最具体的一条）
@@ -59,7 +68,14 @@ def resolve(code: str, day: str | None = None, *, sector: str | None = None) -> 
     cons = ((hl.get("entries") or {}).get(code) or {}).get("concepts") or []
     if cons:
         sizes = _concept_sizes(hl)
-        cands = [c for c in cons if sizes.get(c, 10 ** 9) <= MAX_HITHINK_MEMBERS] or cons
+        clean = [c for c in cons if c not in NON_THEME]
+        if reason:
+            hit = [c for c in clean if c and c in str(reason)]
+            if hit:
+                best = min(hit, key=lambda c: sizes.get(c, 10 ** 9))
+                return {"theme": best, "source": "hithink",
+                        "note": f"涨停原因命中（{reason[:24]}）"}
+        cands = [c for c in clean if sizes.get(c, 10 ** 9) <= MAX_HITHINK_MEMBERS] or clean or cons
         best = min(cands, key=lambda c: sizes.get(c, 10 ** 9))
         return {"theme": best, "source": "hithink",
                 "note": f"同花顺概念（成分 {sizes.get(best, '?')} 只）"}

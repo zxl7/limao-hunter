@@ -1890,8 +1890,22 @@ def run_eod(
                 #    卡面必须把「行业兜底」标出来，⛔ 不能让行业名冒充题材。
                 _z["theme_source"] = "snapshot"
             else:
-                _z.setdefault("core_theme", "")
-                _z["theme_source"] = "sector"
+                # 🏷 2026-11-16：快照没有（选股宝把它标成「其他」）→ 先用同花顺概念兜底，
+                #    否则这只票会被当「无题材」直接剔出候选池（实证 002205 国统股份 3 板被删）。
+                _fb = {}
+                try:
+                    from common.theme_fallback import resolve as _resolve_theme
+                    _fb = _resolve_theme(_zc, str(zt.get("date") or ""), sector=_z.get("sector"))
+                except Exception:  # noqa: BLE001
+                    _fb = {}
+                if _fb.get("theme"):
+                    _z["core_theme"] = _fb["theme"]
+                    _z["theme_base"] = _fb["theme"]
+                    _z["theme_source"] = _fb.get("source") or "fallback"
+                    _z["theme_note"] = _fb.get("note") or ""
+                else:
+                    _z.setdefault("core_theme", "")
+                    _z["theme_source"] = "sector"
     except Exception as _e:
         _theme_meta = {"source": "error", "count": 0, "error": str(_e)}
         pass  # 题材接口失败 → pool 行无 core_theme，回退行业映射（不编造）
