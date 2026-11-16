@@ -286,6 +286,17 @@ try:
     DEEP_LOW_TOP_LINES = int(os.environ.get("POOL_CALL_DEEP_LOW_TOP_LINES", "2") or 0)
 except ValueError:
     DEEP_LOW_TOP_LINES = 2
+
+# 🧲 2026-11-16 用户定调（主线题材为核心逻辑）：
+#   「不能看单个个股，整个板块和老龙的共振，预示着一个题材强度。」
+#   共振三项各 1 分：① 同线出现一字/大幅高开 ② 同线老龙红开 ③ 昨日家数成线（≥3）。
+#   强共振（≥2）且是当日最强线 → 该线的**非核心可买票**允许参与（半仓），
+#   ⛔ 不是「核心买不到就推二排」，是「这条线整体在走强」。
+#   回退：`POOL_CALL_SECTOR_RESONANCE=0`。
+POOL_CALL_SECTOR_RESONANCE = os.environ.get("POOL_CALL_SECTOR_RESONANCE", "1") != "0"
+RESONANCE_STRONG_GAP = float(os.environ.get("POOL_CALL_RESONANCE_GAP", "7.0"))   # 一字/大幅高开线
+RESONANCE_MIN = int(os.environ.get("POOL_CALL_RESONANCE_MIN", "2") or 2)
+RESONANCE_SECOND_CAP = float(os.environ.get("POOL_CALL_RESONANCE_CAP", "0.5"))
 try:
     DEEP_LOW_OPEN_DEV = float(os.environ.get("POOL_CALL_DEEP_LOW_DEV", "-6.0"))
 except ValueError:
@@ -675,6 +686,21 @@ def quota_for(stance: Any) -> int:
 # 闽东电力(电力) 与 锡华科技(风电设备) 是**同一条风电线**，一个 6 板一个是跟风补涨，
 # 系统却把两者归到不同板块 → 池内比不出「核心 vs 跟风」）
 # ─────────────────────────────────────────────────────────────────────────────
+def _line_key(it: dict[str, Any]) -> str:
+    """共振匹配用的「线键」：先取线族名，没有族就用基座名。
+
+    ⚠️ 为什么不直接用 `line_family`：候选行带 `core_theme`（短剧/互动影游），
+    涨停池行走 sector_support 归并（传媒）——两边名字对不上，共振永远匹配不到。
+    2026-11-16 实测：横店影视 fam=短剧/互动影游，最强线算出来是「传媒」。
+    """
+    base = line_family(it)
+    try:
+        from common.theme_base import family_of
+        return str(family_of(base) or base)
+    except Exception:  # noqa: BLE001
+        return base
+
+
 def line_family(it: dict[str, Any]) -> str:
     """取个股所属**线族**（题材层·经 sector_support 归并表）。
 
@@ -1763,6 +1789,38 @@ def call_pool(candidates: dict[str, Any] | None,
     _top_line_counts = sorted(set(_theme_mates.values()), reverse=True)[:DEEP_LOW_TOP_LINES] if DEEP_LOW_TOP_LINES > 0 else []
     _top_lines = {k for k, v in _theme_mates.items() if v in _top_line_counts}
 
+    # 🧲 逐线共振分（2026-11-16）：只用「竞价已知信息」——当日池内同线票的竞价幅度
+    #    + 昨日家数 + 老龙（该线最高板）是否红开。⛔ 不用盘中数据（09:25 时点不可得）。
+    _line_max_gap: dict[str, float] = {}
+    _line_max_boards: dict[str, int] = {}
+    _line_leader_gap: dict[str, float] = {}
+    _mates_key: dict[str, int] = {}
+    for _r in (zt_rows or []):
+        _k = _line_key(_r)
+        if _k:
+            _mates_key[_k] = _mates_key.get(_k, 0) + 1
+    for _c in pool:
+        _ln = _line_key(_c)
+        _cd = str(_c.get("code") or "").strip()
+        _g = _gap_by_code.get(_cd)
+        _b = int(_c.get("boards") or 0)
+        if isinstance(_g, (int, float)):
+            if _ln not in _line_max_gap or float(_g) > _line_max_gap[_ln]:
+                _line_max_gap[_ln] = float(_g)
+            if _b >= max(_line_max_boards.get(_ln, 0), _b):
+                # 该线最高板的票：红开才算「老龙抢筹」
+                if _b >= _line_max_boards.get(_ln, 0):
+                    _line_max_boards[_ln] = _b
+                    _line_leader_gap[_ln] = float(_g)
+    _line_resonance: dict[str, dict] = {}
+    for _ln in set(list(_mates_key) + list(_line_max_gap)):
+        _f1 = 1 if (_line_max_gap.get(_ln, -99) >= RESONANCE_STRONG_GAP) else 0
+        _f2 = 1 if (_line_leader_gap.get(_ln, -99) > 0) else 0
+        _f3 = 1 if (_mates_key.get(_ln, 0) >= 3) else 0
+        _line_resonance[_ln] = {"score": _f1 + _f2 + _f3, "gap": _f1, "leader_red": _f2,
+                                "mates": _f3, "mates_n": _mates_key.get(_ln, 0)}
+    _strongest_line = max(_mates_key, key=lambda k: (_mates_key[k], _line_resonance.get(k, {}).get("score", 0)), default=None)
+
     for c in pool:
         code = str(c.get("code") or "").strip()
         name = str(c.get("name") or "")
@@ -2008,11 +2066,29 @@ def call_pool(candidates: dict[str, Any] | None,
                         base["core_weak_core_gap"] = round(float(_cg), 2)
                         base["position_cap"] = min(float(base.get("position_cap") or 1.0), 0.5)
                     else:
-                        marks[code] = {**base, "view": "watch", "core_first_gate": True,
-                                   "dragon_gate": "deputy",
-                                       "reason": (f"同真实题材核心是{leader_name}，同板数不等于同地位；"
-                                                  "不因核心开盘不可买而改推非核心 → 只观察")}
-                        continue
+                        # 🧲 2026-11-16 用户「跟着主线走」：这条线若「整体共振」成立
+                        #    （同线有票一字/大高开 + 老龙红开 + 昨日成线），
+                        #    非核心票也允许参与（半仓）——买的是「线」，不是「票的地位」。
+                        _res = _line_resonance.get(_line_key(c)) or {}
+                        _allow_res = bool(
+                            POOL_CALL_SECTOR_RESONANCE
+                            and _line_key(c) == _strongest_line
+                            and int(_res.get("score") or 0) >= RESONANCE_MIN
+                        )
+                        if _allow_res:
+                            # ⛔ 不在这里直接标 participate 并 continue —— 那会绕过后面的
+                            #    量能/身位/名额/空间各闸（11-16 实测：横店跳过全部下游闸）。
+                            #    这里只解除「非核心」这一条否决，其余闸照旧，仓位打半仓。
+                            base["sector_resonance"] = {**_res, "line": _line_key(c)}
+                            base["resonance_second"] = True
+                            base["position_cap"] = min(float(base.get("position_cap") or 1.0),
+                                                       RESONANCE_SECOND_CAP)
+                        if not _allow_res:
+                            marks[code] = {**base, "view": "watch", "core_first_gate": True,
+                                       "dragon_gate": "deputy",
+                                           "reason": (f"同真实题材核心是{leader_name}，同板数不等于同地位；"
+                                                      "不因核心开盘不可买而改推非核心 → 只观察")}
+                            continue
 
         from core.two_pool import observation_only, recheck_class, all_tradeable_enabled, height_observation
         if height_observation(c):
@@ -2992,6 +3068,9 @@ def call_pool(candidates: dict[str, Any] | None,
                                       + _band_note
                                       + ("（这条线里板数最高的那只）"
                                          if e.get("line_is_core") else "")
+                                      + (f"（{e['sector_resonance'].get('line')} 共振 "
+                                         f"{e['sector_resonance'].get('score')}/3·非核心半仓跟主线）"
+                                         if isinstance(e.get("sector_resonance"), dict) else "")
                                       + _fusion_note + _mood_note + _half_note + _open_note)}
         else:
             marks[code] = {**e, "view": "watch",
