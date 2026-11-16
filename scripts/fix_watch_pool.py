@@ -86,6 +86,26 @@ def main(argv=None) -> int:
     if a.dry_run:
         return 0
 
+    # 🏷 顺手把空题材补上（2026-11-16 用户「有些票连题材都没有」）
+    from common.theme_fallback import resolve as _resolve
+    filled = []
+    for bucket in ("relay", "watch"):
+        for r in (cand.get(bucket) or []):
+            t = str(r.get("theme_name") or r.get("core_theme") or "").strip()
+            if t and t != "—":
+                continue
+            rs = _resolve(str(r.get("code") or ""), a.date, sector=r.get("sector"))
+            if rs["theme"]:
+                r["core_theme"] = rs["theme"]
+                r["theme_name"] = rs["theme"]
+                r["theme_source"] = rs["source"]
+                r["theme_note"] = rs["note"]
+                filled.append((bucket, r.get("name"), rs["theme"], rs["source"]))
+    if filled:
+        print(f"[fix] 补题材 {len(filled)} 只：")
+        for b, n, t, src in filled:
+            print(f"   {b} {n} → {t}（{src}）")
+
     bak = ROOT / "cache" / "backups" / f"candidates-{a.date}.json.bak_{datetime.now(BJ).strftime('%Y%m%d_%H%M%S')}"
     bak.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(cpath, bak)

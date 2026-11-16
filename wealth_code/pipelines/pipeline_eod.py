@@ -1757,6 +1757,29 @@ def _rank_and_split(
         else:
             it["watch_group"] = "高标/题材核心" if it.get("boards", 1) >= 3 else "补充观察"
 
+    # 🏷 题材兜底（2026-11-16 用户「有些票连题材都没有，必须把题材找出来」）：
+    #    当日快照没覆盖到的票 → 题材库 → 同花顺概念 → 行业兜底，并留 `theme_source` 痕迹。
+    try:
+        from common.theme_fallback import resolve as _resolve_theme
+        _filled = 0
+        for _bucket in (relay, watch):
+            for _r in _bucket:
+                _t = str(_r.get("core_theme") or _r.get("theme_name") or "").strip()
+                if _t and _t != "—":
+                    continue
+                _rs = _resolve_theme(str(_r.get("code") or ""), str(zt.get("date") or ""),
+                                     sector=_r.get("sector"))
+                if _rs.get("theme"):
+                    _r["core_theme"] = _rs["theme"]
+                    _r["theme_name"] = _rs["theme"]
+                    _r["theme_source"] = _rs["source"]
+                    _r["theme_note"] = _rs.get("note") or ""
+                    _filled += 1
+        if _filled:
+            print(f"[EOD] 🏷 题材兜底补全 {_filled} 只")
+    except Exception as _e:  # noqa: BLE001
+        print(f"[EOD] 题材兜底降级（不影响主链）：{_e}")
+
     diagnostics = {
         "scored": len(scored),
         "excluded_st": sum(1 for it in scored if it.get("is_st")),
