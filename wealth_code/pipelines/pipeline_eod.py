@@ -2838,10 +2838,19 @@ def run_eod(
             #    不再是"只看不买"，因为所有票都要给买入预期判断。
             if not _b_today:
                 continue
+            # ⛔ 2026-11-16 用户「文投控股数据不全」：注入行原来是**空壳**
+            #    （只有 code/name/boards/sector），缺 pct/fbt/seal/cje_yi/hs/zbc，
+            #    卡面上封板、成交、换手全是「—」。这里把当日涨停池里的真实字段并进来。
+            _zt_row = next((r for r in (zt.get("ztgc") or [])
+                            if str(r.get("dm") or r.get("code") or "").zfill(6) == str(_c["code"]).zfill(6)), {})
             watch.append({
                 "code": _c["code"], "name": _c["name"], "boards": _b_today,
                 "boards_note": "",
                 "is_today_zt": True,
+                "pct": _zt_row.get("pct"), "fbt": _zt_row.get("fbt"),
+                "seal": _zt_row.get("seal"), "cje_yi": _zt_row.get("cje_yi"),
+                "hs": _zt_row.get("hs"), "zbc": _zt_row.get("zbc"),
+                "zsz_yi": _zt_row.get("zsz_yi"), "lt_yi": _zt_row.get("lt_yi"),
                 "core_theme": _c.get("sector"), "sector": _c.get("sector"),
                 "participation_eligibility": "relay_candidate", "buyable": True,
                 "watch_only": False, "watch_group": "板块核心观察",
