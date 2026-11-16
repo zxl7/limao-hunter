@@ -2334,7 +2334,7 @@ def _buy_indicator_lines(r: dict, oc: dict, v: dict) -> list[str]:
     #    否则读卡的人会以为「焦炭Ⅱ」是一条炒作线（它只是行业）。
     _theme_fallback = str(r.get("theme_source") or "") == "sector"
     if theme and theme not in ("—", "其他"):
-        _t = theme + ("（行业兜底·未归题材）" if _theme_fallback else "")
+        _t = theme + ("（按行业归类·未归题材）" if _theme_fallback else "")
         _t += (f"（{logic}）" if logic and logic not in ("—", theme) else "")
         # 题材是分组前提，不是权重项 → 灰；但值本身要醒目，用加粗
         p1.append(f" <text_tag color='{C_HINT}'>{_t}</text_tag>")
@@ -3116,7 +3116,7 @@ def _board_track_block(date: str) -> list[dict]:
 
     # ④ 题材口径降级要如实说（⛔ 别把申万行业当题材用）
     if d.get("theme_source") == "sector_fallback":
-        blocks.append(_div("<font color='grey'>　　（题材快照缺失，本段按行业口径归并）</font>"))
+        blocks.append(_div("<font color='grey'>　　（题材数据缺失，本段按行业归类）</font>"))
 
     blocks.append(_hr())
     return blocks
@@ -3808,7 +3808,7 @@ def _auction_seal_block(seal: dict | None) -> list[dict]:
         #    ⛔ 不许写「无一字」——抓不到 ≠ 没有。
         out.append(_div(
             f"<font color='grey'>{int(states.get('unconfirmed') or 0)} 只顶过板，"
-            f"但末条快照早于 09:25 → 一字尚未确认（不是没有）</font>"
+            f"但最后一条数据早于 09:25 → 一字尚未确认（不是没有）</font>"
         ))
     else:
         out.append(_div("<font color='grey'>竞价没有顶到涨停的票</font>"))
@@ -3868,7 +3868,7 @@ def _watch_reversal_block(rev: dict | None) -> list[dict]:
         head += f" · 竞价采样 {rounds} 轮"
     elif src == "registry":
         last = str(data.get("global_last_ts") or "")
-        head += f" · 观测表兜底{f'（最后采样 {last}）' if last else ''}"
+        head += f" · 观测表补充{f'（最后采样 {last}）' if last else ''}"
     out.append(_div(head))
 
     if revs:
@@ -5687,7 +5687,7 @@ def _ambush_pullback_block(cache_dir: Path, day: str) -> list[dict]:
     """
     if _ambush_pullback_snapshot(cache_dir, day) is None:
         return [
-            _div("<text_tag color='green'>🎯 今日尾盘买入候选：今日扫描未产出候选快照（链路异常）</text_tag>"),
+            _div("<text_tag color='green'>🎯 今日尾盘买入候选：今日扫描没有产出候选（链路异常）</text_tag>"),
             _hr(),
         ]
     snap = _ambush_pullback_snapshot(cache_dir, day)
@@ -6036,7 +6036,7 @@ def build_ambush_card(data: dict | None = None) -> dict:
             if pool and _member_rows > 0:
                 lines = "\n".join(_pool_line(s, hits.get(str(s.get("code") or "").split(".")[0]))
                                   for s in pool[:_member_rows])
-                bg.append(_div(f"📦 相关个股（爆发日 {boom_day} 的持仓快照·附今日实时涨跌）：\n{lines}"))
+                bg.append(_div(f"📦 相关个股（爆发日 {boom_day} 的持仓记录·附今日实时涨跌）：\n{lines}"))
             bg.append(_hr())
         # 待回流方向聚合（2026-10-15 第二轮收敛）：逐条各占一行、每行都只写「今日资金未回流」
         # ＝同一个结论刷 N 遍，零信息。改成一行汇总，只保留「哪些方向 + 回调几天」。
