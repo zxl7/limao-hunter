@@ -34,6 +34,10 @@ cd "$ROOT" || exit 1
 "$PY" scripts/capture_theme_snapshot.py >> "$LOG" 2>&1 || log "题材快照兜底未成功（当日池已定稿则会重试）"
 # 📚 题材库沉淀：把每日快照合并进 cache/theme_library.json（幂等，只增不减）
 "$PY" scripts/theme_library.py --quiet >> "$LOG" 2>&1 || log "题材库沉淀失败（不影响主链）"
+# 🚀 部署到服务器（2026-11-16 用户「可以」）：重建终端 → 打包 → 推送 → 重启 serve
+#    ⛔ 放这里的原因：上面这些产物（复盘面板/序列/题材库）刚生成完，服务器要拿到同一批。
+#    失败只记日志，不阻断后面的结算与催化链。
+bash scripts/deploy_site.sh >> "$LOG" 2>&1 || log "部署失败（见 cache/logs/deploy.log）"
 
 # 🔒 持仓结算：断板（收盘未涨停）→ 退出并推卡
 "$PY" scripts/streak_holdings.py --execute >> "$LOG" 2>&1 || true   # T+1：先执行昨日信号的卖出
