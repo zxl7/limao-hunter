@@ -187,11 +187,21 @@ def build(day: str | None = None) -> dict:
 
 
 def commentary(day: str) -> list[dict]:
-    """读取 LLM 复盘卡（`outputs/review_<date>.json`）→ 分段文本。"""
-    p = ROOT / "outputs" / f"review_{day}.json"
-    try:
-        card = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
+    """读取 LLM 复盘卡 → 分段文本。
+
+    🗂 两个落点（2026-11-16 实测）：复盘技能近期把卡写到 `cache/review_<date>.json`，
+    而早期是 `outputs/review_<date>.json`。只读 outputs 会让「今日复盘」整天没有点评
+    （11-16 实证：缓存里有 86 段卡，页面却显示「暂无复盘点评」）。两处都读，outputs 优先。
+    """
+    card = None
+    for cand in (ROOT / "outputs" / f"review_{day}.json",
+                 ROOT / "cache" / f"review_{day}.json"):
+        try:
+            card = json.loads(cand.read_text(encoding="utf-8"))
+            break
+        except Exception:  # noqa: BLE001
+            continue
+    if not isinstance(card, dict):
         return []
     def text_of(el) -> str:
         if not isinstance(el, dict):
@@ -205,14 +215,17 @@ def commentary(day: str) -> list[dict]:
     import re as _re
     # 「**📉 ① 情绪演变**」这种才当标题；其余一律当正文（避免把 `**情绪分**　…` 误判成标题）
     head_re = _re.compile(r"^\*\*[^*]{0,24}[①②③④⑤⑥⑦⑧⑨⑩][^*]{0,24}\*\*$")
+    # 新版卡的标题形态：整行就是一个 text_tag 包裹（例：<text_tag color='neutral'>📉 情绪演变</text_tag>）
+    tag_head_re = _re.compile(r"^<text_tag[^>]*>([^<]{2,40})</text_tag>$")
     sections: list[dict] = []
     cur: dict | None = None
     for el in card.get("elements") or []:
         txt = text_of(el).strip()
         if not txt:
             continue
-        if head_re.match(txt):
-            cur = {"heading": txt.strip("*").strip(), "lines": []}
+        _tag = tag_head_re.match(txt)
+        if head_re.match(txt) or _tag:
+            cur = {"heading": (txt.strip("*").strip() if not _tag else _tag.group(1).strip()), "lines": []}
             sections.append(cur)
         elif cur is None:
             cur = {"heading": "总览", "lines": []}
