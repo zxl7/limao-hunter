@@ -1434,7 +1434,7 @@ def _real_env_block(pulse: dict | None, fb_env: dict | None = None) -> list[dict
     ld = (pulse.get("limit_down") or {}).get("count", 0)
     broken = (pulse.get("broken") or {}).get("count", 0)
     blocks.append(_div(
-        f"　　<font color='grey'>情绪={sent}｜涨停{total_zt}只｜跌停{ld}｜炸板{broken}（真实脉冲快照）</font>"
+        f"　　<font color='grey'>情绪={sent}｜涨停{total_zt}只｜跌停{ld}｜炸板{broken}（盘中实测）</font>"
     ))
     # P0-量能广度（2026-08-17）：两市成交额 + 全市场涨跌家数——盘面广度直接可见
     # 语义色板：量能/广度数据本身中性灰；广度普涨红、普跌绿（改善红/恶化绿）
@@ -1616,7 +1616,7 @@ def _ai_block(ai: dict | None) -> list[dict]:
 
 def _relay_mode_note(mode: str | None) -> str:
     if mode in ("broad", "emergency"):
-        return " ｜ ⚠️兜底档（市场偏冷·仅供参考·风险高）"
+        return " ｜ ⚠️保守档（市场偏冷·仅供参考·风险高）"
     if mode == "relaxed":
         return " ｜ 常规接力"
     if mode == "strict":
