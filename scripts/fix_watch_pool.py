@@ -106,6 +106,28 @@ def main(argv=None) -> int:
         for b, n, t, src in filled:
             print(f"   {b} {n} → {t}（{src}）")
 
+    # 🏷 给候选行挂同花顺涨停原因（终端卡片「原因」行）
+    hy = {}
+    try:
+        _d8 = a.date.replace("-", "")
+        _hd = json.loads((ROOT / "cache" / f"hithink_zt_{_d8}.json").read_text(encoding="utf-8"))
+        for it in (_hd.get("items") or []):
+            c = str(it.get("code") or "").zfill(6)
+            r = str(it.get("limit_up_reason") or it.get("reason") or "").strip()
+            if c and r:
+                hy[c] = r
+    except Exception:
+        hy = {}
+    n_reason = 0
+    for bucket in ("relay", "watch"):
+        for r in (cand.get(bucket) or []):
+            rc = hy.get(str(r.get("code") or "").zfill(6))
+            if rc:
+                r["limit_up_reason"] = rc
+                n_reason += 1
+    if n_reason:
+        print(f"[fix] 挂涨停原因 {n_reason} 只")
+
     bak = ROOT / "cache" / "backups" / f"candidates-{a.date}.json.bak_{datetime.now(BJ).strftime('%Y%m%d_%H%M%S')}"
     bak.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(cpath, bak)

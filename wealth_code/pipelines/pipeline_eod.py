@@ -1778,6 +1778,16 @@ def _rank_and_split(
                     _filled += 1
         if _filled:
             print(f"[EOD] 🏷 题材兜底补全 {_filled} 只")
+        # 🏷 把同花顺涨停原因挂到候选行（终端卡片「原因」行直接读它）
+        _n_reason = 0
+        for _bucket in (relay, watch):
+            for _r in _bucket:
+                _rc = _hy_reason.get(str(_r.get("code") or "").zfill(6))
+                if _rc:
+                    _r["limit_up_reason"] = _rc
+                    _n_reason += 1
+        if _n_reason:
+            print(f"[EOD] 🏷 涨停原因挂载 {_n_reason} 只")
     except Exception as _e:  # noqa: BLE001
         print(f"[EOD] 题材兜底降级（不影响主链）：{_e}")
 
