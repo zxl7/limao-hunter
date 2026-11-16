@@ -172,6 +172,8 @@ def build(day: str | None = None) -> dict:
         "risk": risk_block(pulse, fb, zt_prev, zt_today),
         "money": money_block(fb, zt_prev, pct),
         "themes": theme_block(day, zt_today)[:8],
+        # 🏗 板块梯队（家数 + 高度 + 梯队分布）：复盘判断「这条线是不是真强」的依据
+        "ladder": ladder_block(day, zt_today)[:10],
         "commentary": commentary(day),
         "pool": pool_block(day),
         # 👑 高标处境 + ⚠️ 明日跌停预判（懒加载，避免与 review_extras 循环 import）
@@ -216,6 +218,35 @@ def commentary(day: str) -> list[dict]:
         else:
             cur["lines"].append(txt)
     return [{"heading": s["heading"], "lines": s["lines"]} for s in sections if s["lines"] or s["heading"]]
+
+
+
+def ladder_block(day: str, zt: list[dict]) -> list[dict]:
+    """🏗 板块梯队（2026-11-16 用户「板块梯队+强度就是短线最重要的指标，复盘也要作为依据」）
+
+    每条线给出**梯队长什么样**，而不是只有家数：
+      · 首板 / 2板 / 3板+ 各几家  → 看这条线是「一堆首板」（一日游风险）还是「有高度」
+      · 最高板                     → 天花板在哪
+      · 强度                       → 家数 + 高度合成（只做排序，不当买卖信号）
+    数据只读当日涨停池 + 当日题材快照，⛔ 不推算。
+    """
+    by: dict[str, list[dict]] = {}
+    for r in zt:
+        by.setdefault(_theme(day, str(r.get("code"))), []).append(r)
+    out = []
+    for name, arr in by.items():
+        boards = [int(r.get("boards") or 1) for r in arr]
+        l1 = sum(1 for b in boards if b <= 1)
+        l2 = sum(1 for b in boards if b == 2)
+        l3 = sum(1 for b in boards if b >= 3)
+        mx = max(boards)
+        out.append({
+            "theme": name, "mates": len(arr), "max_boards": mx,
+            "l1": l1, "l2": l2, "l3": l3,
+            "strength": round(len(arr) + mx * 1.5 + l3 * 1.0, 1),
+        })
+    out.sort(key=lambda x: (-x["strength"], -x["mates"]))
+    return out
 
 
 def pool_block(day: str) -> dict:
