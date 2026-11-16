@@ -35,7 +35,8 @@ rsh "set -e; cd '$REMOTE_ROOT'; rm -rf 'releases/$REL_NAME'; mkdir -p 'releases/
      tar -xzf 'incoming/$(basename "$LATEST")' -C 'releases/$REL_NAME'; \
      test -f 'releases/$REL_NAME/app/serve.py' || { echo NO_SERVE; exit 1; }; \
      ln -sfn 'releases/$REL_NAME/app' '$REMOTE_ROOT/current'; \
-     ls -1dt releases/* | tail -n +4 | xargs -r rm -rf; \
+     touch 'releases/$REL_NAME'; \
+     ls -1d releases/* | sort -r | tail -n +4 | xargs -r rm -rf; \
      echo '当前指向:' \$(readlink -f '$REMOTE_ROOT/current')"
 
 # ⛔ 换 symlink 后必须重启 serve：serve.py 在**启动时**解析 dist 的真实路径并写入白名单，
