@@ -89,7 +89,9 @@ def _push(title: str, rows: list[str], *, dry: bool, color: str = "red") -> None
     _hm = datetime.now().strftime("%H:%M")
     card = {"title": f"{title} | {_hm}", "color": color,
             "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(rows)}}],
-            "note": {"tag": "note", "elements": [{"tag": "lark_md", "content": f"📡 狸猫猎手 | {_hm}"}]}}
+            # ⛔ note 必须是**字符串**：push_card.normalize 会把它包成 plain_text.content，
+            #    传 dict 会让飞书报 200621「mismatched type」（2026-11-16 实测全天推送失败）。
+            "note": f"📡 狸猫猎手 | {_hm}"}
     tmp = Path("/tmp/limao_fts_card.json")
     tmp.write_text(json.dumps(card, ensure_ascii=False), encoding="utf-8")
     if dry:

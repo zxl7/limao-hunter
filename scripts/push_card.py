@@ -89,8 +89,14 @@ def normalize(card: dict) -> dict:
               "请任务 prompt 显式写 title（见 shared_rules【标题规范】）", file=sys.stderr)
     elements = card.get("elements", [])
     if "note" in card:
-        elements = elements + [{"tag": "note",
-                                 "elements": [{"tag": "plain_text", "content": card["note"]}]}]
+        note = card["note"]
+        if isinstance(note, dict):
+            # 已经是 note 元素（有的拼卡脚本直接给结构体）→ 原样追加，
+            # ⚠️ 不能塞进 plain_text.content（飞书 200621：content 必须是字符串）
+            elements = elements + [note]
+        else:
+            elements = elements + [{"tag": "note",
+                                    "elements": [{"tag": "plain_text", "content": str(note)}]}]
     return {
         "msg_type": "interactive",
         "card": {
