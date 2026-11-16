@@ -272,6 +272,16 @@ def finalize(relay, watch, *, stage):
                          watch_only=True, watch_group=row.get("watch_group") or "待复核",
                          watch_reason=row.get("watch_reason") or "状态类降级，09:25 竞价复核")
                 anchors.append(r)
+        elif row.get("is_one_word") and os.environ.get("POOL_KEEP_ONEWORD_RECHECK", "1") != "0":
+            # 🔓 2026-11-16 用户「为什么选不中北纬」：一字板被判 is_one_word 后**直接删掉**，
+            #    于是盘后池里彻底看不见它，第二天它一字晋级也与我们无关。
+            #    改为「留在观察池·9:25 看是否开板」：身份 observe_only，不进买入池，
+            #    但页面能看到它、也能给它一句「什么情况下可以买」。
+            r = deepcopy(row)
+            r.update(bucket="watch", bucket_label="待复核", participation_eligibility="observe_only",
+                     buyable=False, watch_only=True, watch_group=row.get("watch_group") or "一字待开板",
+                     watch_reason=row.get("watch_reason") or "一字板买不到，明早看是否开板")
+            anchors.append(r)
         else:
             excluded.append({"code": row.get("code"), "name": row.get("name"), "stage": stage,
                              "reason": "不符合两类观察资格且未获有效接力资格", "high_win_gate": row.get("high_win_gate"),
