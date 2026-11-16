@@ -29,6 +29,8 @@ cd "$ROOT" || exit 1
 "$PY" scripts/review_series.py >> "$LOG" 2>&1 || log "review_series 失败（不影响主链）"
 # 🏷 题材基座兜底：选股宝快照若 15:30 没落成（接口盘后关闭/抓空），这里再试一次并报覆盖度
 "$PY" scripts/capture_theme_snapshot.py >> "$LOG" 2>&1 || log "题材快照兜底未成功（当日池已定稿则会重试）"
+# 📚 题材库沉淀：把每日快照合并进 cache/theme_library.json（幂等，只增不减）
+"$PY" scripts/theme_library.py --quiet >> "$LOG" 2>&1 || log "题材库沉淀失败（不影响主链）"
 
 # 🔒 持仓结算：断板（收盘未涨停）→ 退出并推卡
 "$PY" scripts/streak_holdings.py --execute >> "$LOG" 2>&1 || true   # T+1：先执行昨日信号的卖出
