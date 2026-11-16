@@ -53,6 +53,38 @@ else
   log "⚠️ 未找到终端目录 $TERMINAL → 用现有 dist 继续"
 fi
 
+# 1.5) 打包前对齐「最新已落盘」的数据（2026-11-16 事故：15:35 链跑在当日涨停池落盘之前，
+#      面板只能取到上一交易日 → 服务器整天都是旧数据）。
+#      ⛔ 这里重跑面板/序列，谁最后跑谁说了算：晚到的 zt 也能被这一次部署带上。
+"$PY" scripts/review_panel.py >> "$LOG" 2>&1 || log "⚠️ 复盘面板生成失败"
+"$PY" scripts/review_series.py >> "$LOG" 2>&1 || log "⚠️ 复盘序列生成失败"
+PANEL_DATE="$("$PY" - <<'PYEOF'
+import json, pathlib
+p = pathlib.Path("/Users/zxl/WorkBuddy/狸猫猎手/cache/review_panel.json")
+try:
+    print(json.loads(p.read_text(encoding="utf-8")).get("date") or "?")
+except Exception:
+    print("?")
+PYEOF
+)"
+ZT_DATE="$("$PY" - <<'PYEOF'
+import glob, os, json
+best = "?"
+for f in sorted(glob.glob("/Users/zxl/WorkBuddy/狸猫猎手/cache/zt_history/zt_*.json"))[-3:]:
+    try:
+        d = json.loads(open(f, encoding="utf-8").read())
+    except Exception:
+        continue
+    if d.get("zt_list") and d.get("intraday_only") in (None, False):
+        best = d.get("date") or os.path.basename(f)[3:13]
+print(best)
+PYEOF
+)"
+log "复盘面板数据日=$PANEL_DATE · 最新完整涨停池=$ZT_DATE"
+if [ "$PANEL_DATE" != "$ZT_DATE" ]; then
+  log "⚠️ 面板日期落后于涨停池（当日 zt 可能还没落盘）——本次仍会推送，但页面会是 $PANEL_DATE"
+fi
+
 # 2) 打包
 cd "$ROOT" || exit 1
 DRY_RUN=0 bash scripts/migrate/pack.sh >> "$LOG" 2>&1 || { log "⛔ 打包失败 → 中止"; exit 1; }
