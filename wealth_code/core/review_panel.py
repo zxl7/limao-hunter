@@ -18,11 +18,12 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
+_BJ = timezone(timedelta(hours=8))
 
 
 def _load(p: Path, default=None):
@@ -169,6 +170,8 @@ def build(day: str | None = None) -> dict:
     pct = _pct_of(day)
     return {
         "date": day, "prev": prev_day,
+        # 🕒 生成时间：前端标「数据生成于 X」，避免把旧数据当今天的
+        "generated_at": datetime.now(_BJ).strftime("%Y-%m-%d %H:%M"),
         "risk": risk_block(pulse, fb, zt_prev, zt_today),
         "money": money_block(fb, zt_prev, pct),
         "themes": theme_block(day, zt_today)[:8],

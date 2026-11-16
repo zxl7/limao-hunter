@@ -27,6 +27,9 @@ cd "$ROOT" || exit 1
 # 👑⚠️ 高标处境 + 明日跌停预判（复盘卡引用）
 "$PY" scripts/review_extras.py >> "$LOG" 2>&1 || log "review_extras 失败（不影响主链）"
 "$PY" scripts/review_series.py >> "$LOG" 2>&1 || log "review_series 失败（不影响主链）"
+# 📋 今日复盘面板（终端「今日复盘」页的数据源）。先出一版：此时 LLM 复盘卡可能还没到，
+#    commentary 会为空；链尾再跑一次把点评补上（幂等）。
+"$PY" scripts/review_panel.py >> "$LOG" 2>&1 || log "review_panel 失败（不影响主链）"
 # 🏷 题材基座兜底：选股宝快照若 15:30 没落成（接口盘后关闭/抓空），这里再试一次并报覆盖度
 "$PY" scripts/capture_theme_snapshot.py >> "$LOG" 2>&1 || log "题材快照兜底未成功（当日池已定稿则会重试）"
 # 📚 题材库沉淀：把每日快照合并进 cache/theme_library.json（幂等，只增不减）
@@ -57,4 +60,6 @@ OUT=$("$PY" scripts/ai_catalyst.py --next 2>&1)
 RC=$?
 log "$OUT"
 log "RC=$RC"
+# 📋 复盘面板第二遍：这时 LLM 复盘卡已落盘，把「复盘点评」补进去（幂等）
+"$PY" scripts/review_panel.py >> "$LOG" 2>&1 || log "review_panel 补跑失败（不影响主链）"
 exit $RC
