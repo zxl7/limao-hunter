@@ -779,6 +779,11 @@ _WATCH_GROUP_PLAIN = {
     #    新分组不登记 → 该票从卡面消失（数据在、人看不到），与本轮改动初衷相反。
     "过筛未过·只观察": "接力资格没过·只看",
     "历史连板修复": "历史连板修复·资格逐票核验",
+    # ⛔ 2026-11-13：新方向首板槽 / 板块核心观察池都是当轮新增的 watch_group，
+    #    不登记 → 该票从卡面消失（11-13 实证：横店影视＝当日唯一可买 + 6 只板块核心
+    #    全部没上卡，只剩 5 只）。新增 watch_group 必须同步登记本节。
+    "新方向首板": "🌱 新方向首板·明早竞价定能不能接",
+    "板块核心观察": "🏛 板块核心观察·只看不买",
 }
 
 
@@ -2437,6 +2442,46 @@ def _buy_indicator_lines(r: dict, oc: dict, v: dict) -> list[str]:
     return out
 
 
+def _ai_review_block(rev: dict[str, Any] | None) -> list[dict]:
+    """🧠 09:26 池内复核（LLM 层 · 2026-11-13 接入主链）。
+
+    与 `_ai_plan_block` 的分工（⛔ 不重复同一件事）：
+    - `_ai_plan_block`：**机械裁决**结果（`pool_call` 17 道闸在池内判生死）+ 账本口径；
+    - 本块：模型在**同一批池内票**上复核，只能降不能升（`core/ai_review` 强制）。
+
+    渲染原则：结论优先、只带关键数字，最多 4 行。
+    ⛔ 无数据（模块关闭 / 超时 / 池内 0 只）→ 整块不出现，
+      ⛔ 不写「AI 未就绪」之类占位（占位等于告诉读者系统坏了，比不显示更差）。
+    """
+    if not isinstance(rev, dict):
+        return []
+    picks = [p for p in (rev.get("picks") or []) if isinstance(p, dict)]
+    market = str(rev.get("market") or "").strip()
+    if not picks and not market:
+        return []
+    buys = [p for p in picks if p.get("action") == "buy"]
+    skips = [p for p in picks if p.get("action") == "skip"]
+    watches = [p for p in picks if p.get("action") == "watch"]
+    verdict = str(rev.get("verdict") or (f"可买 {len(buys)} 只" if buys else "空仓"))
+    head = ("**🧠 AI 复核**｜" +
+            (f"<text_tag color='red'>{verdict}</text_tag>" if buys
+             else f"<text_tag color='neutral'>{verdict}</text_tag>"))
+    out = [_div(head)]
+    if market:
+        out.append(_div(f"　<font color='grey'>{market}</font>"))
+    for p in buys[:2]:
+        why = f" · {p['why']}" if str(p.get("why") or "").strip() else ""
+        out.append(_div(
+            f"　🔥 <text_tag color='red'>{p.get('name') or p.get('code')}</text_tag>{why}"))
+    if skips:
+        names = "、".join(str(p.get("name") or p.get("code")) for p in skips[:3])
+        tail = f" 等 {len(skips)} 只" if len(skips) > 3 else ""
+        out.append(_div(f"　<font color='grey'>放弃：{names}{tail}</font>"))
+    if watches and not buys:
+        out.append(_div(f"　<font color='grey'>其余 {len(watches)} 只先看着，不动手</font>"))
+    return out
+
+
 def _ai_plan_block(raw: dict, records: list[dict],
                    pool_summary: dict | None = None,
                    ice_ban: bool = False) -> list[dict]:
@@ -2481,7 +2526,12 @@ def _ai_plan_block(raw: dict, records: list[dict],
             _q = (pool_summary or {}).get("quota")
         _n = (pool_summary or {}).get("pool_size")
         blocks.append(_div(
-            "**🤖 今日买入**<font color='grey'>（9:25 竞价开出来后定的；昨天只出预案）</font>"
+            # ⛔ 2026-11-16 修：盘后预案已关闭（`POOL_CALL_EOD_PLAN=0`）时，
+            #    「昨天只出预案」是**不存在的事实**（11-15 无 ai_view 文件），
+            #    会让人以为昨天给过买入预案。按 `_plan_live` 分两种措辞。
+            ("**🤖 今日买入**<font color='grey'>（9:25 竞价开出来后定的；昨天只出预案）</font>"
+             if _plan_live else
+             "**🤖 今日买入**<font color='grey'>（9:25 竞价开出来后定的；盘后不预设买哪只）</font>")
             if not ice_ban else
             "**🤖 今日命中**<font color='grey'>（今日冰点·一律禁买，只记录不进场）</font>"))
         head = []
@@ -3414,8 +3464,12 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
                 # 新布局（同接力池）：行1=黄色小卡(名称+分数)+tag云紧跟；
                 # 行2=现价｜预期%｜高开｜竞价额｜板块｜可信度（预期+高开同红，竞价额去昨基数）
                 _observing = _render_as_observation(it)
+                # ⛔ 2026-11-13：板块核心观察等新分组没有 relay_rank/theme_order，
+                #    原写法直出 → 卡面出现「None、」。没有编号就不编号，不拿 None 充数。
+                _wr = it.get("watch_rank")
+                _rank_txt = f"<font color='red'>  {_wr}、</font> " if _wr not in (None, "") else "  "
                 blocks.append(_div(
-                    f"<font color='red'>  {it.get('watch_rank')}、</font> {_stock_hl(it, 'yellow')}"
+                    _rank_txt + _stock_hl(it, 'yellow')
                     + (f" {cloud}" if cloud else "") + plan_marker(it, observation=_observing)
                 ))
                 price = it.get("price")
@@ -3933,7 +3987,7 @@ def _relay_position_block(plan: dict | None, *, day_word: str = "今天",
         #    （2026-11-09 事故：同一张卡上「空仓」与「买1只50%」并存）。
         _dd_ice = plan.get("drawdown_pct")
         _dd_txt = f"（账户回撤 -{_dd_ice:.2f}% 的压仓乘数照常留痕）" if isinstance(_dd_ice, (int, float)) else ""
-        lines.append(f"🛡️ {day_word}冰点禁买 · 仓位归零{_dd_txt}")
+        lines.append(f"🛡️ {day_word}冰点不买 · 仓位归零{_dd_txt}")
         lines.append("　　等情绪分走出冰点区再恢复名额（⛔ 竞价转强不翻多）")
     elif not can_buy:
         # 防御分支：本系统（relay_position）2026-10-13 起**不再产生 can_buy=False**
@@ -4476,6 +4530,13 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
     blocks.extend(_ai_plan_block(_ai_raw, records, pool_summary=summary.get("pool_call"),
                                  ice_ban=ice_ban))
 
+    # 🧠 AI 复核（2026-11-13 接入）：紧跟「今日买入」——同一个问题的两个视角。
+    #    顺序不能反：机械裁决先定生死，模型只在这批池内票上降级。若把模型放到前面，
+    #    读者会读成「模型先拍板、机械再复核」，因果颠倒。
+    _arv = _ai_review_block(verify_result.get("ai_review"))
+    if _arv:
+        blocks.extend(_arv)
+
     # ⏱️ 昨收冰点 · 今晨已重判（2026-11-09）：把两个时点摆出来，防读者把昨收的冰点
     #    读成今天的结论。⛔ 只交代时点，不改任何结论。
     if ice_stale:
@@ -4867,6 +4928,40 @@ def build_verify_card(verify_result: dict[str, Any]) -> dict:
 
 # ── 推送（复用狸猫猎手 push_card.py 单入口）──────────────
 
+def sanitize_card(card: dict) -> dict:
+    """递归清洗卡面自由文本（单一源：`scripts/card_copy_rules`）。
+
+    ⚠️ 为什么必须在**渲染出口**兜这一道（2026-11-13 实锤）：
+    - 卡面大量文案不是模板写的，而是从**冻结件**透传的（`pool_call-<day>.json` 的 `reason`、
+      `ai_advice` 的 note…）。冻结件按铁律 ⛔ 不许改。
+    - 于是「源码已经改好的措辞」对**当天**无效：11-13 上午 `口径：` 命中
+      `card_copy_rules.PLAIN_FAIL` → `push_card` 硬阻断 → 一条 HTTP 没发出 → 全天无卡。
+    - 修源码只对次日新冻结件生效；渲染层清洗才对当天生效，两者都需要。
+
+    只替换 `PLAIN_HINT` 里有白话映射的词；洗不掉的仍由最终 lint 阻断（⛔ 不放松门禁）。
+    """
+    try:
+        if str(LIMAO_SCRIPTS) not in sys.path:
+            sys.path.insert(0, str(LIMAO_SCRIPTS))
+        import card_copy_rules as CCR
+    except Exception:  # noqa: BLE001
+        return card
+
+    def _walk(o):
+        if isinstance(o, dict):
+            return {k: _walk(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [_walk(v) for v in o]
+        if isinstance(o, str):
+            return CCR.sanitize(o)
+        return o
+
+    try:
+        return _walk(card)
+    except Exception:  # noqa: BLE001
+        return card
+
+
 def push_card_file(card: dict, *, webhook: str | None = None, dry_run: bool = False) -> tuple[bool, str]:
     """
     写 cache 卡片 JSON，调用狸猫猎手 scripts/push_card.py 单入口推送。
@@ -4875,6 +4970,7 @@ def push_card_file(card: dict, *, webhook: str | None = None, dry_run: bool = Fa
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     ts = _now_bj().strftime("%Y%m%d_%H%M%S")
     path = CACHE_DIR / f"card_{ts}.json"
+    card = sanitize_card(card)          # 黑话清洗（冻结件透传的旧措辞只在此处可救）
     path.write_text(json.dumps(card, ensure_ascii=False), encoding="utf-8")
 
     cmd = [sys.executable, str(LIMAO_SCRIPTS / "push_card.py"), str(path)]

@@ -272,6 +272,20 @@ DEV_ENV_MIN_SAMPLES = 8
 # ⛔ 一字板、竞价封死仍在其之前被判 `above`，进不来。
 # 可逆：`POOL_CALL_DEEP_LOW_RESCUE=0` 逐字回到「DEV<−2 全放弃」。
 POOL_CALL_DEEP_LOW_RESCUE = os.environ.get("POOL_CALL_DEEP_LOW_RESCUE", "1") != "0"
+# 🧵 2026-11-16 用户「弱线的深低开不是错杀，是走弱」：
+#    错杀档必须是**成线**的票（该线昨日 ≥ N 家涨停）才救，孤线/弱线不救。
+#    实证：11-16 金辰股份（光伏仅 2 家、昨日 3 板炸 1）开 −7.45% 被救 → 与「只做最强线」冲突。
+#    回退：`POOL_CALL_DEEP_LOW_MIN_MATES=0`。
+try:
+    DEEP_LOW_MIN_MATES = int(os.environ.get("POOL_CALL_DEEP_LOW_MIN_MATES", "3") or 0)
+except ValueError:
+    DEEP_LOW_MIN_MATES = 3
+# 🥇 更硬的一条：错杀档只救**当日最强的前 N 条线**（按昨日涨停家数，取不同家数档）。
+#    11-16 实证：传媒 7 家、汽车零部 6 家，绿电 3 家 → 金辰不该被救。
+try:
+    DEEP_LOW_TOP_LINES = int(os.environ.get("POOL_CALL_DEEP_LOW_TOP_LINES", "2") or 0)
+except ValueError:
+    DEEP_LOW_TOP_LINES = 2
 try:
     DEEP_LOW_OPEN_DEV = float(os.environ.get("POOL_CALL_DEEP_LOW_DEV", "-6.0"))
 except ValueError:
@@ -1739,6 +1753,16 @@ def call_pool(candidates: dict[str, Any] | None,
         if _code and isinstance(_g, (int, float)):
             _gap_by_code[_code] = float(_g)
 
+    # 🧵 昨日各线涨停家数（判断「成线」用；zt_rows 缺失则不约束）
+    _theme_mates: dict[str, int] = {}
+    for _r in (zt_rows or []):
+        _k = line_family(_r)
+        if _k:
+            _theme_mates[_k] = _theme_mates.get(_k, 0) + 1
+    # 昨日「最强线」集合 = 家数前 N 档（同家数算同档，避免 3/3/3 一刀切切歪）
+    _top_line_counts = sorted(set(_theme_mates.values()), reverse=True)[:DEEP_LOW_TOP_LINES] if DEEP_LOW_TOP_LINES > 0 else []
+    _top_lines = {k for k, v in _theme_mates.items() if v in _top_line_counts}
+
     for c in pool:
         code = str(c.get("code") or "").strip()
         name = str(c.get("name") or "")
@@ -2147,19 +2171,26 @@ def call_pool(candidates: dict[str, Any] | None,
         _dev_val = base.get("gap_vs_expected")
         if isinstance(_dev_val, (int, float)) and _dev_env_offset:
             _dev_val = float(_dev_val) - float(_dev_env_offset)
+        _mates = _theme_mates.get(fam) if _theme_mates else None
+        # 弱线（不在昨日最强档）：低开一律按走弱处理，⛔ 不享受「错杀/低开也买」
+        _line_weak = bool(_theme_mates) and fam not in _top_lines
         _deep_rescued = bool(
             zone == "below"
             and POOL_CALL_DEEP_LOW_RESCUE
             and _ac.relative_mode()
             and isinstance(_dev_val, (int, float))
             and float(_dev_val) <= DEEP_LOW_OPEN_DEV
+            # 🧵 只有成线的票才谈「错杀」；孤线/弱线的深低开按走弱处理
+            and (not _theme_mates
+                 or ((_mates or 0) >= DEEP_LOW_MIN_MATES and fam in _top_lines))
+            and not _line_weak
         )
         if _deep_rescued:
             base["deep_low_rescue"] = {
                 "dev": round(float(_dev_val), 2),
                 "threshold": DEEP_LOW_OPEN_DEV,
                 "note": (f"开 {gap:+.2f}% 比它自己的预期低 {abs(float(_dev_val)):.1f} 个点，"
-                         "属于被砸下来的错杀档 → 不按走弱处理"),
+                         f"且这条线昨日 {_mates} 家（最强档）→ 属于被砸下来的错杀档，不按走弱处理"),
             }
         # 🐾 中间档低开放行（2026-11-11 用户「可以在低开的时候买」）。
         #    `zone=below` 且 gap<0、又没到深低开豁免线 → 这才是「低开被一票否决」的全部来源。
@@ -2173,6 +2204,7 @@ def call_pool(candidates: dict[str, Any] | None,
             and float(gap) < 0
             and not _lo_top
             and not _deep_rescued
+            and not _line_weak
         )
         if _low_open_buy:
             base["low_open_buy"] = {
@@ -2184,6 +2216,11 @@ def call_pool(candidates: dict[str, Any] | None,
             }
             base["position_cap"] = min(float(base.get("position_cap") or 1.0),
                                        LOW_OPEN_BUY_POSITION)
+        if zone == "below" and _line_weak and not _lo_top:
+            marks[code] = {**base, "view": "skip", "weak_line_low_open": True,
+                           "reason": (f"今天开 {gap:+.2f}%，这条线昨日只有 {_mates} 家"
+                                      "（不是昨天最强的那几条线）→ 低开按走弱处理，不买")}
+            continue
         if zone == "below" and not _lo_top and not _deep_rescued and not _low_open_buy:
             _e_show = base.get("expected_gap_pct")
             if _ac.relative_mode() and isinstance(_e_show, (int, float)):
@@ -2774,7 +2811,7 @@ def call_pool(candidates: dict[str, Any] | None,
                          and not c.get("new_direction_line")))):
             marks[code] = {**base, "view": "watch",
                            "watch_group": c.get("watch_group"),
-                           "reason": "首板只看不买（2026-11-11 口径：尽量从 2 板开始看）"}
+                           "reason": "首板只看不买（2026-11-11 起尽量从 2 板开始看）"}
             continue
         entries.append({**base, "view": "participate"})
         marks[code] = {**base, "view": "participate"}
