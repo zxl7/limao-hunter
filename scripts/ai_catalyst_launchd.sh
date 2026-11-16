@@ -27,6 +27,8 @@ cd "$ROOT" || exit 1
 # 👑⚠️ 高标处境 + 明日跌停预判（复盘卡引用）
 "$PY" scripts/review_extras.py >> "$LOG" 2>&1 || log "review_extras 失败（不影响主链）"
 "$PY" scripts/review_series.py >> "$LOG" 2>&1 || log "review_series 失败（不影响主链）"
+# 🏷 题材基座兜底：选股宝快照若 15:30 没落成（接口盘后关闭/抓空），这里再试一次并报覆盖度
+"$PY" scripts/capture_theme_snapshot.py >> "$LOG" 2>&1 || log "题材快照兜底未成功（当日池已定稿则会重试）"
 
 # 🔒 持仓结算：断板（收盘未涨停）→ 退出并推卡
 "$PY" scripts/streak_holdings.py --execute >> "$LOG" 2>&1 || true   # T+1：先执行昨日信号的卖出
