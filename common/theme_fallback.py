@@ -48,12 +48,49 @@ def resolve(code: str, day: str | None = None, *, sector: str | None = None,
     if not code:
         return {"theme": "", "source": "none", "note": "无代码"}
 
+    # 0) 🥇 同花顺涨停原因（2026-11-16 用户「所有涨停票都走同花顺+涨停原因」）
+    #    原因文本是「今天为什么涨停」，比任何静态归属都准；命中概念即采用。
+    if reason:
+        _hl = _load(CACHE / "theme_library_hithink.json", {})
+        _cons = ((_hl.get("entries") or {}).get(code) or {}).get("concepts") or []
+        _clean = [c for c in _cons if c and c not in NON_THEME]
+        # 原因文本用「+」拼接，概念名可能带斜杠/括号 → 先切词再比对
+        import re as _re
+        _tokens = [t for t in _re.split(r"[+＋、/,，\s]+", str(reason)) if len(t) >= 2]
+        # 命中排序：**原因里越靠前越主**（「短剧+互动影游」→ 短剧是主因），
+        # 同位置再按「概念越具体越好」。
+        _hit = []
+        for c in _clean:
+            _pos = next((i for i, t in enumerate(_tokens) if t == c or t in c or c in t), None)
+            if _pos is not None:
+                _hit.append((_pos, c))
+        if _hit:
+            # 若当天快照已经给了题材、且该题材也出现在原因里 → 用快照（选股宝口径更稳）
+            if day:
+                _snap = _load(CACHE / "theme_snapshot" / f"theme_{day}.json", {})
+                _t = str(((_snap.get("mapping") or {}).get(code) or {}).get("theme_base")
+                         or ((_snap.get("mapping") or {}).get(code) or {}).get("theme") or "").strip()
+                # 题材名可能带斜杠（「短剧/互动影游」），原因用「+」拆开 → 用词级判断
+                _agree = bool(_t) and (_t in str(reason)
+                                       or any(t in _t or _t in t for t in _tokens))
+                if _t and _t not in NON_THEME and _agree:
+                    return {"theme": _t, "source": "snapshot",
+                            "note": f"与涨停原因吻合（{reason[:24]}）"}
+            _sizes = _concept_sizes(_hl)
+            _best = min(_hit, key=lambda pc: (pc[0], _sizes.get(pc[1], 10 ** 9)))[1]
+            return {"theme": _best, "source": "hithink_reason",
+                    "note": f"涨停原因命中「{_best}」（{reason[:26]}）"}
+
     # 1) 当日快照
     if day:
         snap = _load(CACHE / "theme_snapshot" / f"theme_{day}.json", {})
         row = (snap.get("mapping") or {}).get(code) or {}
         t = str(row.get("theme_base") or row.get("theme") or "").strip()
         if t and t not in NON_THEME:
+            # 快照名也出现在涨停原因里 → 两条证据一致，保留快照（更贴近选股宝口径）
+            if reason and t in str(reason):
+                return {"theme": t, "source": "snapshot",
+                        "note": f"与涨停原因吻合（{reason[:24]}）"}
             return {"theme": t, "source": "snapshot", "note": ""}
 
     # 2) 选股宝历史库

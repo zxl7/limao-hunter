@@ -1768,7 +1768,8 @@ def _rank_and_split(
                 if _t and _t != "—":
                     continue
                 _rs = _resolve_theme(str(_r.get("code") or ""), str(zt.get("date") or ""),
-                                     sector=_r.get("sector"))
+                                     sector=_r.get("sector"),
+                                     reason=_hy_reason.get(str(_r.get("code") or "").zfill(6)))
                 if _rs.get("theme"):
                     _r["core_theme"] = _rs["theme"]
                     _r["theme_name"] = _rs["theme"]
@@ -1870,6 +1871,30 @@ def run_eod(
     # [晨曦航空,尖峰集团]→[冰山冷热,新华文轩]）。现由 `get_theme_map` 统一：
     # 首跑抓接口并落 cache/theme_snapshot/theme_<date>.json，同日重跑/回放只读快照。
     # 开关：THEME_SNAPSHOT_ENABLED=0 回旧行为；THEME_SNAPSHOT_FORCE_REFRESH=1 强制刷新。
+    # 🥇 2026-11-16 用户「所有涨停票都走同花顺+涨停原因」：
+    #    选股前先把当天同花顺涨停池（带 limit_up_reason）抓到本地，缺失就现抓一次。
+    #    ⛔ 失败只降级（回退选股宝快照），不阻断选池。
+    _hy_reason: dict[str, str] = {}
+    try:
+        import subprocess as _sp_hy
+        from datetime import datetime as _dt_hy
+        from zoneinfo import ZoneInfo as _ZI_hy
+        _d8 = _dt_hy.now(_ZI_hy("Asia/Shanghai")).strftime("%Y%m%d")
+        _hp = ROOT.parent / "cache" / f"hithink_zt_{_d8}.json"
+        if not _hp.exists():
+            _sp_hy.run([sys.executable, str(ROOT.parent / "scripts" / "hithink_fetch.py"), "limitup"],
+                       check=False, timeout=120, stdout=_sp_hy.DEVNULL, stderr=_sp_hy.DEVNULL)
+        if _hp.exists():
+            _hd = json.loads(_hp.read_text(encoding="utf-8"))
+            for _it in (_hd.get("items") or []):
+                _c = str(_it.get("code") or "").zfill(6)
+                _r = str(_it.get("limit_up_reason") or _it.get("reason") or "").strip()
+                if _c and _r:
+                    _hy_reason[_c] = _r
+            print(f"[EOD] 🥇 同花顺涨停原因 {len(_hy_reason)} 条（题材归因优先用它）")
+    except Exception as _e:  # noqa: BLE001
+        print(f"[EOD] 同花顺涨停原因不可用（回退选股宝快照）：{_e}")
+
     _theme_map_all: dict[str, Any] = {}
     _theme_meta: dict[str, Any] = {"source": "empty", "count": 0}
     try:
@@ -1895,7 +1920,8 @@ def run_eod(
                 _fb = {}
                 try:
                     from common.theme_fallback import resolve as _resolve_theme
-                    _fb = _resolve_theme(_zc, str(zt.get("date") or ""), sector=_z.get("sector"))
+                    _fb = _resolve_theme(_zc, str(zt.get("date") or ""), sector=_z.get("sector"),
+                                         reason=_hy_reason.get(_zc))
                 except Exception:  # noqa: BLE001
                     _fb = {}
                 if _fb.get("theme"):

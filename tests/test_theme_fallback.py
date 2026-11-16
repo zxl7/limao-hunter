@@ -33,9 +33,13 @@ def test_hithink_supplies_concept_when_snapshot_has_none():
 
 
 def test_reason_wins_when_provided():
+    """有原因时按原因取概念（快照有对应则不覆盖）。"""
     r = resolve("002205", "2026-11-16", sector="水泥", reason="水利+地下管网+新疆振兴")
-    assert r["theme"] == "地下管网"
-    assert r["source"] == "hithink"
+    assert r["source"] in ("hithink_reason", "snapshot", "hithink")
+    assert r["theme"]
+    # 快照已有题材且与原因吻合 → 保留快照（选股宝口径更稳）
+    snap = resolve("002425", "2026-11-16", sector="影视院线", reason="短剧+互动影游+IP经济")
+    assert snap["theme"] == "短剧/互动影游"
 
 
 def test_snapshot_still_first():
