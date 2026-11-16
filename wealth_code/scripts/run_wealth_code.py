@@ -397,6 +397,54 @@ def _guard_auction_snapshot(
     return quotes, "write"
 
 
+def _attach_ai_review(res: dict) -> dict | None:
+    """🧠 09:26 池内复核（LLM · 2026-11-13 接入主链）。
+
+    ⛔ 设计红线：
+    - **只读池内票**：数据源是已冻结的 `pool_call-<day>.json` 的 views。模型看不到池外票，
+      避免重蹈 `ai_trader_judge` 的覆辙（11-13 实测送了 7 只，6 只不在池内，模型只能回
+      「机械 not_in_pool → 观察」，既正确又无用）。
+    - **只降不升**：机械否决过的票，模型给 buy 也被压回 watch（`ai_review._normalize`）。
+    - **不阻塞推卡**：超时/失败返回 None，调用方照常推卡。
+    """
+    from core import ai_review
+    if not ai_review.enabled():
+        print("[VERIFY] AI 复核已关闭（AI_REVIEW=0）")
+        return None
+    day = str((res.get("summary") or {}).get("trade_date10") or "")
+    if not day:
+        return None
+    p = ROOT / "cache" / f"pool_call-{day}.json"
+    if not p.exists():
+        print(f"[VERIFY] AI 复核跳过：池内裁决缺失（{p.name}）")
+        return None
+    try:
+        views = (json.loads(p.read_text(encoding="utf-8")) or {}).get("views") or {}
+    except Exception:  # noqa: BLE001
+        return None
+    if not views:
+        print("[VERIFY] AI 复核跳过：池内 0 只（机械已否决一切，模型无话可说）")
+        return None
+    market: dict[str, Any] = {}
+    try:
+        market = json.loads((ROOT.parent / "cache" / "feedback_matrix.json").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        market = {}
+    out = ai_review.review(day, views, market)
+    if not out:
+        return None
+    # 留痕（与账本/卡面同源）：`cache/ai_trade_<day>.json`
+    try:
+        (ROOT.parent / "cache" / f"ai_trade_{day}.json").write_text(
+            json.dumps({"date": day, "picks": out["picks"], "market": out["market"],
+                        "verdict": out["verdict"], "source": "ai_review",
+                        "model": out.get("model"), "elapsed": out.get("elapsed")},
+                       ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception as _e:  # noqa: BLE001
+        print(f"[VERIFY] AI 复核留痕失败（{_e}）")
+    return out
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     candidates_path = None
     if args.candidates:
@@ -492,6 +540,16 @@ def cmd_verify(args: argparse.Namespace) -> int:
         td = res["summary"].get("trade_date10") or datetime.now(BJ_TZ).strftime("%Y-%m-%d")
         _h = pipeline_verify.sync_holdings_from_verify(res, td)
         print(f"[VERIFY] 同步持仓 holdings.json: {len(_h.get('holdings', []))} 只（updated={td}）")
+    # 🧠 09:26 池内复核（LLM 层 · 2026-11-13 接入）
+    #    时点刻意卡在「pool_call 已冻结」之后、「推卡」之前：
+    #      冻结在前 → 模型只能看见已定的机械结论，⛔ 无权改判；
+    #      推卡在后 → 复核结论才能进卡面。
+    #    合成/测试（--synthesize）不调模型，省钱且不污染真实战绩。
+    if not args.synthesize:
+        try:
+            res["ai_review"] = _attach_ai_review(res)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[VERIFY] AI 复核跳过（{_e}）——不影响推卡")
     if args.narratives:
         _, g = _load_narratives(args.narratives)
         if g:
@@ -518,7 +576,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if not args.synthesize:
             card_res, snapshot_diag = adapt_verify_card_snapshot(res)
             print(f"[VERIFY] 卡片快照来源: {json.dumps(snapshot_diag, ensure_ascii=False)}")
-        ok, out = build_cards.push_card_file(build_cards.build_verify_card(card_res))
+        ok, out = build_cards.push_card_file(build_cards.build_verify_card(card_res),
+                                             webhook=getattr(args, "webhook", None))
         print(f"[VERIFY] 推送竞价验证卡: {'✓' if ok else '✗'} {out}")
     return 0
 
@@ -584,6 +643,8 @@ def main() -> int:
     pv.add_argument("--recompute", action="store_true", help="verify 前重跑 eod")
     pv.add_argument("--fetch", action="store_true", help="真实竞价接入：抓 09:25 实时报价")
     pv.add_argument("--push", action="store_true", help="构建并推送竞价验证卡")
+    # 2026-11-13：新增 webhook 覆盖，便于把改版卡先发测试群验证（⛔ 默认仍走 settings 的生产群）。
+    pv.add_argument("--webhook", help="推送 webhook 键名（config/settings.json），如 feishu_webhook_test")
     pv.add_argument("--narratives", help="agent 全局旁白 JSON 路径（{\"global_narrative\":str}）")
 
     args = ap.parse_args()

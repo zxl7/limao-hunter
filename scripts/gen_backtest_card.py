@@ -20,6 +20,7 @@ gen_backtest_card.py — 回测卡渲染器（财神-回测 skill · 2026-09-01�
 """
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -48,10 +49,22 @@ PURPLE = "purple"
 BLUE = "blue"
 
 
+def _tidy(s: str) -> str:
+    """收尾清理（渲染出口·不改判据）：
+    1) sanitize 把词替换成白话/空串后可能留下悬空顿号（如「…：A、、\n」）；
+    2) R7 会复述它扫到的「黑话词 N 个：A、B」——这些词按宪法本就不许上卡，
+       逐个改写后数量与列举必然对不上（2026-11-13 实证：2 个只列出 1 个）→ 只留数量。
+    """
+    s = re.sub(r"黑话词\s*(\d+)\s*个[：:][^\n]*", r"黑话词 \1 个（已按白话规范改写）", s)
+    s = re.sub(r"[、，,]{2,}", "、", s)
+    s = re.sub(r"[、，,]{1,}[ \t]*(?=\n|$)", "", s)
+    return s
+
+
 def _div(t: str) -> dict:
     # 2026-09-18：渲染出口统一白话化（词表单一源 = card_copy_rules.sanitize）——
     # 建议文案可能来自已落盘的旧记录，否则 09-21 起阻断期会把整卡拦死。
-    return {"tag": "div", "text": {"tag": "lark_md", "content": _ccr.sanitize(t)}}
+    return {"tag": "div", "text": {"tag": "lark_md", "content": _tidy(_ccr.sanitize(t))}}
 
 
 def _hr() -> dict:

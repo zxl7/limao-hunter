@@ -73,3 +73,7 @@ wealth_code/cache/*.jsonl
 
 # ===== 同步清单（manifest.py 每 30s 重写的运行时产物，勿入库）=====
 dist/migrate/*.txt
+
+# ===== 迁移打包产物（单包数百 MB，禁止入库）=====
+dist/migrate/*.tar.gz
+dist/migrate/*.sha256
