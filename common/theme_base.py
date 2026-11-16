@@ -189,9 +189,15 @@ def snapshot_theme_members(mapping: dict[str, Any]) -> dict[str, set[str]]:
         if not isinstance(row, dict):
             continue
         plates = row.get("plates")
-        if not isinstance(plates, (list, tuple)):
-            continue
-        name = theme_of_plates(plates)
+        if isinstance(plates, (list, tuple)):
+            name = theme_of_plates(plates)
+        else:
+            # 🔁 2026-11-16 修：同花顺回填的快照没有 `plates`（只有 theme/concepts），
+            #    原实现直接 continue → 回填的 19 天对轮动/趋势**完全无效**（实测 zt_series 仍全 null）。
+            #    这里退到 `theme`（已是当日池内最热概念），仍保持「不编造」：没有就跳过。
+            name = str(row.get("theme") or "").strip()
+            if not name:
+                continue
         c = str(code or "").strip().split(".")[0]
         if name and c:
             out.setdefault(name, set()).add(c)
