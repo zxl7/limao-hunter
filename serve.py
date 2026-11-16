@@ -366,6 +366,8 @@ PUBLIC_ROUTES = {
     "/api/market/candidates": {"file": "cache/pulse_snapshots/candidates.json", "cadence": "intraday", "desc": "候选池"},
     # 二、题材 / 资金
     "/api/theme/rotation": {"file": "cache/theme_rotation.json", "cadence": "intraday", "desc": "题材轮动"},
+    "/api/theme/library": {"file": "cache/theme_library.json", "cadence": "daily",
+                            "desc": "题材库沉淀（选股宝快照累计：代码→题材历史）"},
     "/api/theme/series": {"file": "cache/theme_series.json", "cadence": "daily", "desc": "题材多日序列"},
     # ⚠️ 2026-10-14 审计（A7）：最后写入 2026-09-03（0 B），已被 `/api/theme/series`
     #    （theme_series.json · 当日仍在更新）取代。刻意不删（保留 /record 新鲜度证据），

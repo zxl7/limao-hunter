@@ -149,6 +149,12 @@ ROUTES: dict[str, dict[str, Any]] = {
         "schema": "ai.nav_t1", "validation": "lenient", "degrade": "缺失即不展示",
         "desc": "AI 轨 T+1 口径净值",
     },
+    "/api/theme/library": {
+        "file": "cache/theme_library.json", "cadence": "daily",
+        "owner": "题材基座", "producer": "scripts/theme_library.py", "source": ["选股宝"],
+        "schema": "theme.library", "validation": "lenient", "degrade": "空库降级",
+        "desc": "题材库沉淀（选股宝快照累计）",
+    },
     "/api/theme/rotation": {
         "file": "cache/theme_rotation.json", "cadence": "intraday",
         "owner": "题材轮动", "producer": "scripts/theme_rotation.py", "source": ["东财题材"],
