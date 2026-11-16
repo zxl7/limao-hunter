@@ -36,6 +36,7 @@ rsh "set -e; cd '$REMOTE_ROOT'; rm -rf 'releases/$REL_NAME'; mkdir -p 'releases/
      test -f 'releases/$REL_NAME/app/serve.py' || { echo NO_SERVE; exit 1; }; \
      ln -sfn 'releases/$REL_NAME/app' '$REMOTE_ROOT/current'; \
      touch 'releases/$REL_NAME'; \
+     sudo -n chown -R \$(id -u):\$(id -g) releases 2>/dev/null || true; \
      ls -1d releases/* | sort -r | tail -n +4 | xargs -r rm -rf; \
      echo '当前指向:' \$(readlink -f '$REMOTE_ROOT/current')"
 
