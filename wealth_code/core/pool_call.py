@@ -1773,11 +1773,20 @@ def call_pool(candidates: dict[str, Any] | None,
 
     # 每条线核心与二排的竞价幅度对照（供「核心转弱→允许二排」判定）
     _gap_by_code: dict[str, float] = {}
+    # 🧲 2026-11-16 用户「题材强度必须用到昨日涨停的板块个股」：
+    #    报价里其实**已经包含**昨日完整涨停池（09:25 抓取时 full_zt_codes 并进去了），
+    #    原实现只遍历候选池 → 首板（如凯撒文化 +10% 一字）被漏掉，方向证据因此看不见。
+    #    这里改成遍历全部报价，候选池只作为补充来源。
+    for _code, _q in (qs or {}).items():
+        _g = _gap_of(_q)
+        if _code and isinstance(_g, (int, float)):
+            _gap_by_code[str(_code)] = float(_g)
     for _c in pool:
         _code = str(_c.get("code") or "").strip()
-        _g = _gap_of(qs.get(_code))
-        if _code and isinstance(_g, (int, float)):
-            _gap_by_code[_code] = float(_g)
+        if _code and _code not in _gap_by_code:
+            _g = _gap_of(qs.get(_code))
+            if isinstance(_g, (int, float)):
+                _gap_by_code[_code] = float(_g)
 
     # 🧵 昨日各线涨停家数（判断「成线」用；zt_rows 缺失则不约束）
     _theme_mates: dict[str, int] = {}
@@ -1799,19 +1808,20 @@ def call_pool(candidates: dict[str, Any] | None,
         _k = _line_key(_r)
         if _k:
             _mates_key[_k] = _mates_key.get(_k, 0) + 1
-    for _c in pool:
-        _ln = _line_key(_c)
-        _cd = str(_c.get("code") or "").strip()
+    # 统计口径 = **昨日完整涨停池**（含首板）+ 当日报价；候选池只补漏
+    _res_rows = [dict(r) for r in (zt_rows or [])] or [dict(c) for c in pool]
+    for _r in _res_rows:
+        _ln = _line_key(_r)
+        _cd = str(_r.get("code") or "").strip().zfill(6)
         _g = _gap_by_code.get(_cd)
-        _b = int(_c.get("boards") or 0)
+        _b = int(_r.get("boards") or 0)
         if isinstance(_g, (int, float)):
             if _ln not in _line_max_gap or float(_g) > _line_max_gap[_ln]:
                 _line_max_gap[_ln] = float(_g)
-            if _b >= max(_line_max_boards.get(_ln, 0), _b):
+            if _b >= _line_max_boards.get(_ln, 0):
                 # 该线最高板的票：红开才算「老龙抢筹」
-                if _b >= _line_max_boards.get(_ln, 0):
-                    _line_max_boards[_ln] = _b
-                    _line_leader_gap[_ln] = float(_g)
+                _line_max_boards[_ln] = _b
+                _line_leader_gap[_ln] = float(_g)
     _line_resonance: dict[str, dict] = {}
     for _ln in set(list(_mates_key) + list(_line_max_gap)):
         _f1 = 1 if (_line_max_gap.get(_ln, -99) >= RESONANCE_STRONG_GAP) else 0

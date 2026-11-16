@@ -59,6 +59,19 @@ def test_weak_line_still_blocked(result):
     assert v["view"] != "participate"
 
 
+def test_first_board_counts_into_resonance(result):
+    """昨日**首板**的竞价也算题材强度证据（用户 11-16：题材强度必须用昨日涨停的板块个股）。
+
+    凯撒文化 002425 昨日首板、不在候选池，但竞价 +10.1%（一字）——
+    它在报价文件里，必须被算进「传媒族」的共振，而不是被候选池挡掉。
+    """
+    q = json.loads(QUOTES.read_text(encoding="utf-8"))
+    assert "002425" in q, "首板报价应已冻结进 auction_quotes（full_zt_codes）"
+    gap = (q["002425"]["auction_price"] / q["002425"]["prev_close"] - 1) * 100
+    assert gap >= 7.0
+    assert result["views"]["603103"].get("sector_resonance", {}).get("score", 0) >= 2
+
+
 def test_off_switch_restores_old_behaviour(monkeypatch):
     """回退开关：关掉后横店应回到 watch（可逆性证明）。"""
     if not (CAND.exists() and QUOTES.exists() and ZT.exists()):
