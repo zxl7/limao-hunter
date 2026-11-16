@@ -71,9 +71,9 @@ wealth_code/cache/*.jsonl
 # ===== npx 隔离缓存（2026-11-09：~/.npm 权限损坏后的项目内替代，5MB 可随时删） =====
 .npm-cache/
 
-# ===== 同步清单（manifest.py 每 30s 重写的运行时产物，勿入库）=====
-dist/migrate/*.txt
-
-# ===== 迁移打包产物（单包数百 MB，禁止入库）=====
-dist/migrate/*.tar.gz
-dist/migrate/*.sha256
+# ===== 迁移打包产物（整目录忽略，禁止入库）=====
+# 2026-11-16 事故：该目录下的 tar.gz 曾被提交并推到公开仓库，
+# 包内 `wealth_code/.env`（BIYING_TOKEN）与 cache 交易数据随之泄露。
+# 已用 git filter-branch 从历史中剔除并强推覆盖；此处改为整目录忽略，
+# 防止任何形式的打包产物再次进入版本库。
+dist/migrate/
