@@ -93,6 +93,62 @@ ROUTES: dict[str, dict[str, Any]] = {
         "schema": "flow.sector_pool", "validation": "strict", "degrade": "空壳降级",
     },
     # 二、题材 / 资金
+    # ── 2026-11-16 补登记（自检 `check_data_foundation` 报「serve 有、catalog 无」）──
+    "/api/review/panel": {
+        "file": "cache/review_panel.json", "cadence": "daily",
+        "owner": "复盘面板", "producer": "scripts/review_panel.py", "source": ["本地派生"],
+        "schema": "review.panel", "validation": "lenient", "degrade": "空块降级",
+        "desc": "复盘三块面板（风险/赚钱效应/主线+LLM点评）",
+    },
+    "/api/review/series": {
+        "file": "cache/review_series.json", "cadence": "daily",
+        "owner": "复盘面板", "producer": "scripts/review_series.py", "source": ["本地派生"],
+        "schema": "review.series", "validation": "lenient", "degrade": "空序列降级",
+        "desc": "复盘多日序列（情绪分/涨停/跌停/最高板）",
+    },
+    "/api/ai/tilt": {
+        "file": "config/ai_tilt_state.json", "cadence": "daily",
+        "owner": "智能层", "producer": "scripts/train_ai_tilt.py", "source": ["本地派生"],
+        "schema": "ai.tilt_state", "validation": "lenient", "degrade": "缺失即不展示",
+        "desc": "智能层状态（模型版本/特征维度/验证AUC/迭代记录·只读）",
+    },
+    "/api/dragon/gene": {
+        "file": "cache/dragon_gene.json", "cadence": "daily",
+        "owner": "龙头基因", "producer": "scripts/dragon_gene.py", "source": ["本地派生"],
+        "schema": "dragon.gene", "validation": "lenient", "degrade": "空池降级",
+        "desc": "龙头基因沉淀池（≥4板入池）",
+    },
+    "/api/rules": {
+        "file": "config/rules_registry.json", "cadence": "daily",
+        "owner": "判据登记", "producer": "人工维护", "source": ["配置"],
+        "schema": "rules.registry", "validation": "strict", "degrade": "缺失即报错",
+        "desc": "判据登记表（含开关与回退）",
+    },
+    "/api/rules/fired": {
+        "dir": "cache", "pattern": r"^rules_fired_\d{4}-\d{2}-\d{2}\.json$", "mode": "latest",
+        "cadence": "daily", "owner": "判据体检", "producer": "scripts/rules_fired.py",
+        "source": ["本地派生"], "schema": "rules.fired", "validation": "lenient",
+        "degrade": "缺失即不展示", "desc": "判据命中日报",
+    },
+    "/api/decision/pool-ledger": {
+        "dir": "cache/pool_ledger", "pattern": r"^\d{4}-\d{2}-\d{2}\.json$", "mode": "all",
+        "limit": 20, "cadence": "daily", "owner": "池内台账",
+        "producer": "wealth_code/core/pool_ledger.py", "source": ["本地派生"],
+        "schema": "pool.ledger", "validation": "lenient", "degrade": "空台账降级",
+        "desc": "池内台账（收盘评估）",
+    },
+    "/api/research/backtest": {
+        "file": "cache/research/backtest_summary.json", "cadence": "manual",
+        "owner": "研究回测", "producer": "scripts/research_backtest.py", "source": ["本地派生"],
+        "schema": "research.backtest", "validation": "lenient", "degrade": "缺失即不展示",
+        "desc": "回测战绩（三口径研究快照，只读）",
+    },
+    "/api/ai/nav-t1": {
+        "file": "wealth_code/cache/ai_nav_history_t1.jsonl", "format": "jsonl", "cadence": "daily",
+        "owner": "AI 净值", "producer": "scripts/build_account_nav_ledger.py", "source": ["本地派生"],
+        "schema": "ai.nav_t1", "validation": "lenient", "degrade": "缺失即不展示",
+        "desc": "AI 轨 T+1 口径净值",
+    },
     "/api/theme/rotation": {
         "file": "cache/theme_rotation.json", "cadence": "intraday",
         "owner": "题材轮动", "producer": "scripts/theme_rotation.py", "source": ["东财题材"],
