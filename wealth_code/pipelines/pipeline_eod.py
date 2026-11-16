@@ -1788,6 +1788,39 @@ def _rank_and_split(
                     _n_reason += 1
         if _n_reason:
             print(f"[EOD] 🏷 涨停原因挂载 {_n_reason} 只")
+        # 🧲 收盘共振分（0~3）：成线 / 高度 / 早封，三项各 1 分
+        #    ⛔ 与 09:25 的竞价共振不是一回事：这里是**收盘可得的事实**，
+        #    用于盘后预案排序与卡面标注；竞价共振仍在 09:25 现算。
+        from common.theme_fallback import resolve as _r2  # noqa: F401  (保持导入语义一致)
+        _ladder_by_theme: dict[str, dict] = {}
+        for _r in (zt.get("ztgc") or []):
+            _t = str(_r.get("core_theme") or "").strip()
+            if not _t:
+                continue
+            _b = int(_r.get("boards") or 0)
+            _fbt = str(_r.get("fbt") or "999999")
+            _cur = _ladder_by_theme.setdefault(_t, {"mates": 0, "max_boards": 0, "earliest": "999999"})
+            _cur["mates"] += 1
+            _cur["max_boards"] = max(_cur["max_boards"], _b)
+            _cur["earliest"] = min(_cur["earliest"], _fbt)
+        _n_res = 0
+        for _bucket in (relay, watch):
+            for _r in _bucket:
+                _t = str(_r.get("core_theme") or _r.get("theme_name") or "").strip()
+                _st = _ladder_by_theme.get(_t)
+                if not _st:
+                    continue
+                _f1 = 1 if _st["mates"] >= 3 else 0
+                _f2 = 1 if _st["max_boards"] >= 2 else 0
+                _f3 = 1 if _st["earliest"] <= "093500" else 0
+                _r["close_resonance"] = {
+                    "score": _f1 + _f2 + _f3, "line": _t,
+                    "mates": _st["mates"], "max_boards": _st["max_boards"],
+                    "earliest": _st["earliest"],
+                }
+                _n_res += 1
+        if _n_res:
+            print(f"[EOD] 🧲 收盘共振分挂载 {_n_res} 只")
     except Exception as _e:  # noqa: BLE001
         print(f"[EOD] 题材兜底降级（不影响主链）：{_e}")
 

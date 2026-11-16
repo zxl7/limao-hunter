@@ -573,7 +573,9 @@ def build_ai_expectation(
     elif (is_dragon or is_cap) and sec["sentiment"] != "weak":
         gap_strength, gap_strength_hint = "mid", "⬆正常高开预期"
     elif form_info.get("form") in ("炸板回封", "放量烂板") or sec["sentiment"] == "weak" or phase in ("冰点", "分歧"):
-        gap_strength, gap_strength_hint = "weak", "⚠️高开谨慎/低开风险"
+        # 2026-11-16 用户：「高开谨慎/低开风险」语义不清，删掉这句提示。
+        # 档位仍记 weak（下游按它收紧），只是不再往卡面写这行字。
+        gap_strength, gap_strength_hint = "weak", ""
     else:
         gap_strength, gap_strength_hint = "mid", "⬆正常高开预期"
 
