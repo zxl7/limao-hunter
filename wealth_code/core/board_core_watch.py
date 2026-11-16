@@ -40,7 +40,8 @@ def _recent_zt(days: int = 3) -> dict[str, dict]:
         except Exception:  # noqa: BLE001
             continue
         for r in zt:
-            out[str(r.get("code"))] = r        # 越新越覆盖
+            # 🗓 记下这一条来自哪一天：注入池子时才能区分「今天还在涨停」和「三天前涨停过」
+            out[str(r.get("code"))] = {**r, "_zt_date": d}
     return out
 
 
@@ -69,6 +70,9 @@ def picks(exclude: set[str] | None = None) -> list[dict]:
         out.append({
             "code": code, "name": name,
             "boards": int(r.get("boards") or 0),
+            # 🗓 来源日期（2026-11-16 修数据错乱）：boards 是「上次涨停时的高度」，
+            #    不等于今天的高度；调用方必须据此判断是否还在板上。
+            "last_zt_date": r.get("_zt_date"),
             "sector": x.get("board") or r.get("sector") or "—",
             "core_score": round(float(x.get("core_score") or 0), 1),
             "join_rate": x.get("join_rate"),

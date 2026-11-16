@@ -2718,9 +2718,19 @@ def run_eod(
             pass
         _exist = {str(r.get("code")) for r in (relay + watch)}
         _cores = _bc.picks(_exist)
+        # ⛔ 2026-11-16 修数据错乱：核心观察票的 `boards` 是**上次涨停时的高度**，
+        #    不等于今天还在板上（实证 603366 日出东方：11-12 五板后断板，11-16 仍以
+        #    boards=5 混进观察池，页面像「当前 5 板高标」，pct/fbt/seal 全是空）。
+        #    这里按「今天是否在涨停池」重写高度：不在 → boards=0 + 明确标注上次涨停日。
+        _today_boards = {str(r.get("dm") or r.get("code")): int(r.get("boards") or 0)
+                         for r in (zt.get("ztgc") or [])}
         for _c in _cores:
+            _tday = str(_c.get("last_zt_date") or "")
+            _b_today = _today_boards.get(str(_c["code"]), 0)
             watch.append({
-                "code": _c["code"], "name": _c["name"], "boards": _c["boards"],
+                "code": _c["code"], "name": _c["name"], "boards": _b_today,
+                "boards_note": ("" if _b_today else f"上次涨停 {_tday}·{_c['boards']}板（今天已断板）"),
+                "is_today_zt": bool(_b_today),
                 "core_theme": _c.get("sector"), "sector": _c.get("sector"),
                 "participation_eligibility": "observe_only", "buyable": False,
                 "watch_only": True, "watch_group": "板块核心观察",
