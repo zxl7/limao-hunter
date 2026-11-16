@@ -44,6 +44,10 @@ def build() -> dict:
         mapping = snap.get("mapping") or {}
         if not mapping:
             continue
+        # ⛔ 不把同花顺回填（hithink_backfill）混进选股宝库：两者口径不同，
+        #    混在一起会让「这只票历史属过哪些题材」变成两种分类的并集。
+        if snap.get("source") == "hithink_backfill":
+            continue
         days.append(day)
         for code, info in mapping.items():
             if not isinstance(info, dict):
