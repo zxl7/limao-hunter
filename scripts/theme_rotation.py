@@ -885,11 +885,15 @@ def _flow_5d_board():
             fl = bv.get("flow_yi")
             if fl is None:
                 continue
-            a = agg.setdefault(bn, {"tot": 0.0, "days": 0, "in": 0, "last": None, "first": None})
+            a = agg.setdefault(bn, {"tot": 0.0, "days": 0, "in": 0, "last": None, "first": None, "streak": 0})
             a["tot"] += fl
             a["days"] += 1
             if fl > 0:
                 a["in"] += 1
+                a["streak"] += 1
+            else:
+                # 连续流入：series 按日期升序，遇到流出即清零 → 得到「截至最后一天的连涨天数」
+                a["streak"] = 0
             a["last"] = fl
             if a["first"] is None:
                 a["first"] = fl
@@ -904,7 +908,8 @@ def _flow_5d_board():
             elif a["in"] == 0 and a["tot"] < 0:
                 trend = "outflow"
         rows.append({"name": bn, "total_yi": round(a["tot"], 1), "days": a["days"],
-                     "inflow_days": a["in"], "last_yi": a["last"], "trend": trend})
+                     "inflow_days": a["in"], "last_yi": a["last"], "trend": trend,
+                     "streak": a["streak"]})
     rows.sort(key=lambda x: -x["total_yi"])
     return {
         "inflow_top": rows[:FLOW_TOP_N],
