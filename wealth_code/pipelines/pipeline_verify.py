@@ -751,6 +751,9 @@ def run_verify(
                     #    ⛔ 必须用 `theme_open_rows` 而非 `zt_rows`：后者还负责「市场最高板」
                     #       兜底，传进去会改身位闸参照系，并让测试吃到生产文件（11-04 实测 3 例红）。
                     theme_open_rows=full_zt_rows,
+                    # 🧲 2026-11-17：题材共振 / 弱线低开不救 都以「昨日完整涨停池」为
+                    #    口径。只喂题材层，不参与身位闸（那是 zt_rows 的职责）。
+                    theme_rows=full_zt_rows,
                     # 🌊 题材动量（变化）：家数环比 / 位置 / 连续天数。
                     #    读 `cache/theme_momentum/<买入日>.json`（由 build_theme_momentum 预生成，
                     #    内容严格早于买入日）。⛔ 只写 views[code].theme_momentum，不改裁决。

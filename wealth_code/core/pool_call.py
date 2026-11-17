@@ -1269,6 +1269,7 @@ def call_pool(candidates: dict[str, Any] | None,
               plan: dict | None = None,
               stance: str | None = None,
               zt_rows: list[dict[str, Any]] | None = None,
+             theme_rows: list[dict[str, Any]] | None = None,
               line_cores: dict[str, dict[str, Any]] | None = None,
               market_open: dict[str, Any] | None = None,
               sector_flow: dict[str, dict[str, Any]] | None = None,
@@ -1788,9 +1789,14 @@ def call_pool(candidates: dict[str, Any] | None,
             if isinstance(_g, (int, float)):
                 _gap_by_code[_code] = float(_g)
 
-    # 🧵 昨日各线涨停家数（判断「成线」用；zt_rows 缺失则不约束）
+    # 🧵 昨日各线涨停家数（判断「成线」用）
+    # ⛔ 2026-11-17 事故：live 路径只传 `theme_open_rows`、不传 `zt_rows`（怕改身位参照系），
+    #    结果 `_theme_mates` 为空 → 「弱线低开不救」与「题材共振」**全部静默失效**，
+    #    当天把「文投控股 −9.89% 开盘」当错杀档买入。
+    #    现在单独接受 `theme_rows`（只喂题材/共振，不参与身位闸），口径与 zt_rows 相同。
+    _theme_src = zt_rows if zt_rows else theme_rows
     _theme_mates: dict[str, int] = {}
-    for _r in (zt_rows or []):
+    for _r in (_theme_src or []):
         _k = line_family(_r)
         if _k:
             _theme_mates[_k] = _theme_mates.get(_k, 0) + 1
@@ -1803,7 +1809,7 @@ def call_pool(candidates: dict[str, Any] | None,
     try:
         from core import sector_resonance as _sr
         _line_resonance, _strongest_line = _sr.compute(
-            (zt_rows or pool), qs, _line_key,
+            (_theme_src or pool), qs, _line_key,
             strong_gap=RESONANCE_STRONG_GAP, min_mates=3,
         )
     except Exception:  # noqa: BLE001 — 共振失败不阻断裁决，按「无共振」处理
