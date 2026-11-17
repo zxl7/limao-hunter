@@ -294,23 +294,9 @@ except ValueError:
 #   ⛔ 不是「核心买不到就推二排」，是「这条线整体在走强」。
 #   回退：`POOL_CALL_SECTOR_RESONANCE=0`。
 POOL_CALL_SECTOR_RESONANCE = os.environ.get("POOL_CALL_SECTOR_RESONANCE", "1") != "0"
-# 🌱 2026-11-17 用户：「瀛通通讯连续两天错过」——首板走「平开→再封」这段我们没有任何进场规则。
-#    新增「首板平开确认」档：昨日首板 + 今早平开(-1%~+1.5%) + 线内成线(≥3家)
-#    + 昨日封得早或零炸板 → 允许**25% 试仓**参与（不受「低于预期」与「量能地板」一票否决）。
-#    回退：`POOL_CALL_FIRST_BOARD_FLAT=0`。
-POOL_CALL_FIRST_BOARD_FLAT = os.environ.get("POOL_CALL_FIRST_BOARD_FLAT", "1") != "0"
-FB_FLAT_LO = float(os.environ.get("POOL_CALL_FB_FLAT_LO", "-1.0"))
-FB_FLAT_HI = float(os.environ.get("POOL_CALL_FB_FLAT_HI", "1.5"))
-FB_FLAT_MIN_MATES = int(os.environ.get("POOL_CALL_FB_FLAT_MATES", "3") or 3)
-# 🧬 股性替代（用户 2026-11-17 选 B）：孤票首板不看线内家数，只要股性别太差
-FB_FLAT_GENE_MIN = float(os.environ.get("POOL_CALL_FB_FLAT_GENE", "20"))
-FB_FLAT_POSITION = float(os.environ.get("POOL_CALL_FB_FLAT_POSITION", "0.25"))
 RESONANCE_STRONG_GAP = float(os.environ.get("POOL_CALL_RESONANCE_GAP", "7.0"))   # 一字/大幅高开线
 RESONANCE_MIN = int(os.environ.get("POOL_CALL_RESONANCE_MIN", "2") or 2)
 RESONANCE_SECOND_CAP = float(os.environ.get("POOL_CALL_RESONANCE_CAP", "0.5"))
-# ⛔ 2026-11-17：接近跌停的开盘不是「错杀」，是崩（文投 −9.89% 被当错杀买入的教训）。
-#    下限默认 −8.5%：比它更低的直接不救。
-DEEP_LOW_GAP_FLOOR = float(os.environ.get("POOL_CALL_DEEP_LOW_FLOOR", "-8.5"))
 try:
     DEEP_LOW_OPEN_DEV = float(os.environ.get("POOL_CALL_DEEP_LOW_DEV", "-6.0"))
 except ValueError:
@@ -700,31 +686,6 @@ def quota_for(stance: Any) -> int:
 # 闽东电力(电力) 与 锡华科技(风电设备) 是**同一条风电线**，一个 6 板一个是跟风补涨，
 # 系统却把两者归到不同板块 → 池内比不出「核心 vs 跟风」）
 # ─────────────────────────────────────────────────────────────────────────────
-def _gene_score(code: str) -> float | None:
-    """读股性基因分（`cache/zt_genes/gene_<code>.json`）；缺失返回 None（⛔ 不当 0）。"""
-    try:
-        p = ROOT.parent / "cache" / "zt_genes" / f"gene_{str(code).zfill(6)}.json"
-        d = json.loads(p.read_text(encoding="utf-8"))
-        v = d.get("gene_score")
-        return float(v) if isinstance(v, (int, float)) else None
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _lk_with_theme(it: dict[str, Any], code_theme: dict[str, str] | None) -> str:
-    """行 → 线键；涨停池行没有 core_theme 时用 `code_theme`（调用方给的 code→题材）补。
-
-    ⛔ 2026-11-17 实证：昨日涨停池行只有 sector（消费电子），候选行有 core_theme
-    （智能眼镜/MR头显）—— 两边算出来的线键不同，家数永远查不到（返回 None）。
-    """
-    if not str(it.get("core_theme") or "").strip() and code_theme:
-        code = str(it.get("code") or it.get("dm") or "").zfill(6)
-        t = code_theme.get(code)
-        if t:
-            it = {**it, "core_theme": t}
-    return _line_key(it)
-
-
 def _line_key(it: dict[str, Any]) -> str:
     """共振匹配用的「线键」：先取线族名，没有族就用基座名。
 
@@ -1834,14 +1795,6 @@ def call_pool(candidates: dict[str, Any] | None,
     #    当天把「文投控股 −9.89% 开盘」当错杀档买入。
     #    现在单独接受 `theme_rows`（只喂题材/共振，不参与身位闸），口径与 zt_rows 相同。
     _theme_src = zt_rows if zt_rows else theme_rows
-    # 昨涨停池行没有题材时，优先用**候选行自己的 core_theme**补（比 code_theme 更全：
-    # 11-17 实证 002861 的题材是从题材库兜底补的，快照里没有，code_theme 查不到）。
-    _ct_eff: dict[str, str] = dict(code_theme or {})
-    for _pc_ in pool:
-        _cc = str(_pc_.get("code") or "").zfill(6)
-        _tt = str(_pc_.get("core_theme") or _pc_.get("theme_name") or "").strip()
-        if _cc and _tt:
-            _ct_eff[_cc] = _tt
     _theme_mates: dict[str, int] = {}
     for _r in (_theme_src or []):
         _k = line_family(_r)
@@ -1850,14 +1803,6 @@ def call_pool(candidates: dict[str, Any] | None,
     # 昨日「最强线」集合 = 家数前 N 档（同家数算同档，避免 3/3/3 一刀切切歪）
     _top_line_counts = sorted(set(_theme_mates.values()), reverse=True)[:DEEP_LOW_TOP_LINES] if DEEP_LOW_TOP_LINES > 0 else []
     _top_lines = {k for k, v in _theme_mates.items() if v in _top_line_counts}
-    # 族键版本的「最强档」集合（与 _line_key 同口径，供弱线闸使用）
-    _mates_key: dict[str, int] = {}
-    for _r0 in (_theme_src or []):
-        _k0 = _lk_with_theme(_r0, _ct_eff)
-        if _k0:
-            _mates_key[_k0] = _mates_key.get(_k0, 0) + 1
-    _top_counts_key = sorted(set(_mates_key.values()), reverse=True)[:DEEP_LOW_TOP_LINES] if DEEP_LOW_TOP_LINES > 0 else []
-    _top_lines_key = {k for k, v in _mates_key.items() if v in _top_counts_key}
 
     # 🧲 逐线共振分（2026-11-16 全局统一）：口径见 `core/sector_resonance.py`
     #    统计 = 昨日完整涨停池（含首板）× 今日 09:25 报价；⛔ 不用盘中数据。
@@ -2296,33 +2241,15 @@ def call_pool(candidates: dict[str, Any] | None,
         _dev_val = base.get("gap_vs_expected")
         if isinstance(_dev_val, (int, float)) and _dev_env_offset:
             _dev_val = float(_dev_val) - float(_dev_env_offset)
-        _lk = _lk_with_theme(c, _ct_eff)
-        _mates = _mates_key.get(_lk) if _mates_key else None
+        _mates = _theme_mates.get(fam) if _theme_mates else None
         # 弱线（不在昨日最强档）：低开一律按走弱处理，⛔ 不享受「错杀/低开也买」
-        _line_weak = bool(_mates_key) and _lk not in _top_lines_key
-        # 🌱 首板平开确认（2026-11-17）：昨日首板 + 平开 + 成线 + 封得早/零炸 → 试仓
-        _fb_boards = int(c.get("boards") or 0)
-        _fb_fbt = str(c.get("fbt") or "999999")
-        _fb_zbc = int(c.get("zbc") or 0)
-        _fb_flat = bool(
-            POOL_CALL_FIRST_BOARD_FLAT
-            and _fb_boards == 1
-            and isinstance(gap, (int, float))
-            and FB_FLAT_LO <= float(gap) <= FB_FLAT_HI
-            and (((_mates or 0) >= FB_FLAT_MIN_MATES) or ((_gene_score(str(code).zfill(6)) or -1) >= FB_FLAT_GENE_MIN))
-            and (_fb_fbt <= "100000" or _fb_zbc == 0)
-        )
-        if _fb_flat:
-            base["first_board_flat"] = {"gap": round(float(gap), 2), "mates": _mates,
-                                        "fbt": _fb_fbt, "zbc": _fb_zbc,
-                                        "gene": _gene_score(str(code).zfill(6))}
+        _line_weak = bool(_theme_mates) and fam not in _top_lines
         _deep_rescued = bool(
             zone == "below"
             and POOL_CALL_DEEP_LOW_RESCUE
             and _ac.relative_mode()
             and isinstance(_dev_val, (int, float))
             and float(_dev_val) <= DEEP_LOW_OPEN_DEV
-            and isinstance(gap, (int, float)) and float(gap) > DEEP_LOW_GAP_FLOOR
             # 🧵 只有成线的票才谈「错杀」；孤线/弱线的深低开按走弱处理
             and (not _theme_mates
                  or ((_mates or 0) >= DEEP_LOW_MIN_MATES and fam in _top_lines))
@@ -2345,8 +2272,6 @@ def call_pool(candidates: dict[str, Any] | None,
             and _ac.relative_mode()
             and isinstance(gap, (int, float))
             and float(gap) < 0
-            # 2026-11-17：接近跌停不算「低开」，别拿它当低吸机会
-            and float(gap) > DEEP_LOW_GAP_FLOOR
             and not _lo_top
             and not _deep_rescued
             and not _line_weak
@@ -2361,15 +2286,12 @@ def call_pool(candidates: dict[str, Any] | None,
             }
             base["position_cap"] = min(float(base.get("position_cap") or 1.0),
                                        LOW_OPEN_BUY_POSITION)
-        if zone == "below" and _line_weak and not _lo_top and not _fb_flat:
+        if zone == "below" and _line_weak and not _lo_top:
             marks[code] = {**base, "view": "skip", "weak_line_low_open": True,
                            "reason": (f"今天开 {gap:+.2f}%，这条线昨日只有 {_mates} 家"
                                       "（不是昨天最强的那几条线）→ 低开按走弱处理，不买")}
             continue
-        if zone == "below" and _fb_flat and not _lo_top:
-            # 首板平开档：不按「低于预期」否决，继续走后面的量能/名额链（仓位打 25%）
-            base["position_cap"] = min(float(base.get("position_cap") or 1.0), FB_FLAT_POSITION)
-        elif zone == "below" and not _lo_top and not _deep_rescued and not _low_open_buy:
+        if zone == "below" and not _lo_top and not _deep_rescued and not _low_open_buy:
             _e_show = base.get("expected_gap_pct")
             if _ac.relative_mode() and isinstance(_e_show, (int, float)):
                 _why = (f"今天开 {gap:+.2f}%，按昨日质量该开 {float(_e_show):+.2f}% "
@@ -2402,14 +2324,7 @@ def call_pool(candidates: dict[str, Any] | None,
         _vb = _ac.volume_band(amt, need)
         base["volume_band"] = _vb["band"]
         base["volume_scale"] = _vb["scale"]
-        if _vb["block"] and _fb_flat:
-            # 🌱 首板竞价额天然小（11-16 瀛通只 0.02 亿），量能地板对手板平开档错误否决。
-            base["volume_band"] = _vb["band"]
-            base["volume_scale"] = _vb["scale"]
-            base["position_cap"] = min(float(base.get("position_cap") or 1.0), FB_FLAT_POSITION)
-            base["first_board_flat_volume_note"] = (
-                f"首板平开档：竞价 {float(amt):.2f} 亿（计划 {float(need):.2f} 亿）→ 按试仓 25% 放行")
-        elif _vb["block"]:
+        if _vb["block"]:
             _floor = float(need) * VOLUME_HARD_RATIO if isinstance(need, (int, float)) else 0.0
             if (not _ac.AI_VOLUME_BANDS and POOL_CALL_VOLUME_SOFT
                     and isinstance(amt, (int, float)) and float(amt) >= _floor):
@@ -2468,13 +2383,6 @@ def call_pool(candidates: dict[str, Any] | None,
                     f"近月 {_ge_gene.get('max_boards')} 板 · 涨停 "
                     f"{_ge_gene.get('zt_n')} 次，股性够格 → 量 {(_vb['ratio'] or 0) * 100:.0f}% "
                     f"按 {int((_vb.get('scale') or 0.5) * 100)}% 仓放行")
-            elif _fb_flat:
-                # 🌱 2026-11-17 用户选 B：首板平开档不看量能地板（首板竞价额天然小），
-                #    以「股性/成线」替代 → 按 25% 试仓放行（11-17 瀛通 40% 量的实例）。
-                base["position_cap"] = min(float(base.get("position_cap") or 1.0), FB_FLAT_POSITION)
-                base["first_board_flat_volume_note"] = (
-                    f"首板平开档：竞价只到计划 {(_vb['ratio'] or 0) * 100:.0f}%，"
-                    f"按股性/成线放行，仓位 {int(FB_FLAT_POSITION * 100)}%")
             else:
                 marks[code] = {**base, "view": "watch", "recheck_gate": True,
                                "reason": (f"今早开 {gap:+.2f}%、竞价只到计划 "
@@ -2967,8 +2875,7 @@ def call_pool(candidates: dict[str, Any] | None,
                                "reason": _hit["note"] + "（2026-11-12 用户口径）"}
                 continue
         # 🚫 首板只看不买（2026-11-12 用户「明明写只观察，结果被买了」）
-        # 🌱 首板平开档例外（2026-11-17 用户选 B）：满足「平开 + 股性/成线」的首板可 25% 试仓
-        if (not POOL_CALL_FIRST_BOARD_BUY and not _fb_flat
+        if (not POOL_CALL_FIRST_BOARD_BUY
                 and (str(c.get("watch_group") or "") == "首板观察"
                      or (str(c.get("boards") or "").strip() in ("1", "1.0")
                          and not c.get("new_direction_line")))):
