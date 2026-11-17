@@ -213,12 +213,12 @@ def _run_card(tmp_path):
     return json.loads((tmp_path / "cache" / "short_spirit_card.json").read_text(encoding="utf-8"))
 
 
-@pytest.mark.xfail(reason="卡面去重逻辑改版后文案漂移", strict=False)
 def test_e2e_same_code_not_repeated_in_one_card(tmp_path, monkeypatch):
     pp = _env(tmp_path, monkeypatch, [_sig(), _sig()])
     card = _run_card(tmp_path)
     body = _card_body(card)
-    assert body.count("测试票(600001)") == 2, "概览一行 + 分组一行（改动前是三行）"
+    # 2026-11-17：概览与分组行合并 → 同一张卡里只出现一次（改动前 3 行，后来 2 行，现在 1 行）
+    assert body.count("测试票(600001)") == 1, "同 code 只应占一行"
     pushed = json.loads(pp.read_text(encoding="utf-8"))
     assert pushed["codes"] == ["600001"], "同 code 不得占两个推送名额"
 

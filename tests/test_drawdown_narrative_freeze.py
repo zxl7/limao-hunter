@@ -96,10 +96,14 @@ def test_verify_result_exposes_explicit_narrative_date():
     assert 'res["narrative_date"]' in run_src
 
 
-@pytest.mark.xfail(reason="launchd 脚本已重写，旧文案不存在", strict=False)
-def test_launchd_no_longer_injects_stale_narrative():
-    """陈旧/缺失时不注入，也不再打「无旁白推卡」的虚警。"""
+def test_launchd_no_longer_injects_narrative_at_all():
+    """2026-11-17：launchd 已**完全不注入** --narratives（盘后卡旁白由 eod 链负责）。
+
+    旧断言检查「不注入陈旧文件」这句注释；脚本改版后连注入分支都删了，
+    所以改成更强的契约：脚本里**不应再出现** `--narratives` 传参，也不再打虚警。
+    """
     src = (ROOT / "scripts/wealth_verify_launchd.sh").read_text(encoding="utf-8")
-    assert "弃用，无旁白推卡" not in src
-    assert "不注入陈旧文件" in src
-    assert src.count("--narratives $NARR") == 1
+    assert "弃用，无旁白推卡" not in src, "不得再打这类虚警"
+    # 注释里会提「不传 --narratives」，只禁**可执行代码**里的传参
+    code_lines = [ln for ln in src.splitlines() if "--narratives" in ln and not ln.lstrip().startswith("#")]
+    assert not code_lines, f"launchd 仍在注入旁白: {code_lines}"

@@ -63,12 +63,12 @@ def test_pullback_block_reads_fixed_snapshot_only(tmp_path):
     assert bc._ambush_pullback_codes(tmp_path, "2026-10-08") == {"000001"}
 
 
-@pytest.mark.xfail(reason="尾盘卡文案 2026-11-17 改版后漂移", strict=False)
 def test_pullback_block_fails_loud_when_snapshot_missing(tmp_path):
     """主选材块不允许静默：快照缺失＝链路异常，必须显式告知，不能空卡。"""
     blocks = bc._ambush_pullback_block(tmp_path, "2026-10-08")
     text = "\n".join(x["text"]["content"] for x in blocks if x.get("tag") == "div")
-    assert "未产出候选快照" in text
+    # 2026-11-17：文案改为「今日扫描没有产出候选（链路异常）」，语义不变（显式告知，不空卡）
+    assert "没有产出候选" in text and "链路异常" in text
 
 
 def test_pullback_block_reports_empty_candidates(tmp_path):

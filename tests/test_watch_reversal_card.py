@@ -135,14 +135,14 @@ def test_section_carries_no_decision_boundary():
     assert card["title"].endswith("AI 只买1只·精选")     # 标题口径未受影响
 
 
-@pytest.mark.xfail(reason="卡面 2026-11-17 改版后标签漂移", strict=False)
 def test_registry_fallback_is_labeled(monkeypatch):
     """走观测表兜底时如实标注「更保守」，不冒充心跳。"""
     card = _card(_rev(source="registry",
                       items=[_item(low_pct=-6.0, low_ts="09:16",
                                    last_pct=0.8, last_ts="09:26", span_pct=6.8)],
                       counts={"reversal": 1, "flat": 0, "pending": 0, "no_data": 0}))
-    assert "观测表兜底" in _txt(card)
+    # 2026-11-17：文案改为「观测表补充」（来源仍是 registry 兜底表，语义不变）
+    assert "观测表补充" in _txt(card)
 
 
 # ── ② payload 投影 ───────────────────────────────────────────────────

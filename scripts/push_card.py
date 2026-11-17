@@ -103,6 +103,12 @@ def normalize(card: dict) -> dict:
             # 已经是 note 元素（有的拼卡脚本直接给结构体）→ 原样追加，
             # ⚠️ 不能塞进 plain_text.content（飞书 200621：content 必须是字符串）
             elements = elements + [note]
+        elif isinstance(note, (list, tuple)):
+            # ⛔ 2026-11-17 实测：note 写成数组时 `str(note)` 会变成 "['脚注1', '脚注2']"
+            #    —— 飞书卡片上真就显示这串 Python 字面量。按行 join 才是原意。
+            elements = elements + [{"tag": "note",
+                                    "elements": [{"tag": "plain_text",
+                                                  "content": "\n".join(str(x) for x in note)}]}]
         else:
             elements = elements + [{"tag": "note",
                                     "elements": [{"tag": "plain_text", "content": str(note)}]}]

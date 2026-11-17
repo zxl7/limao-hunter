@@ -33,9 +33,12 @@ def test_common_tencent_kline_resolvable():
     assert importlib.util.find_spec("common.tencent_kline") is not None
 
 
-@pytest.mark.xfail(reason="净值口径调整（未结算日按最新收盘），旧期望值过期", strict=False)
 def test_close_of_matches_date(monkeypatch):
-    """_close_of 的日期匹配逻辑（mock 掉行情源·不触网）：命中→收盘价，未命中→None。"""
+    """_close_of 的日期匹配逻辑（两个来源都 mock·不触网）：命中→收盘价，未命中→None。
+
+    ⛔ 2026-11-11 起 `_close_of` **先查本机缓存**、缺失才联网 —— 只 mock 网络源会被缓存
+       抢先命中（实测拿到真实缓存价 23.9）。所以两路一起 mock。
+    """
     import inspect
 
     import common.tencent_kline as tk
@@ -43,6 +46,7 @@ def test_close_of_matches_date(monkeypatch):
     src = inspect.getsource(al._close_of)
     assert "common.tencent_kline" in src          # 换源时提醒同步上面的路径锁
 
+    monkeypatch.setattr(al, "_cached_bars", lambda code: [])
     monkeypatch.setattr(tk, "fetch_kline",
                         lambda code, n=8: [("2026-09-14", 9.0), ("2026-09-15", 10.0)])
     assert al._close_of("000823", "2026-09-15") == 10.0

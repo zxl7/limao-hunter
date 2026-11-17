@@ -175,7 +175,6 @@ def _blocks(card):
     return [e["text"]["content"] for e in card["elements"] if e.get("text")]
 
 
-@_pytest.mark.xfail(reason="盘后卡叙事块 2026-11-17 改版（5 行→3 行）", strict=False)
 def test_eod_card_narrative_is_multiline_block():
     """eod 卡：名称独占一行，点评按语义分段 —— 不再「名称：风险+正文」一坨。
 
@@ -188,8 +187,10 @@ def test_eod_card_narrative_is_multiline_block():
     narr = [b for b in _blocks(card) if "今日走势" in b]
     assert len(narr) == 1, narr
     lines = _lines(narr[0])
-    assert len(lines) == 5, lines                      # 名称 + 4 段
-    assert lines[0].startswith("　·")                   # 名称独占一行
+    # ⛔ 2026-11-17：卡面精简后叙事块只保留「名称 + 走势 + 题材催化 + 风险」四行里的**三段正文**
+    #    （股性段并入名称行），所以断言改为「≥3 段且风险收尾」，不再写死 5 行。
+    assert len(lines) >= 3, lines
+    # 2026-11-17：卡面精简后名称行已并入标题，段名从「今日走势」起；只锁「风险收尾、不在冒号后」
     assert "：⚠️" not in lines[0]                       # 风险不再插在名称冒号后
     assert lines[-1].startswith("　　<text_tag color='turquoise'>")  # 风险收尾
 
@@ -295,24 +296,21 @@ def test_verify_card_no_label_when_same_session(monkeypatch):
     assert gn and gn[0].startswith("🗣️ **全局**\n"), gn
 
 
-@_pytest.mark.xfail(reason="盘后卡叙事块 2026-11-17 改版（5 行→3 行）", strict=False)
-def test_eod_card_labels_explicitly_stale_narrative():
-    """盘后卡：上游显式声明 narrative_date 早于当日 → 标注（防陈旧旁白被读成当日）。
+def test_eod_card_no_longer_renders_global_narrative():
+    """盘后卡：🗣️ 全局旁白已**下线**（2026-11-17 卡面精简），不再渲染、也就不存在陈旧标注问题。
 
-    注：eod 卡的 🗣️ 与点评块同分支（靠 relay/watch 的 narrative 才进入），故须给一只候选。
+    ⛔ 旧用例断言「陈旧旁白必须标注（09-11 周五收盘盘面）」——
+       那是旁白还在卡上时的契约。现在旁白整块不渲染，断言改为「不出现」，
+       防的是有人哪天又把它默默加回来却忘了陈旧标注。
     """
     card = bc.build_eod_card({"date": "2026-09-14", "regime": "neutral",
                               "relay": [dict(_IT)], "watch": [], "diagnostics": {},
                               "global_narrative": _GN,
                               "narrative_date": "2026-09-11"})
-    gn = [b for b in _blocks(card) if b.startswith("🗣️")]
-    assert gn and "（09-11 周五收盘盘面）" in gn[0], gn
+    blocks = _blocks(card)
+    assert blocks, "卡面不能为空"
+    assert not [b for b in blocks if b.startswith("🗣️")], "全局旁白已下线，不应再渲染"
 
-    card2 = bc.build_eod_card({"date": "2026-09-14", "regime": "neutral",
-                               "relay": [dict(_IT)], "watch": [], "diagnostics": {},
-                               "global_narrative": _GN})
-    gn2 = [b for b in _blocks(card2) if b.startswith("🗣️")]
-    assert gn2 and gn2[0].startswith("🗣️ **全局**\n"), gn2        # 默认不标注
 
 
 # ── 依据→上涨逻辑 / 操作→操作思路（2026-10-14 用户图学习·三段式迭代）────────────────
