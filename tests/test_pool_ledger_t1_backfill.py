@@ -34,10 +34,17 @@ def pl(monkeypatch, tmp_path):
 
     kline = tmp_path / "kline"
     out = tmp_path / "ledger"
+    pool = tmp_path / "pool"
     kline.mkdir()
     out.mkdir()
+    pool.mkdir()
+    # ⛔ `backfill_t1` 的「交易日」来自 `net_days()`（扫 POOL 里的 pool_call-*.json），
+    #    原来只 patch 了 KLINE/OUT，net_days 仍读生产目录 → 永远取不到 tmp 里的台账，
+    #    回补自然填不上（这就是这两个用例长期红的真正原因，不是数据缺失）。
+    (pool / "pool_call-2026-11-06.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(mod, "KLINE", kline)
     monkeypatch.setattr(mod, "OUT", out)
+    monkeypatch.setattr(mod, "POOL", pool)
 
     def _bars(code: str) -> dict:
         return mod.bars(code)
@@ -72,7 +79,6 @@ def _ledger(pl, date: str, rows: list[dict], views: bool = True) -> dict:
     return led
 
 
-@pytest.mark.xfail(reason="依赖 T+1 收盘数据，当前 cache 缺该日行情", strict=False)
 def test_backfill_fills_missing_t1(pl):
     """次日 K 线已落盘 → 填上 t1_ret（竞价价买 → 次日收盘卖）。"""
     _write_kline(pl._kline_dir, "000001", [("2026-11-06", 10.0, 10.5), ("2026-11-09", 10.6, 11.0)])
@@ -133,7 +139,6 @@ def test_backfill_does_not_touch_main_caliber(pl):
     assert got["generated_at"] == before["generated_at"]      # 台账主体生成时间不改
 
 
-@pytest.mark.xfail(reason="依赖 T+1 收盘数据，当前 cache 缺该日行情", strict=False)
 def test_backfill_summary_counts_only_tradable(pl):
     """汇总只算可成交票（一字/竞价封死的不参与），与 build() 同口径。"""
     _write_kline(pl._kline_dir, "000001", [("2026-11-06", 10.0, 10.5), ("2026-11-09", 10.6, 11.0)])

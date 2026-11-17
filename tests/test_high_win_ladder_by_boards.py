@@ -117,9 +117,16 @@ def test_waiver_does_not_skip_emotion():
     assert pe.high_win_missing(_row(), {"regime": "ice"}, 4) == ["情绪"]
 
 
-@pytest.mark.xfail(reason="疑似真实缺陷：换手板 5 亿量能门槛被 leader_turnover_floor 用 min() 稀释（实测 0.5 亿也判齐备）", strict=False)
-def test_waiver_does_not_skip_volume():
-    assert "量能" in pe.high_win_missing(_row(cje_yi=0.5), _ENV, 8)
+def test_volume_floor_no_longer_blocks_turnover_boards():
+    """⛔ 2026-11-11 用户清除「换手板 5 亿门槛」→ `TURNOVER_BOARD_FLOOR_YI` 降为防呆线。
+
+    原用例断言「0.5 亿必须判缺量能」，那是被清除的旧规则（我一度误记为缺陷，
+    实际是 11-11 的显式决定）。现在锁的是**清除后的契约**：不再按 5 亿卡换手板。
+    """
+    from core import seal_gate as _sg
+    assert _sg.turnover_board_floor_enabled() is False
+    assert _sg.TURNOVER_BOARD_FLOOR_YI == _sg.DATA_SANITY_MIN_YI
+    assert pe.high_win_missing(_row(cje_yi=0.5), _ENV, 8) == []
 
 
 # ── ④ 诚实降级：缺板数不误放 ─────────────────────────────────────────────
@@ -142,14 +149,18 @@ def test_switch_default_on():
 
 
 # ── ⑥ 留痕：进池带标记 / 被别的条拦下不带 ───────────────────────────────
-@pytest.mark.xfail(reason="疑似真实缺陷：换手板 5 亿量能门槛被 leader_turnover_floor 用 min() 稀释（实测 0.5 亿也判齐备）", strict=False)
 def test_waived_marker_written_only_when_kept():
-    pas, pri = _row(), _row(code="603000", name="另一只", cje_yi=0.5)
+    """豁免标记只写进池的那只；被硬伤拦下的不带痕迹。
+
+    ⛔ 成交额已不再是硬伤（11-11 清除 5 亿门槛）→ 改用「题材龙」当拦截条件。
+    """
+    pas = _row()
+    pri = _row(code="603000", name="另一只", dragon_rank=3)
     keep, moved, diag = pe.apply_high_win_gate([pas, pri], [], _ENV,
                                               market_max_boards=8)
     assert [r["code"] for r in keep] == ["002088"]
     assert keep[0]["ladder_waived"] == "boards<=2"
-    assert "ladder_waived" not in pri          # 被量能拦下 → 不该带豁免痕迹
+    assert "ladder_waived" not in pri          # 被题材龙拦下 → 不该带豁免痕迹
     assert diag["ladder_by_boards"] is True
     assert diag["ladder_waived"] == ["002088"]
 

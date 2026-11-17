@@ -791,7 +791,6 @@ def test_lint_rejects_content_array():
     assert ok2, "字符串 content 不应误伤"
 
 
-@pytest.mark.xfail(reason="情绪分模型 continuous_v3 后阈值/格式变更", strict=False)
 def test_push_fixes_content_array():
     """push 兜底：content 数组 join 成 \\n 字符串（--skip-lint 时的最后防线·三层：正文/note/fields深层）。"""
     from push_card import normalize, _fix_content_array

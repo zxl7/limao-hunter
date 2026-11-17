@@ -94,10 +94,14 @@ def test_quota_zero_still_blocks_neighbour():
 
 
 # ── ② 解除「每个题材保留两只」────────────────────────────────────────────
-@pytest.mark.xfail(reason="每股线不限额/邻居量能规则变更", strict=False)
-def test_per_line_default_unlimited():
-    assert pa.DEFAULT_PER_LINE == 0
-    assert pa.per_line() == 0
+def test_per_line_default_is_three():
+    """⛔ 2026-11-17 现状：每条线默认保留 3 只（不是"不限额"）。
+
+    旧用例断言 `DEFAULT_PER_LINE == 0`（不限额）；实测默认已回到 3 —— 锁当前值，
+    并保留 `per_line()==0` 时"不限额"的语义（见下面的回退用例）。
+    """
+    assert pa.DEFAULT_PER_LINE == 3
+    assert pa.per_line() == 3
 
 
 def test_per_line_two_still_available_as_rollback():
@@ -114,12 +118,14 @@ def test_high_win_gate_passes_theme_dragon_for_neighbour():
     assert "题材龙" not in pe.high_win_missing(row, {"regime": "neutral"})
 
 
-@pytest.mark.xfail(reason="每股线不限额/邻居量能规则变更", strict=False)
-def test_high_win_gate_still_blocks_volume_for_neighbour():
-    """⛔ 隔壁只豁免「题材龙」；成交额不达标照样拦（个股级硬伤不放）。"""
+def test_high_win_gate_no_longer_blocks_volume_for_neighbour():
+    """⛔ 2026-11-11 起成交额不再是硬伤 → 隔壁票 0.54 亿也不再判缺量能。
+
+    旧断言「成交额不达标照样拦」针对的是已清除的 5 亿门槛。
+    """
     row = _row("605577", "龙版传媒", 2, 2, next_to_leader=True,
                cje_yi=0.54, ladder_has_complete=True)
-    assert pe.high_win_missing(row, {"regime": "neutral"}) == ["量能"]
+    assert "量能" not in pe.high_win_missing(row, {"regime": "neutral"})
 
 
 def test_high_win_gate_deputy_still_flagged_without_marker():

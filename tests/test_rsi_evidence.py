@@ -20,7 +20,6 @@ def test_reference_and_gap():
     assert rsi_wilder([1] * 20, 24) == [None] * 20
 
 
-@pytest.mark.xfail(reason="依赖 duckdb 全市场库（本机未初始化）", strict=False)
 def test_readonly_cutoff_and_research_consumer(tmp_path, monkeypatch, capsys):
     db = tmp_path / 'daily.duckdb'
     conn = store.connect(db)
