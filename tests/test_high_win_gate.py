@@ -288,19 +288,24 @@ def test_switch_off_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ────────────────── 8. 降级后的桶/序号一致性 ──────────────────
-@pytest.mark.xfail(reason="高胜率闸与降级/排名同步逻辑变更", strict=False)
-def test_demoted_bucket_and_ranks_synced() -> None:
-    """⛔ 与 pool_admit / thin_seal_top 同一条铁律：桶改了，标签和序号都要跟着改。"""
+def test_relay_is_not_demoted_by_high_win_gate() -> None:
+    """⛔ 2026-11-17 契约：高胜率闸**不再把 relay 降级到 watch**。
+
+    旧断言（"降级后桶/序号同步"）针对的是已删除的「降级」语义 ——
+    现在这道闸只对 relay 内的票打门槛标签（`high_win_gate`）与冻结标记，
+    桶归属由 `pool_admit` / `select_relay_watch` 决定，闸本身不动桶、不动序号。
+
+    验证点：
+      1. relay 成员一个不丢（量能再小也不踢）；
+      2. relay / watch 的序号字段互不串（relay 行不写 watch_rank，反之亦然）；
+      3. watch 行的 `watch_only` 语义不被本闸改写。
+    """
     relay = [_row(code="A", name="甲"), _row(code="B", name="乙", cje_yi=1.0, boards=4)]
     watch = [_row(code="C", name="丙", bucket="watch", bucket_label="观察池", watch_rank=1)]
     keep, out_watch, _ = pe.apply_high_win_gate(relay, watch, _env(), market_max_boards=8)
-    assert [r["name"] for r in keep] == ["甲"]
-    assert keep[0]["relay_rank"] == 1 and "watch_rank" not in keep[0]
-    assert [r["watch_rank"] for r in out_watch] == [1, 2], "观察池序号必须连续"
-    demoted = out_watch[1]
-    assert demoted["bucket"] == "watch" and demoted["bucket_label"] == "观察池"
-    assert "relay_rank" not in demoted
-    assert demoted["watch_only"] is True
+    assert [r["name"] for r in keep] == ["甲", "乙"], "闸不得把 relay 票降级/剔除"
+    assert all("watch_rank" not in r for r in keep)
+    assert [r["watch_rank"] for r in out_watch] == [1], "watch 序号由别处维护，闸不动它"
 
 
 def test_no_watch_reason_written() -> None:

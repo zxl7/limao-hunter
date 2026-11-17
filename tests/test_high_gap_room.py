@@ -74,8 +74,11 @@ def _isolated(monkeypatch):
 
 
 def _cand(code, *, boards=2, need=0.1, is_20cm=False):
+    # 2026-11-17：`dragon_rank=2` —— 11-11 起「龙一免顶部空间闸」，本文件测的是空间闸本身，
+    # 夹具必须不是龙一，否则永远走豁免分支（旧断言因此失真）。
     return {"code": code, "name": f"票{code}", "boards": boards,
-            "sector": "测试题材", "bucket_label": "接力池", "is_20cm": is_20cm,
+            "sector": "测试题材", "core_theme": "测试题材",
+            "bucket_label": "接力池", "is_20cm": is_20cm, "dragon_rank": 2,
             "expectation": {"expected_range": [0.0, 30.0],
                             "auction_amount_min_yi": need}}
 
@@ -100,9 +103,10 @@ def _call(gap, *, expected=None, amt=3.0, is_20cm=False, code="600001", **kw):
     (6.99, 1.28),       # 鲁阳节能
     (6.56, 1.50),       # 桂林三金
     (9.33, 4.00),       # 哈药股份（DEV 也在预期内，照样砍）
-    (5.20, 5.20),       # 「符合预期」的强票：DEV=0 也砍，因为只剩 4.8 个点
+    (6.50, 6.50),       # 「符合预期」的强票也砍：只剩 3.5 个点（<40%）
 ])
-@pytest.mark.xfail(reason="上方空间闸与「符合预期」判定口径变更", strict=False)
+# ⛔ 2026-11-17 重写：闸值已从「剩一半（50%）」改为 **40%**（`HIGH_GAP_ROOM_MIN=0.4`），
+#    所以 gap=5.20（剩 4.8 点 = 48%）现在是**放行**，不再是被砍样本。
 def test_top_room_insufficient_is_rejected(gap, e):
     v = _call(gap, expected=e)["views"]["600001"]
     assert v["view"] == "skip", v["reason"]
@@ -128,12 +132,15 @@ def test_exactly_half_is_allowed():
 
 
 # ── ② 20cm 归一化 ───────────────────────────────────────────────────────────
-@pytest.mark.xfail(reason="上方空间闸与「符合预期」判定口径变更", strict=False)
 def test_20cm_threshold_is_normalized():
-    """20cm：gap 8% 还剩 12 点（≥10）→ 放行；gap 12% 只剩 8 点 → 砍。"""
+    """20cm：闸按 20 个点算 —— gap 8%（剩 60%）放行；gap 13%（剩 35% < 40%）砍。
+
+    ⛔ 2026-11-17 重写：原来用 gap=12 当「该砍」的边界，但 12% 剩 8 点 = 40%，
+       正好不被 `<0.4` 命中（边界放行），样本选错。改用 13%。
+    """
     ok = _call(8.0, expected=8.0, is_20cm=True)["views"]["600001"]
     assert ok["view"] == "participate", ok["reason"]
-    cut = _call(12.0, expected=12.0, is_20cm=True)["views"]["600001"]
+    cut = _call(13.0, expected=13.0, is_20cm=True)["views"]["600001"]
     assert cut["view"] == "skip" and cut["high_gap_reject"] is True
 
 

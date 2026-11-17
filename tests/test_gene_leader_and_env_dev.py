@@ -260,21 +260,31 @@ def _identity_case(core_gap=2, *, boards=2, core_amount=2, **kw):
 
 
 @pytest.mark.usefixtures("core_first_rules")
-@pytest.mark.parametrize("gap,amount,view,old_view", [
-    (2, 2, "participate", None), (7, 2, "watch", "skip"),
-    (10, 2, "watch", "skip"), (-1, 2, "watch", "skip"),
-    (2, 0.01, "watch", "watch"),
+@pytest.mark.parametrize("gap,amount,view,deputy_view,old_view", [
+    # ⚠️ 2026-11-17 按最新契约重写（原期望来自 10 月口径）：
+    #   · gap=-1（低开）核心可参与 —— 11-16「低开也买」定档；
+    #   · gap=10（上方只剩 0 点）核心不买，但**非核心可凭题材共振 2/3 半仓进** —— 11-16 共振档；
+    #   · gap=7（剩 3 点）核心不追、非核心也被核心优先闸挡住。
+    (2, 2, "participate", "watch", None), (7, 2, "watch", "watch", "skip"),
+    (10, 2, "watch", "participate", "skip"), (-1, 2, "participate", "watch", "skip"),
+    (2, 0.01, "watch", "watch", "watch"),
 ])
-@pytest.mark.xfail(reason="同上：09:25 新闸改变了 participate/watch 归属", strict=False)
-def test_core_identity_separate_from_open_price(gap, amount, view, old_view):
+def test_core_identity_separate_from_open_price(gap, amount, view, deputy_view, old_view):
     result = _identity_case(gap, core_amount=amount)
     core, deputy = result["views"]["600001"], result["views"]["600002"]
     assert core["view"] == view
     assert core["core_identity"]["is_core"] is True
-    assert deputy["view"] == "watch" and deputy["core_first_gate"] is True
+    assert deputy["view"] == deputy_view
+    if deputy_view == "watch":
+        assert deputy["core_first_gate"] is True
+    else:
+        # 非核心能进的唯一理由：题材共振（11-16 档）→ 半仓
+        assert "共振" in str(deputy.get("reason") or "")
+        assert (deputy.get("position_cap") or 1) <= 0.5
     assert deputy["core_identity"]["code"] == "600001"
     assert not deputy.get("next_to_leader")
-    if old_view:
+    if old_view and view == "watch":
+        # `core_open_view` 只在「核心被挡」时才写；参与路径不写（低开也买/共振档）
         assert core["core_open_view"] == old_view
         assert core["core_manual_wait"] is True and core["auto_low_buy"] is False
         assert "人工等待合适价格" in core["reason"] and "接受错过" in core["reason"]

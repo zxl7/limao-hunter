@@ -270,14 +270,14 @@ def test_switch_off_restores_old_behaviour(monkeypatch):
     assert v["view"] == "watch" and not v.get("gene_exempt")
 
 
-@pytest.mark.xfail(reason="股性豁免与 09:25 新闸（后排/弱线）叠加后行为变更", strict=False)
 def test_zone_and_gap_rules_unaffected(monkeypatch):
-    """⑤ 豁免不碰价格闸：+6% 仍 skip；且开关前后 zone 判定逐字相同。
+    """⑤ 豁免不碰价格闸：开关前后 zone / 开幅逐字相同（view 不参与比较）。
 
-    ⛔ 只比 zone，不比 view —— view 差异正是本功能的内容（量能闸）。
+    ⛔ 2026-11-17 重写：原断言写死「+6% 必 skip」，属于旧的「上方空间上限」口径；
+       现在的空间闸按「离涨停剩余点数」判，+6% 未必被挡。本用例真正要锁的是
+       **股性豁免只让量能闸，不动价格判定** —— 所以只比 zone / gap_pct，不比 view。
     """
     on = _call(_ice_series(), gap=6.0)["views"]["000530"]
-    assert on["view"] == "skip"
     monkeypatch.setattr(pc, "POOL_CALL_GENE_EXEMPT", False)
     off = _call(_ice_series(), gap=6.0)["views"]["000530"]
     assert on["zone"] == off["zone"] and on["gap_pct"] == off["gap_pct"]
