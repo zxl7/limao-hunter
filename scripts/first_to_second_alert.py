@@ -77,12 +77,9 @@ def _save_state(day: str, st: dict) -> None:
     (STATE_DIR / f"fts_state_{day}.json").write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
 
 
-# ⛔ 2026-11-17 用户（覆盖 11-13 口径）：「确认撤离，只留财富密码群」。
-#    竞价裁决/一进二卡**不再进异动群**，统一走 `feishu_webhook_prod`（财富密码群）。
-#    11-13 曾因「1进2/2进3 是盘中异动」放进 intraday，实测与竞价验证卡分属两群后
-#    同一只票出现两套说法（异动群报「连板分歧·跌」，竞价卡报「错杀·买」），故收回。
-#    回退：`FTS_ALERT_WEBHOOK=feishu_webhook_intraday` 即逐字回到旧路由。
-ALERT_WEBHOOK = os.environ.get("FTS_ALERT_WEBHOOK", "feishu_webhook_prod")
+# ⛔ 2026-11-13 用户：「1进2、2进3 是短线精灵盘中异动，不是屠龙术群」
+#    竞价裁决卡统一走 `feishu_webhook_intraday`（与 short_spirit 同群）。
+ALERT_WEBHOOK = os.environ.get("FTS_ALERT_WEBHOOK", "feishu_webhook_intraday")
 
 
 def _push(title: str, rows: list[str], *, dry: bool, color: str = "red") -> None:
