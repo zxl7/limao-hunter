@@ -16,6 +16,15 @@
 - 任务 prompt 已改为「写入 /tmp/limao_card.json 后调用本脚本」，不再生成 push_deep_*.py。
 - 客户群镜像（2026-09-10）：主群推送成功后按 settings.json 的 client_mirror 规则镜像到客户群
   （异动群高频全量 + 正式群复盘卡），开关 enabled=false 一键关；详见下方 mirror_* 函数。
+
+群与 webhook key 对照（2026-11-17 用户确认，⛔ 改路由前先查这张表）:
+  feishu_webhook_prod          → 大A屠龙术（正式群：竞价验证卡、复盘卡）
+  feishu_webhook_intraday      → 盘中异动（高频群：短线精灵、竞价裁决、1进2、核按钮、退潮）
+  feishu_webhook_jiang_kunyang → 蒋坤阳（客户群镜像）
+  feishu_webhook_test          → 测试群（非交易日 / 联调）
+  feishu_webhook               → 兜底默认地址（load_webhook 的 fallback，未单独确认）
+⛔ 1进2 / 竞价裁决卡只进 intraday（盘中异动），⛔ 不得进 prod（大A屠龙术）。
+   2026-11-17 上午曾误改默认值，三张 1进2 卡被推进大A屠龙术，已 revert（757d297）。
 """
 from __future__ import annotations
 import argparse, glob, json, os, re, sys
