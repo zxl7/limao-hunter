@@ -7,8 +7,10 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-import duckdb
 import pytest
+
+pytest.importorskip("duckdb", reason="缺 duckdb：全市场日频底库未安装")
+import duckdb  # noqa: E402  （importorskip 之后再导入，缺库时整模块跳过而不是报错）
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:

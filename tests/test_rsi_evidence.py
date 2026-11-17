@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytest.importorskip("duckdb", reason="缺 duckdb：全市场日频底库未安装")
+
 from common import market_daily_store as store
 from common.rsi_evidence import annotate_candidates, build_evidence, rsi_wilder
 

@@ -30,6 +30,8 @@ def _load_serve():
 
 @pytest.fixture
 def served(monkeypatch, tmp_path):
+    # 2026-11-17：本机未装 duckdb 时整组用例跳过（环境缺口，不是代码问题）
+    pytest.importorskip("duckdb", reason="缺 duckdb：全市场日频底库未安装")
     from common import market_daily_store
     db = tmp_path / "daily.duckdb"
     conn = market_daily_store.connect(db)
