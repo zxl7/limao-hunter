@@ -81,9 +81,9 @@ def test_apply_total_cap_honest_degrade():
 
 
 # ── ④ 回撤＝动态压仓 ≠ 禁买（2026-10-13 用户口径 B）────────────────────────────
-@pytest.mark.xfail(reason="同上：回撤仓位规则变更", strict=False)
-def test_drawdown_always_buyable():
-    """回撤再深也不禁买：只压仓位（名额保底 1、单票/总仓同步缩小）。"""
+def test_drawdown_always_buyable(monkeypatch):
+    """回撤再深也不禁买：只压仓位（需显式开 `ENABLE_DRAWDOWN_SCALING`，11-05 起默认关）。"""
+    monkeypatch.setattr(rp, "ENABLE_DRAWDOWN_SCALING", True)
     p_soft = rp.build_plan(strength=0.2, tier="weak", dd=6.0)      # 起降段
     assert p_soft["can_buy"] is True
     assert p_soft["quota"] == 1                                    # 保底 1，不被抹成 0

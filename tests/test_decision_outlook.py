@@ -23,7 +23,6 @@ def test_ice_wait_no_buy():
     assert any("≥4.5" in t for t in d["triggers"])
 
 
-@pytest.mark.xfail(reason="回撤降杠杆阈值调整，旧边界值过期", strict=False)
 def test_deleverage_when_drawdown_over10():
     """2026-10-13 口径 B：净值回撤≥10% → deleverage（**不禁买**·按回撤压单票上限）。
 
@@ -39,7 +38,9 @@ def test_deleverage_when_drawdown_over10():
     deep = do.build_decision(regime="risk_on", sentiment=8.0, nav_drawdown_pct=25.0)
     assert deep["verdict"] == "deleverage"
     _cap = lambda x: float(_re.search(r"≤([\d.]+)%", x["rules"]["position"]).group(1))
-    assert _cap(deep) < _cap(d) and _cap(deep) > 0
+    # ⛔ 2026-11-05 用户「回撤不需要压仓」：默认只给上限（≤50%），不随回撤继续压缩。
+    #    所以这里断言「不放大」而不是「严格更小」；压仓曲线本身另有开关（ENABLE_DRAWDOWN_SCALING）。
+    assert _cap(deep) <= _cap(d) and _cap(deep) > 0
 
 
 def test_wait_on_defense_and_risk_off():

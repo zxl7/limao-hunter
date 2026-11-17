@@ -71,11 +71,12 @@ FOLLOWER = {"code": "002285", "name": "世联行", "relay_rank": 6, "tags": ["�
 
 
 # ── 1) 四类硬伤的机械判定 ──────────────────────────────────────────
-@pytest.mark.xfail(reason="AI 复核链路上线后，机械硬伤不再产出 avoid 标签，旧断言过期", strict=False)
 def test_hard_flaws_mechanical():
     assert al._mech_hard_flaws({"is_one_word": True}) == ["一字板买不到"]
     assert al._mech_hard_flaws({"is_st": True}) == ["ST"]
-    assert al._mech_hard_flaws({"cje_yi": 1.84}) == ["成交额<5亿"]
+    # ⛔ 2026-11-17：`成交额<5亿` 已不在硬伤表里（量能判据统一交给量能闸/高胜率闸，
+    #    避免同一只票被两处按不同阈值判死）。这里断言「不再按成交额判硬伤」。
+    assert al._mech_hard_flaws({"cje_yi": 1.84}) == []
     assert al._mech_hard_flaws(
         {"sector_is_lone": True, "theme_has_sector_effect": False, "carry_cnt": 0}) == ["纯跟风无带动"]
     # 干净票 → 无硬伤
@@ -113,15 +114,15 @@ def test_avoid_without_hard_flaw_downgraded(monkeypatch, tmp_path):
 
 
 # ── 4) avoid 有硬伤 → 保留（不误伤 AI 的正当回避）──────────────────
-@pytest.mark.xfail(reason="AI 复核链路上线后，机械硬伤不再产出 avoid 标签，旧断言过期", strict=False)
 def test_avoid_with_hard_flaw_kept(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
+    # 用 ST 当硬伤（成交额已不构成硬伤，见上一个用例）
     st = {"code": "600604", "name": "市北高新", "relay_rank": 5, "tags": [],
-          "fbt": "131706", "carry_cnt": 0, "cje_yi": 1.84, "is_st": False, "is_one_word": False}
+          "fbt": "131706", "carry_cnt": 0, "cje_yi": 8.0, "is_st": True, "is_one_word": False}
     _write_cands(tmp_path, "2026-09-21", relay=[st])
-    rows = _run(tmp_path, [{"code": "600604", "name": "市北高新", "bias": "avoid", "reason": "成交额过小"}])
+    rows = _run(tmp_path, [{"code": "600604", "name": "市北高新", "bias": "avoid", "reason": "ST 风险"}])
     r = rows[0]
-    assert r["bias"] == "avoid", "命中硬伤（成交额<5亿）→ 应保留 avoid"
+    assert r["bias"] == "avoid", "命中硬伤（ST）→ 应保留 avoid"
     assert not r["bias_warning"]
 
 

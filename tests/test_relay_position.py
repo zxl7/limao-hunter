@@ -85,9 +85,13 @@ def test_tier_of_boundaries():
     assert rp.tier_of(0.0) == "weak"
 
 
-@pytest.mark.xfail(reason="回撤仓位规则变更（压缩/不阻断）", strict=False)
-def test_drawdown_multiplier_bands():
-    """2026-10-13 口径 B：回撤**连续压仓·不禁买**（乘数恒 >0）。"""
+def test_drawdown_multiplier_bands(monkeypatch):
+    """2026-10-13 口径 B：回撤**连续压仓·不禁买**（乘数恒 >0）。
+
+    ⛔ 2026-11-05 用户「回撤不需要压仓」→ `ENABLE_DRAWDOWN_SCALING` 默认 0。
+       本用例测的是**开关打开后**的曲线，所以显式开启；默认关闭的行为见下一个用例。
+    """
+    monkeypatch.setattr(rp, "ENABLE_DRAWDOWN_SCALING", True)
     assert rp.drawdown_multiplier(None) == (1.0, None)
     assert rp.drawdown_multiplier(3.0) == (1.0, "normal")          # 未到起降线
     # 5%~10% 线性下降到 0.5
@@ -110,9 +114,9 @@ def test_build_plan_tiers():
     assert weak["quota"] == 1 and weak["per_pick_cap"] == 0.3 and weak["total_cap"] == 0.3
 
 
-@pytest.mark.xfail(reason="回撤仓位规则变更（压缩/不阻断）", strict=False)
-def test_build_plan_deep_drawdown_shrinks_not_blocks():
-    """2026-10-13 用户口径 B：深回撤（原硬线）**不禁止买**，只把仓位压小。"""
+def test_build_plan_deep_drawdown_shrinks_not_blocks(monkeypatch):
+    """2026-10-13 用户口径 B：深回撤（原硬线）**不禁止买**，只把仓位压小（需开开关）。"""
+    monkeypatch.setattr(rp, "ENABLE_DRAWDOWN_SCALING", True)
     p = rp.build_plan(strength=0.9, tier="strong", dd=18.0)
     assert p["can_buy"] is True                    # ⛔ 不再禁买
     assert p["quota"] >= 1                         # 名额保底 1
@@ -121,8 +125,8 @@ def test_build_plan_deep_drawdown_shrinks_not_blocks():
     assert any("动态控制" in h for h in p["hints"])
 
 
-@pytest.mark.xfail(reason="回撤仓位规则变更（压缩/不阻断）", strict=False)
-def test_build_plan_drawdown_soft_compresses():
+def test_build_plan_drawdown_soft_compresses(monkeypatch):
+    monkeypatch.setattr(rp, "ENABLE_DRAWDOWN_SCALING", True)
     p = rp.build_plan(strength=0.6, tier="neutral", dd=10.0)
     assert p["can_buy"] is True
     assert p["quota"] == 1                        # 2 × 0.5 → 1
@@ -191,3 +195,12 @@ def test_refine_effective_quota_down_only():
     assert rp.refine_effective_quota(3, None) == 3          # 无方案→不动
     disabled = {"enabled": False, "can_buy": True, "quota": 0}
     assert rp.refine_effective_quota(3, disabled) == 3      # 开关关→不动
+
+
+def test_drawdown_scaling_default_off():
+    """⛔ 2026-11-05 用户「回撤不需要压仓」：默认不参与任何仓位计算（读数只作展示）。"""
+    assert rp.ENABLE_DRAWDOWN_SCALING is False
+    assert rp.drawdown_multiplier(18.0) == (1.0, None)
+    plan = rp.build_plan(strength=0.9, tier="strong", dd=18.0)
+    assert plan["per_pick_cap"] == rp.PER_PICK_STRONG
+    assert plan["total_cap"] == rp.TOTAL_STRONG
