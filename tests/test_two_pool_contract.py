@@ -265,7 +265,13 @@ def test_formal_selection_applies_policy_after_finalize(monkeypatch):
     assert diag["height_observe"]["code"] == "000001"
 
 
-def test_single_pool_card_counts_height_separately():
+def test_single_pool_card_is_the_only_pool():
+    """2026-11-17 用户「只有接力池，没有其他池」：卡面不许再有第二级池名。
+
+    锁三件事：①标题只数 = 全池只数（含高度那只，5+1=6）；②不再出现「高度观察 N 只」
+    /「观察池 TOP」/「接力池简列」这类分池标题；③高度票仍然**行内**标「只看不买」——
+    分组标题撤掉后，风控事实不能跟着消失。
+    """
     from core.quant_score import _merge_pools
     sources = [row(code=f"00000{i}", name=f"测试{i}", boards=7 if i == 1 else 2,
                    participation_eligibility="relay_candidate",
@@ -273,9 +279,10 @@ def test_single_pool_card_counts_height_separately():
     r, w, _, _ = _merge_pools([], sources)
     text = str(build_cards.build_eod_card({"date": "2026-11-10", "relay": r, "watch": w,
                "diagnostics": {"single_pool": True}, "ai_plan": {}}))
-    assert "接力池（5 只）" in text
-    assert "高度观察 1 只" in text
-    assert "观察池 TOP" not in text
+    assert "接力池（6 只）" in text                     # 5 只接力 + 1 只高度，同一个池
+    for banned in ("高度观察 1 只", "观察池 TOP", "接力池简列", "▸"):
+        assert banned not in text, f"单池模式下不该再出现分池标题：{banned}"
+    assert "只看不买" in text                            # 高度票的行内标记必须还在
     assert all(f"测试{i}" in text for i in range(1, 7))
 
 

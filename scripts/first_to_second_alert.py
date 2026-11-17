@@ -40,8 +40,15 @@ def _today() -> str:
 
 
 def _is_trading_time(now: datetime) -> bool:
-    if now.weekday() >= 5:
-        return False
+    # ⛔ 2026-11-17 审计：交易日必须走共用日历（含节假日/调休），不许自己数星期几。
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from common.trading_calendar import is_a_share_trading_day
+        if not is_a_share_trading_day(now.strftime("%Y-%m-%d")):
+            return False
+    except Exception:  # noqa: BLE001
+        if now.weekday() >= 5:  # trading-day-fallback（日历不可用时的降级）
+            return False
     t = now.time()
     return (time(9, 25) <= t <= time(11, 32)) or (time(13, 0) <= t <= time(15, 2))
 

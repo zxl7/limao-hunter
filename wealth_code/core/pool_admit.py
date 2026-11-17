@@ -482,6 +482,7 @@ def admit(relay: list[dict[str, Any]],
     # 🎯 炸板闸（2026-11-11 用户 A）：炸板次数 > 上限 → 直接不进池。
     _zbc_cap = max_zbc()
     zbc_dropped: list[str] = []
+    zbc_dropped_codes: list[str] = []
     zbc_exempt: list[str] = []
     _kept: list[dict[str, Any]] = []
     for r in pool:
@@ -510,18 +511,21 @@ def admit(relay: list[dict[str, Any]],
                 zbc_exempt.append(str(_ex.get("name") or _ex.get("code") or ""))
                 continue
             zbc_dropped.append(str((r or {}).get("name") or (r or {}).get("code") or ""))
+            zbc_dropped_codes.append(str((r or {}).get("code") or ""))
             continue
         _kept.append(r)
     pool = _kept
 
     # 🚫 题材缺失闸（2026-11-12 用户）：没有真题材归属 → 不进池。
     theme_dropped: list[str] = []
+    theme_dropped_codes: list[str] = []
     if str(os.environ.get(REQUIRE_THEME_ENV, "1")).strip().lower() not in ("0", "false", "off", "no"):
         _t_keep: list[dict[str, Any]] = []
         for r in pool:
             _ct = str((r or {}).get("core_theme") or "").strip().lower()
             if _ct in _THEME_EMPTY:
                 theme_dropped.append(str((r or {}).get("name") or (r or {}).get("code") or ""))
+                theme_dropped_codes.append(str((r or {}).get("code") or ""))
                 continue
             _t_keep.append(r)
         pool = _t_keep
@@ -529,6 +533,7 @@ def admit(relay: list[dict[str, Any]],
     # 🧬 股性闸（2026-11-11 用户「股性差的不要推」）：涨停少 + 从没连过板 → 不进池。
     _g_min, _g_lbc = gene_min_zt(), gene_max_lbc()
     gene_dropped: list[str] = []
+    gene_dropped_codes: list[str] = []
     if _g_min > 0:
         _g_keep: list[dict[str, Any]] = []
         for r in pool:
@@ -542,6 +547,7 @@ def admit(relay: list[dict[str, Any]],
                     _zt_n, _lbc = 10, 10      # 解析失败 → 当正常，不砍
                 if _zt_n < _g_min and _lbc <= _g_lbc:
                     gene_dropped.append(str((r or {}).get("name") or _code))
+                    gene_dropped_codes.append(_code)
                     continue
             _g_keep.append(r)
         pool = _g_keep
@@ -698,5 +704,14 @@ def admit(relay: list[dict[str, Any]],
         "gene_min_zt": _g_min,
         "gene_max_lbc": _g_lbc,
         "gene_dropped": gene_dropped,
+        # 🏷 2026-11-17：剔出项补 code 留痕（只加字段，老字段/human-readable 名单一字不动）。
+        #    起因：`历史连板修复` 通道按 code 判「前置准入」，而原 diag 只有名字 →
+        #    被准入闸剔掉的票（如 11-17 瀛通通讯被股性闸剔）在修复通道里查不到证据，
+        #    于是又被给成可买的 conditional 资格，两个闸对着同一只票给出相反结论。
+        "zbc_dropped_codes": zbc_dropped_codes,
+        "theme_dropped_codes": theme_dropped_codes,
+        "gene_dropped_codes": gene_dropped_codes,
+        "dropped_codes": [str(r.get("code") or "") for r in dropped],
+        "first_board_dropped_codes": [str(r.get("code") or "") for r in _fb_dropped],
     }
     return new_relay, new_watch, diag

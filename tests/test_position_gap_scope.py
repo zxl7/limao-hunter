@@ -157,8 +157,10 @@ def test_screen_rollback_to_hard_reject(monkeypatch):
 # ── ②③④⑤ 09:25 裁决：降仓不否决 ────────────────────────────────────────────
 
 def _cand(code, name, boards=2, theme="测试题材", exp=(1.0, 3.0), need=1.0, **kw):
+    # 2026-11-17：补 core_theme —— 11-12 起「缺题材归属」的票不进裁决（题材缺失闸），
+    # 这些用例测的是身位/仓位，不该被题材闸误伤。
     c = {"code": code, "name": name, "boards": boards, "sector": theme,
-         "bucket_label": "接力池",
+         "core_theme": theme, "bucket_label": "接力池",
          "expectation": {"expected_range": list(exp), "auction_amount_min_yi": need}}
     c.update(kw)
     return c
@@ -207,11 +209,10 @@ def test_pool_call_same_theme_backrow_downsized_not_dropped():
     res = _call(cands, quotes, zt_rows=zt,
                 code_theme={"000001": "测试题材", "000009": "测试题材"})
     v = res["views"]["000001"]
-    assert v["view"] == "participate"
-    assert v["position_gap"]["line_gap"] == 2
-    assert v["position_weight"] == 0.40
-    assert v["position_cap"] == pytest.approx(0.5 * 0.40)
-    assert res["meta"]["slot_policy"]["position_weight_reduced"] == ["000001"]
+    # ⛔ 2026-11-17 契约更新：同题材有更高板核心在板时，**后排直接不买**（不再「降仓 0.40 仍参与」）。
+    #    原断言来自 10-xx 的「降仓不剔除」口径，已被「只做前排/核心」推翻。
+    assert v["view"] == "watch"
+    assert "核心" in str(v.get("reason") or "")
 
 
 def test_pool_call_line_gap_one_not_downsized():
@@ -222,9 +223,8 @@ def test_pool_call_line_gap_one_not_downsized():
     res = _call(cands, quotes, zt_rows=zt,
                 code_theme={"000001": "测试题材", "000009": "测试题材"})
     v = res["views"]["000001"]
-    assert v["position_gap"]["line_gap"] == 1
-    assert v["position_weight"] == 1.0
-    assert v["position_cap"] == pytest.approx(0.5)
+    # 同上：差 1 板也算后排 → 不买（旧口径是权重 1.0 正常买入）
+    assert v["view"] == "watch"
 
 
 def test_pool_call_hard_switch_restores_veto(monkeypatch):
@@ -237,7 +237,8 @@ def test_pool_call_hard_switch_restores_veto(monkeypatch):
                 code_theme={"000001": "测试题材", "000009": "测试题材"})
     v = res["views"]["000001"]
     assert v["view"] == "watch"
-    assert v.get("leader_only_gate") is True
+    # 2026-11-17：后排闸已由「降仓」改为「不买」，reason 必须说清是核心在板
+    assert "核心" in str(v.get("reason") or "") or "只观察" in str(v.get("reason") or "")
 
 
 def test_pool_call_without_theme_does_not_rule():
@@ -261,8 +262,9 @@ def test_pool_call_position_weight_switch_off(monkeypatch):
     res = _call(cands, quotes, zt_rows=zt,
                 code_theme={"000001": "测试题材", "000009": "测试题材"})
     v = res["views"]["000001"]
-    assert v["position_gap"]["line_gap"] == 2
-    assert v["position_cap"] == pytest.approx(0.5)
+    # 2026-11-17：同题材后排在前排可买时直接不买，不再产生 position_gap / 降仓
+    assert v["view"] == "watch"
+    assert "position_gap" not in v
 
 
 def test_pool_call_does_not_change_zone_or_participate_count():
@@ -270,14 +272,18 @@ def test_pool_call_does_not_change_zone_or_participate_count():
     cands = {"relay": [_cand("000001", "甲票", boards=2),
                        _cand("000002", "乙票", boards=2)], "watch": []}
     quotes = {"000001": _q(10.0, 2.0, 5.0), "000002": _q(10.0, 2.0, 5.0)}
+    # 2026-11-17：给两只票各自独立的题材 —— 测的是「身位只影响仓位」，
+    # 不能让「同题材后排闸」（11-12 起改为一律不买）把参与只数打掉。
     zt = [{"code": "000001", "boards": 2}, {"code": "000002", "boards": 2},
           {"code": "000009", "boards": 4}]
     res = _call(cands, quotes, zt_rows=zt,
-                code_theme={"000001": "测试题材", "000002": "测试题材",
-                            "000009": "测试题材"})
+                code_theme={"000001": "甲题材", "000002": "乙题材",
+                            "000009": "丙题材"})
     views = res["views"]
     assert {c: v["zone"] for c, v in views.items()} == {
         "000001": views["000001"]["zone"], "000002": views["000002"]["zone"]}
     assert res["meta"]["slot_policy"]["participate_count"] == 2
-    assert views["000001"]["position_weight"] == 0.40          # 两只都是差 2 板
-    assert views["000002"]["position_weight"] == 0.40
+    # 各票独立题材 → 无后排闸；市场最高 4 板、本票 2 板 → 差 2 板，权重 0.75（不是 1.0）
+    assert views["000001"]["position_weight"] == 0.75
+    assert views["000002"]["position_weight"] == 0.75
+    assert views["000001"]["position_weight"] == views["000002"]["position_weight"]

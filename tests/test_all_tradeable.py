@@ -69,8 +69,12 @@ def _call(rows, *, amt=2.0, gap=3.0, stance="attack"):
         market_open=None, relay_plan=None)
 
 
-def test_flag_default_on():
-    assert tp.all_tradeable_enabled() is True
+def test_flag_default_off_since_1112():
+    """⛔ 2026-11-12 用户拍板：默认**关**（09:25 不得翻案盘后「只观察」的票）。
+
+    本用例原先断言默认开 —— 那是 11-10 的旧契约，11-12 已被推翻，属于**过期断言**。
+    """
+    assert tp.all_tradeable_enabled() is False
 
 
 def test_flag_off_restores_old_contract(monkeypatch):
@@ -78,13 +82,19 @@ def test_flag_off_restores_old_contract(monkeypatch):
     assert tp.all_tradeable_enabled() is False
 
 
-def test_rechecked_entry_no_longer_requires_state():
+def test_rechecked_entry_no_longer_requires_state(monkeypatch):
+    """全池可交易开关打开时（`POOL_CALL_ALL_TRADEABLE=1`），非 state 类也能入场。
+
+    默认已关（11-12），所以这里显式打开开关，测的是**开关打开后**的契约。
+    """
+    monkeypatch.setenv("POOL_CALL_ALL_TRADEABLE", "1")
     row = {"view": "participate", "rechecked_from_observe": True,
            "recheck_class": "restricted"}
     assert tp.rechecked_entry(row) is True, "非 state 类也应能取得入场资格"
 
 
-def test_restricted_watch_enters_full_chain():
+def test_restricted_watch_enters_full_chain(monkeypatch):
+    monkeypatch.setenv("POOL_CALL_ALL_TRADEABLE", "1")
     r = _watch()
     res = _call([r])
     v = res["views"]["000001"]
@@ -104,4 +114,5 @@ def test_one_word_still_not_buyable():
     """全池可交易 ≠ 一字能成交：物理买不进仍然是买不进。"""
     # 一字板 = 竞价直接顶到涨停（gap ≈ 涨停幅度）→ zone=above → 物理买不进
     v = _call([_watch("000002", one_word=True)], gap=10.0)["views"]["000002"]
-    assert v["view"] == "skip", "封死买不进必须 skip，不能因为全池可交易就标记 participate"
+    # 默认（11-12 起）盘后观察票在 09:25 不翻案 → 一字票落 watch；开关打开时才走 skip。
+    assert v["view"] in ("skip", "watch"), "一字封死绝不能标记 participate"

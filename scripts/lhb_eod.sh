@@ -43,7 +43,7 @@ RC=$?
 if [ "$RC" = "0" ]; then
   log "✅ 龙虎榜已落盘 cache/lhb_$(TZ=Asia/Shanghai date +%F).json"
 else
-  log "⚠️ 未披露或抓取失败（rc=$RC）——如实记空，不编造"
+  log "⚠️ 未披露或抓取失败（rc=${RC}）——如实记空，不编造"
 fi
 
 # 全量席位信号沉淀（依赖同花顺明细；缺输入会自己降级，不阻断）

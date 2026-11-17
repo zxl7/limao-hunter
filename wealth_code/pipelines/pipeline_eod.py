@@ -1642,200 +1642,10 @@ def _load_theme_ctx() -> dict[str, Any] | None:
     return ctx or None
 
 
-def _rank_and_split(
-    scored: list[dict[str, Any]],
-    env: dict[str, Any],
-    theme_ctx: dict[str, Any] | None = None,
-    strong_sectors: dict[str, dict[str, Any]] | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
-    """
-    ⛔⛔ 2026-09-29 标注：**本函数是废弃死代码，从未被调用**。
-
-    eod 的实际排序/拆池入口 = `core.quant_score.select_relay_watch`
-    （见 `run_eod()` 内 `relay, watch, diagnostics, sel_mode = select_relay_watch(...)`）。
-    因此本函数体内的 `STRONG_SECTOR_*` 加权、`_load_strong_sectors()` 调用
-    **对候选结果零影响**；`diagnostics["strong_sector_persistent"]` 等键也从不产出
-    （实证：2026-09-29 的 candidates diagnostics 无此键）。
-
-    ⚠️ 为什么要写这段（踩过的坑）：2026-09-23 同日重跑 eod 出现 relay 1→3、
-    个别 score 变动，当时把根因归到「`_load_strong_sectors()` 未传 `exclude_date`
-    导致当时候选自举加分」并写进了记忆 —— **该归因是错的**（该函数不在生效路径上）。
-    2026-09-29 实测：候选文件存在时重跑 eod，relay/watch 与逐票 score **完全一致**。
-    真实差异只可能来自**输入文件在两次跑之间被别的任务更新**
-    （`feedback_matrix.json` / `pulse_snapshots/latest.json` / 涨停池），属「输入新鲜度」问题，
-    不是自举。**排查同日重跑不一致，请看输入文件 mtime，不要来改本函数。**
-
-    原始意图（仅供理解历史设计，勿据此推理现行为）：
-    排序分 = 龙头算法分(点火+爆发+先发+题材) + 连板高度 + 板块梯队(核心) + 情绪代理 + 主板倾斜
-            + 容量加权(次要,QR对齐) + 日报verdict(元覆盖,用户指定) + 最近强势板块加权(用户:聚焦题材)。
-    板块梯队：题材内梯队健康度(0~10)线性映射 LADDER_WEIGHT，完整梯队 sector 龙头额外加成。
-    """
-    if strong_sectors is None:
-        strong_sectors = _load_strong_sectors()
-    env_c = _environment_component(env)
-    for it in scored:
-        if it.get("is_st"):
-            it["_rank_score"] = -999.0
-            continue
-        # 一字板：当日封死，竞价无法买入（无参与机会），原版 quant-review 选股规范
-        # 明确定义为「换手<3% = 无参与机会」。排除出可交易接力/观察池（同 ST 处理）。
-        if it.get("is_one_word"):
-            it["_rank_score"] = -999.0
-            it["excluded_reason"] = "一字板·无参与机会"
-            continue
-        rs = it["score"] + _height_component(it.get("boards", 1)) + env_c
-        # 主板倾斜已撤销（2026-08-13 创业板开放）；MAINBOARD_BONUS=0 不再影响排序
-        if not it.get("is_20cm"):
-            rs += MAINBOARD_BONUS
-        # 板块梯队（核心驱动）：题材梯队健康度越高，该股所处主线越扎实
-        lad = (it.get("ladder_health") or 0.0) / 10.0 * LADDER_WEIGHT
-        rs += lad
-        if it.get("is_sector_dragon") and it.get("ladder_has_complete"):
-            rs += LADDER_DRAGON_BONUS  # 完整梯队 sector 龙头额外加成
-        # 反吃日报 verdict：板块无效应→降权，确认主线→加权（用户：板块无效应就降权）
-        dv = it.get("daily_verdict")
-        if dv:
-            for f in dv.get("flags", []):
-                rs += SECTOR_VERDICT_BONUS.get(f, 0.0)
-        # 最近强势板块加权（用户纪律 2026-08-13：聚焦题材/主线/强势板块）
-        # 数据源=聚合最近N天 candidates.theme；持续主线加权、历史单日小加权、清单外温和降权
-        ss = strong_sectors.get(it.get("theme"))
-        if ss:
-            if ss["persistent"]:
-                rs += STRONG_SECTOR_PERSIST_BONUS
-                it["strong_sector_bonus"] = STRONG_SECTOR_PERSIST_BONUS
-            else:
-                rs += STRONG_SECTOR_RECENT_BONUS
-                it["strong_sector_bonus"] = STRONG_SECTOR_RECENT_BONUS
-        else:
-            rs += STRONG_SECTOR_OUTSIDE_PENALTY
-            it["strong_sector_bonus"] = STRONG_SECTOR_OUTSIDE_PENALTY
-        # 容量因子加权（向量化靠拢：仅作为排序分内加权项，参与纯排名，不绕过排名）
-        rs += (it.get("cap_score") or 0.0) * CAPACITY_WEIGHT
-        it["_rank_score"] = round(rs, 2)
-
-    ranked = sorted(
-        [it for it in scored if it["_rank_score"] > -999.0],
-        key=lambda x: x["_rank_score"], reverse=True,
-    )
-
-    # 情绪差时收缩接力池
-    relay_cap = RELAY_TOPN
-    if env.get("regime") == "risk_off":
-        relay_cap = 4
-    elif env.get("regime") == "neutral":
-        relay_cap = 6
-
-    relay = ranked[:relay_cap]
-    relay_names = {it["code"] for it in relay}
-    watch = [it for it in ranked if it["code"] not in relay_names][:WATCH_TOPN]
-
-    # 注：已移除原"容量风格预留位绕过排名强行塞入观察池"的逻辑（CAPACITY_WATCH_SLOTS），
-    #     容量票现在只凭 cap_score*CAPACITY_WEIGHT 在上面的纯排名中竞争，保证选股纯模型驱动。
-
-    # 接力选择模式（对齐 quant 级联：strict→relaxed→broad→emergency，用 env 周期替代原版 tide gate）
-    sel_mode = relay_selection_mode_for(env, len(relay))
-    is_broad_fallback = sel_mode in ("broad", "emergency")
-
-    for idx, it in enumerate(relay, start=1):
-        it["relay_rank"] = idx
-        it["relay_selection_mode"] = sel_mode
-        it["is_broad_fallback"] = is_broad_fallback
-        it["dim_panel"] = build_dimension_panel(it, env, theme_ctx)
-        it["expectation"] = build_ai_expectation(it, env, theme_ctx)
-        it["bucket"] = "relay"
-        it["bucket_label"] = "接力池"
-    for idx, it in enumerate(watch, start=1):
-        it["watch_rank"] = idx
-        it["dim_panel"] = build_dimension_panel(it, env, theme_ctx)
-        it["expectation"] = build_ai_expectation(it, env, theme_ctx)
-        it["bucket"] = "watch"
-        it["bucket_label"] = "观察池"
-        # 观察池分组：容量核心(风格标签) / 高标(≥3板) / 补充观察，便于卡片分区
-        if it.get("style_tag") == "容量":
-            it["watch_group"] = "容量核心"
-        else:
-            it["watch_group"] = "高标/题材核心" if it.get("boards", 1) >= 3 else "补充观察"
-
-    # 🏷 题材兜底（2026-11-16 用户「有些票连题材都没有，必须把题材找出来」）：
-    #    当日快照没覆盖到的票 → 题材库 → 同花顺概念 → 行业兜底，并留 `theme_source` 痕迹。
-    try:
-        from common.theme_fallback import resolve as _resolve_theme
-        _filled = 0
-        for _bucket in (relay, watch):
-            for _r in _bucket:
-                _t = str(_r.get("core_theme") or _r.get("theme_name") or "").strip()
-                if _t and _t != "—":
-                    continue
-                _rs = _resolve_theme(str(_r.get("code") or ""), str(zt.get("date") or ""),
-                                     sector=_r.get("sector"),
-                                     reason=_hy_reason.get(str(_r.get("code") or "").zfill(6)))
-                if _rs.get("theme"):
-                    _r["core_theme"] = _rs["theme"]
-                    _r["theme_name"] = _rs["theme"]
-                    _r["theme_source"] = _rs["source"]
-                    _r["theme_note"] = _rs.get("note") or ""
-                    _filled += 1
-        if _filled:
-            print(f"[EOD] 🏷 题材兜底补全 {_filled} 只")
-        # 🏷 把同花顺涨停原因挂到候选行（终端卡片「原因」行直接读它）
-        _n_reason = 0
-        for _bucket in (relay, watch):
-            for _r in _bucket:
-                _rc = _hy_reason.get(str(_r.get("code") or "").zfill(6))
-                if _rc:
-                    _r["limit_up_reason"] = _rc
-                    _n_reason += 1
-        if _n_reason:
-            print(f"[EOD] 🏷 涨停原因挂载 {_n_reason} 只")
-        # 🧲 收盘共振分（0~3）：成线 / 高度 / 早封，三项各 1 分
-        #    ⛔ 与 09:25 的竞价共振不是一回事：这里是**收盘可得的事实**，
-        #    用于盘后预案排序与卡面标注；竞价共振仍在 09:25 现算。
-        from common.theme_fallback import resolve as _r2  # noqa: F401  (保持导入语义一致)
-        _ladder_by_theme: dict[str, dict] = {}
-        for _r in (zt.get("ztgc") or []):
-            _t = str(_r.get("core_theme") or "").strip()
-            if not _t:
-                continue
-            _b = int(_r.get("boards") or 0)
-            _fbt = str(_r.get("fbt") or "999999")
-            _cur = _ladder_by_theme.setdefault(_t, {"mates": 0, "max_boards": 0, "earliest": "999999"})
-            _cur["mates"] += 1
-            _cur["max_boards"] = max(_cur["max_boards"], _b)
-            _cur["earliest"] = min(_cur["earliest"], _fbt)
-        _n_res = 0
-        for _bucket in (relay, watch):
-            for _r in _bucket:
-                _t = str(_r.get("core_theme") or _r.get("theme_name") or "").strip()
-                _st = _ladder_by_theme.get(_t)
-                if not _st:
-                    continue
-                _f1 = 1 if _st["mates"] >= 3 else 0
-                _f2 = 1 if _st["max_boards"] >= 2 else 0
-                _f3 = 1 if _st["earliest"] <= "093500" else 0
-                _r["close_resonance"] = {
-                    "score": _f1 + _f2 + _f3, "line": _t,
-                    "mates": _st["mates"], "max_boards": _st["max_boards"],
-                    "earliest": _st["earliest"],
-                }
-                _n_res += 1
-        if _n_res:
-            print(f"[EOD] 🧲 收盘共振分挂载 {_n_res} 只")
-    except Exception as _e:  # noqa: BLE001
-        print(f"[EOD] 题材兜底降级（不影响主链）：{_e}")
-
-    diagnostics = {
-        "scored": len(scored),
-        "excluded_st": sum(1 for it in scored if it.get("is_st")),
-        "excluded_one_word": sum(1 for it in scored if it.get("is_one_word")),
-        "relay_count": len(relay),
-        "watch_count": len(watch),
-        "regime": env.get("regime"),
-        "env_component": round(env_c, 2),
-        "strong_sector_persistent": sorted(t for t, v in strong_sectors.items() if v["persistent"]),
-        "strong_sector_outside_penalized": sum(1 for it in ranked if it.get("strong_sector_bonus", 0) < 0),
-    }
-    return relay, watch, diagnostics
+def _valid_theme_row(v: Any) -> bool:
+    """题材名是否有效（非空、非占位符）。口径与 `common.stock_theme._valid_theme` 一致。"""
+    t = str(v or "").strip()
+    return bool(t) and t not in {"—", "-", "其他", "无", "未知", "none", "null"}
 
 
 # 🇨🇳 首板观察判据（2026-11-11 用户「股性强的票，首板就要关注；二板才看就危险了」）
@@ -2599,8 +2409,24 @@ def run_eod(
             print(f"[EOD] 👀 未进接力但仍入观察（2板以上·只看不买）：{'、'.join(_mr_added)}")
 
         # 历史修复与交易准入分离：硬伤只收观察；通过既有个股门才给条件资格。
+        #
+        # ⛔ 2026-11-17（用户「最新的改动覆盖原来的逻辑，冲突也以最新为准」）：
+        #    上面这条规则是**修复通道自己写的**（硬伤只收观察 → 不收，观察照留）。
+        #    原实现的「前置准入」只查了 `daily_screen`，漏了 **准入闸 `pool_admit`**
+        #    （炸板闸 / 题材缺失闸 / 股性闸 / 同线后排）。后果（11-17 实证）：
+        #    瀛通通讯被股性闸剔出池，却在修复通道里拿到唯一一个 `conditional`
+        #    可买资格 —— 同一天两个闸对同一只票给出相反结论。
+        #    这里把准入闸的剔出证据补进 `_blocks`，**不是**用旧契约压新规则，
+        #    而是把修复通道自己写的「硬伤只收观察」落实到位：
+        #    票仍可进池观察（最新规定：硬伤收观察），但不给可买资格。
         _repair_diag = []
         if os.environ.get("ENABLE_HISTORICAL_REPAIR", "1") != "0":
+            _admit_blocked = {c for c in (
+                (_admit_diag.get("zbc_dropped_codes") or [])
+                + (_admit_diag.get("theme_dropped_codes") or [])
+                + (_admit_diag.get("gene_dropped_codes") or [])
+                + (_admit_diag.get("dropped_codes") or [])
+                + (_admit_diag.get("first_board_dropped_codes") or [])) if c}
             _final_by_code = {str(r.get("code")): r for r in relay + watch}
             for _src in _scored_all:
                 _code = str(_src.get("code") or "")
@@ -2614,6 +2440,8 @@ def run_eod(
                 _blocks = [x for x in _miss if x != "情绪"]
                 if _code not in _kept_codes or _row.get("screen_reject"):
                     _blocks.append("前置准入")
+                if _code in _admit_blocked:
+                    _blocks.append("准入闸剔出")
                 if _row.get("dragon_rank") != 1 or not _row.get("is_sector_dragon"):
                     _blocks.append("题材龙")
                 if (_row.get("is_one_word") or _row.get("watch_only")
@@ -2864,6 +2692,104 @@ def run_eod(
                 f"{x['name']}({x.get('sector')}·{x.get('core_score')})" for x in _cores))
     except Exception as _e:  # noqa: BLE001
         print(f"[EOD] 🏛 板块核心观察降级（不影响主链）：{_e}")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # 🏷 候选行三层回填（2026-11-16 晚改造 · 2026-11-17 搬到主链）
+    # ══════════════════════════════════════════════════════════════════════
+    # ⛔ 2026-11-17 用户指令「最新的改动覆盖原来的逻辑，哪怕冲突也以最新为准」。
+    #
+    # 背景（必读，别再踩）：这三段原本写在 `_rank_and_split()` 函数体内，而那个函数
+    #   自 2026-09-29 起就是**死代码、全仓零调用点**（见其 docstring）。于是 11-16 晚
+    #   三项改造一项都没进候选文件 —— 11-17 实测：`limit_up_reason` 0/13、
+    #   `close_resonance` 0/13、`theme_source` 0/13，而日志里只有「同花顺涨停原因 36 条」
+    #   （那是抓取层，不是挂载层）。
+    #
+    # 现在按「最新为准」把三段搬到真正在跑的 `run_eod` 主链：
+    #   ① 题材兜底 → `core_theme` / `theme_source` / `theme_note`
+    #      （候选行继承的是 ztgc 层的值，ztgc 兜底成功但候选行是空，卡面最后显示申万行业）
+    #   ② 涨停原因 → `limit_up_reason`（同花顺，卡面「原因」行直接读）
+    #   ③ 收盘共振分 → `close_resonance`（成线/高度/早封各 1 分，0~3）
+    #
+    # ⛔ 位置：所有池操作（准入 → 降级 → 补票 → 合池 → 核心观察）**之后**，
+    #    只写候选行字段，⛔ 不改 relay/watch 成员、不改任何买入判据、不占名额。
+    _fill = {"theme": 0, "reason": 0, "resonance": 0, "trace": 0}
+    try:
+        from common.theme_fallback import resolve as _resolve_theme
+        # ① 题材留痕继承：ztgc 层已经判过 theme_source（snapshot / fallback / sector），
+        #    候选行是另一套 dict，必须显式继承 —— 否则「这条线是行业兜底还是真题材」
+        #    在候选/卡面层完全看不出来（11-17：theme_source 0/13）。
+        _ztg_by_code = {
+            str(_z.get("dm") or _z.get("code") or "").zfill(6): _z
+            for _z in (zt.get("ztgc") or [])
+        }
+        for _r in (relay + watch):
+            _zc = _ztg_by_code.get(str(_r.get("code") or "").zfill(6))
+            if not _zc:
+                continue
+            _moved = False
+            if not _valid_theme_row(_r.get("core_theme")) and _valid_theme_row(_zc.get("core_theme")):
+                _r["core_theme"] = _zc["core_theme"]
+                _moved = True
+            for _k in ("theme_base", "theme_source", "theme_note"):
+                if not _r.get(_k) and _zc.get(_k):
+                    _r[_k] = _zc[_k]
+                    _moved = True
+            if _moved:
+                _fill["trace"] += 1
+
+        # ② 题材兜底：候选行为空 → 题材库 → 同花顺概念 → 行业兜底，并留 theme_source
+        for _r in (relay + watch):
+            if _valid_theme_row(_r.get("core_theme")):
+                continue
+            _c6 = str(_r.get("code") or "").zfill(6)
+            _rs = _resolve_theme(_c6, str(zt.get("date") or ""),
+                                 sector=_r.get("sector"),
+                                 reason=_hy_reason.get(_c6))
+            if _rs.get("theme"):
+                _r["core_theme"] = _rs["theme"]
+                _r["theme_name"] = _rs["theme"]
+                _r["theme_source"] = _rs.get("source") or "fallback"
+                _r["theme_note"] = _rs.get("note") or ""
+                _fill["theme"] += 1
+
+        for _r in (relay + watch):
+            _rc = _hy_reason.get(str(_r.get("code") or "").zfill(6))
+            if _rc:
+                _r["limit_up_reason"] = _rc
+                _fill["reason"] += 1
+
+        # 收盘共振分：⛔ 与 09:25 的竞价共振不是一回事 —— 这里是**收盘可得的事实**，
+        # 用于盘后预案标注；竞价共振仍在 09:25 现算，两者不互相替代。
+        _ladder_by_theme: dict[str, dict] = {}
+        for _z in (zt.get("ztgc") or []):
+            _t = str(_z.get("core_theme") or "").strip()
+            if not _t:
+                continue
+            _cur = _ladder_by_theme.setdefault(
+                _t, {"mates": 0, "max_boards": 0, "earliest": "999999"})
+            _cur["mates"] += 1
+            _cur["max_boards"] = max(
+                _cur["max_boards"], _to_int(_z.get("boards") or _z.get("lbc"), 0))
+            _cur["earliest"] = min(_cur["earliest"], str(_z.get("fbt") or "999999"))
+        for _r in (relay + watch):
+            _t = str(_r.get("core_theme") or _r.get("theme_name") or "").strip()
+            _st = _ladder_by_theme.get(_t)
+            if not _st:
+                continue
+            _r["close_resonance"] = {
+                "score": (1 if _st["mates"] >= 3 else 0)
+                         + (1 if _st["max_boards"] >= 2 else 0)
+                         + (1 if _st["earliest"] <= "093500" else 0),
+                "line": _t,
+                "mates": _st["mates"],
+                "max_boards": _st["max_boards"],
+                "earliest": _st["earliest"],
+            }
+            _fill["resonance"] += 1
+        print(f"[EOD] 🏷 候选回填：题材留痕 {_fill['trace']} 只 · 题材兜底 {_fill['theme']} 只 · "
+              f"涨停原因 {_fill['reason']} 只 · 收盘共振分 {_fill['resonance']} 只")
+    except Exception as _e:  # noqa: BLE001
+        print(f"[EOD] 🏷 候选回填降级（不影响主链）：{_e}")
 
     # 🧭 市场级题材强度（2026-11-11 用户拍板 B）：回答「昨天整个市场哪几条线真强」。
     #    ⛔ 只写 diagnostics + 展示字段 theme_rank/theme_metrics；不改 relay_rank、

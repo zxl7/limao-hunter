@@ -1231,10 +1231,10 @@ def _watch_reversal_payload(trade_date10: str) -> dict[str, Any]:
         from common import watch_pool
     except Exception as exc:                       # pragma: no cover - 层缺失
         return {"available": False,
-                "reason": f"观察池层不可用: {type(exc).__name__}: {exc}"}
+                "reason": f"接力池层不可用: {type(exc).__name__}: {exc}"}
 
     if not getattr(watch_pool, "ENABLE_WATCH_POOL", True):
-        return {"available": False, "reason": "观察池快照已关闭（ENABLE_WATCH_POOL_SNAPSHOT=0）"}
+        return {"available": False, "reason": "接力池快照已关闭（ENABLE_WATCH_POOL_SNAPSHOT=0）"}
 
     try:
         res = watch_pool.auction_paths(date=trade_date10)
@@ -1249,13 +1249,13 @@ def _watch_reversal_payload(trade_date10: str) -> dict[str, Any]:
     counts = res.get("counts") or {}
     if not items:
         return {"available": False,
-                "reason": "观察池为空（昨日 candidates 与当日 pool_call 都没可用池）",
+                "reason": "接力池为空（昨日 candidates 与当日 pool_call 都没可用池）",
                 "pool_size": 0}
 
     # 全部 no_data：一层数据都没取到 —— 这与「没有反转」是两件事，⛔ 不可混。
     if int(counts.get("no_data") or 0) >= len(items):
         return {"available": False,
-                "reason": "本轮没抓到观察池行情（快照未覆盖竞价窗口）",
+                "reason": "本轮没抓到接力池行情（快照未覆盖竞价窗口）",
                 "pool_size": len(items), "counts": counts,
                 "rounds": res.get("rounds") or 0}
 

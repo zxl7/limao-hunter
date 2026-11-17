@@ -377,6 +377,12 @@ def _pick_theme(kw_theme: str, plate_names: list[str]) -> str:
     return base
 
 
+def _valid_theme(v: Any) -> bool:
+    """题材名是否「有效」（非空、非占位符）。占位符口径与候选池各闸保持一致。"""
+    t = str(v or "").strip()
+    return bool(t) and t not in {"—", "-", "其他", "无", "未知", "none", "null"}
+
+
 def annotate_candidate(
     cand: dict[str, Any],
     theme_info: dict[str, Any] | None,
@@ -392,12 +398,26 @@ def annotate_candidate(
     无题材数据 → core_theme="—"（诚实降级，不编造）。
     """
     cand["industry_sector"] = str(cand.get("theme") or cand.get("sector") or "—")
+    # ⛔ 2026-11-17 用户「最新的改动覆盖原来的逻辑，冲突也以最新为准」：
+    #    上游（当日快照 / `common.theme_fallback` 题材兜底）已经定了题材时，
+    #    这里**不得用「—」把它抹掉**。原实现无条件写 `core_theme = theme_info.theme or "—"`，
+    #    于是 600202 哈空调（兜底已判「核电」）、600261 阳光照明（「商业航天」）
+    #    在卡面上又变回「—」，题材兜底等于白跑（11-17 实证）。
+    #    「诚实降级」= 不编造，不是「把已知事实改回未知」。
+    _prev_ok = _valid_theme(cand.get("core_theme"))
     if not theme_info:
+        if _prev_ok:
+            cand.setdefault("core_theme_logic", "")
+            cand.setdefault("core_theme_heat", "")
+            return cand
         cand["core_theme"] = "—"
         cand["core_theme_logic"] = ""
         cand["core_theme_heat"] = ""
         return cand
-    cand["core_theme"] = theme_info.get("theme") or "—"
+    # theme_info 存在但 theme 为空（快照抓到了票、没提炼出题材）→ 同样不抹掉已知题材
+    _new_theme = theme_info.get("theme")
+    cand["core_theme"] = _new_theme if _valid_theme(_new_theme) else (
+        str(cand.get("core_theme")) if _prev_ok else "—")
     cand["core_theme_logic"] = theme_info.get("logic") or theme_info.get("desc") or ""
     cand["core_theme_plates"] = theme_info.get("plates") or []
     # 热度评级：板块涨停数（资金关注度）→ H/M/L

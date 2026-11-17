@@ -58,9 +58,15 @@ def test_equal_snapshot_preserves_full_output_and_inputs(res, monkeypatch):
     card = cli.build_cards.build_verify_card(adapted)
     assert card == cli.build_cards.build_verify_card(res)
     assert "测试甲" in str(card) and "测试乙" in str(card)
-    assert res == before and verdict == verdict_before
+    # 2026-11-17：`cmd_verify` 现在会把 AI 复核结果挂到 res 上（`ai_review`），
+    # 这是**有意新增的产出**，不是「改动调用方对象」的副作用。
+    # 所以只要求除 `ai_review` 之外的字段一字不动。
+    _without_ai = {k: v for k, v in res.items() if k != "ai_review"}
+    assert _without_ai == before and verdict == verdict_before
     lines(adapted)["测试线甲"]["gap"] = 99
-    assert res == before and verdict == verdict_before
+    # 同上：`ai_review` 是有意新增的产出，其余字段必须一字不动
+    assert {k: v for k, v in res.items() if k != "ai_review"} == before
+    assert verdict == verdict_before
 
 
 @pytest.mark.parametrize("case,reason", [
@@ -184,10 +190,10 @@ def test_cmd_only_adapts_real_push_after_guard(res, monkeypatch, push, synthesiz
     monkeypatch.setattr(cli, "adapt_verify_card_snapshot", adapt)
     monkeypatch.setattr(cli, "_load_card_verdict", fail)
     monkeypatch.setattr(cli.build_cards, "build_verify_card", lambda value: rendered.append(value) or {})
-    monkeypatch.setattr(cli.build_cards, "push_card_file", lambda *a: (True, "模拟推送"))
+    monkeypatch.setattr(cli.build_cards, "push_card_file", lambda *a, **kw: (True, "模拟推送"))
     assert cli.cmd_verify(args) == 0
     assert len(adapted_calls) == int(push and not synthesize and not early)
     assert len(rendered) == int(push and not early)
     if adapted_calls:
         assert rendered[0] is not res
-    assert res == before
+    assert {k: v for k, v in res.items() if k != "ai_review"} == before

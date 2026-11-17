@@ -16,9 +16,8 @@
 ⛔ 2026-11-06 用户拍板（本文件随之更新，别按老契约回改）：
 · 「独立明日预案**不展示**」→ 盘后卡仍**不渲染**「🤖 AI 明日买入预案」/ 动态仓位 / 全局旁白，
   预案只落盘供次日 09:25 消费。本文件保留这些「不出现」断言。
-· 「📋 在册连板**要展示**」→ 该段由 `_board_track_block` 接线进 `build_eod_card`，
-  **但必须是纯只读**：只读 `cache/board_track/track_<date>.json`，⛔ 不重算统计 / 不跑生命周期，
-  文件缺失 → 整段不渲染（不写「暂无数据」占位）。
+· 「📋 在册连板」→ **2026-11-17 用户「删除这个模块」**：该段与 `_board_track_block`
+  一并从 `build_eod_card` 移除。本文件改为断言「任何情况都不出现」，⛔ 别再按老契约接回来。
 """
 import importlib.util
 import json
@@ -236,9 +235,7 @@ def test_eod_render_is_read_only_without_metrics_or_lifecycle(monkeypatch, tmp_p
         monkeypatch.setattr(bc, name, forbidden)
     monkeypatch.setattr(bc._pquiz, "annotate", forbidden)
     monkeypatch.setattr(bc._cycle_phase, "track_state", forbidden)
-    # 📋 在册连板段（2026-11-06 起允许渲染）——本测试的角色是「只读」：
-    #   把台账目录指向空目录 → 段整段不渲染，同时不许它去重算任何统计。
-    monkeypatch.setattr(bc, "_TRACK_DIR", tmp_path / "board_track_missing")
+    # 📋 在册连板段已于 2026-11-17 删除（见文件头），此处只断言它不再出现。
     monkeypatch.setattr(bc, "_load_zt_snapshot", lambda: {"ladder": {"2": ["测试甲"]}})
     payload = {"date": "2026-11-03", "relay": [dict(_RELAY)],
                "watch": [dict(_WATCH)], "ai_plan": {}}
@@ -253,58 +250,6 @@ def test_eod_render_is_read_only_without_metrics_or_lifecycle(monkeypatch, tmp_p
     for term in ("历史基因", "已记录", "胜率", "净值", "回撤", "战绩",
                  "明日买入预案", "低位方向"):
         assert term not in joined
-
-
-def test_eod_board_track_block_renders_tracked_and_broken(monkeypatch, tmp_path):
-    """📋 在册连板（2026-11-06 用户拍板「优化」→ 接线）：只读台账文件，报新增信息。
-
-    锁四件事：①在册/断板数量都出现；②封板质量四项全中单独成行；
-    ③「跟得最久」优先用同板数档（cond），样本少才退回整体口径（base）且**不许写成「同档」**；
-    ④文件缺失 → 整段不渲染。
-    """
-    d = tmp_path / "board_track"
-    d.mkdir()
-    row = {
-        "code": "600001", "name": "测试甲", "boards": 3, "theme": "题材甲",
-        "track": {"days_in_track": 3},
-        "factors": {"early_seal": True, "thick_seal": True,
-                    "low_turnover": True, "clean_seal": True, "count": 4},
-        "hist": {"base": {"n": 20, "rate": 55.0},
-                 "cond": {"stage": "3to4", "n": 8, "rate": 50.0}},
-    }
-    (d / "track_2026-11-03.json").write_text(json.dumps({
-        "theme_source": "snapshot", "tracked": [row],
-        "broken": [{"code": "600002", "name": "测试乙", "boards": 2}],
-    }, ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(bc, "_TRACK_DIR", d)
-    monkeypatch.setattr(bc, "_load_zt_snapshot", lambda: {"ladder": {"3": ["测试甲"]}})
-    payload = {"date": "2026-11-03", "relay": [], "watch": [], "ai_plan": {}}
-
-    card = bc.build_eod_card(payload)
-    joined = "\n".join(_texts(card))
-    assert "在册连板" in joined
-    assert "在册 **1** 只" in joined and "测试乙" in joined          # 断板留档要点名
-    assert "封板质量四项全中" in joined and "测试甲" in joined
-    assert "同板数（3→4 板）历史 8 次里 50% 能继续涨停" in joined
-    assert "已连 **3** 天" in joined
-    import card_lint
-    ok, errors, _ = card_lint.lint_card(card)
-    assert ok and not errors, f"在册连板段 lint 不过: {errors}"
-
-    # 同板数样本不足（n<5）→ 退回整体口径，且必须说清不是同档
-    row["hist"]["cond"] = {"stage": "3to4", "n": 2, "rate": 0.0}
-    (d / "track_2026-11-03.json").write_text(json.dumps({
-        "theme_source": "sector_fallback", "tracked": [row], "broken": [],
-    }, ensure_ascii=False), encoding="utf-8")
-    joined2 = "\n".join(_texts(bc.build_eod_card(payload)))
-    assert "同一板数的次数太少，按整体看" in joined2
-    assert "同板数（" not in joined2
-    assert "题材快照缺失" in joined2        # 降级要如实说
-
-    # 文件缺失 → 整段不渲染
-    (d / "track_2026-11-03.json").unlink()
-    joined3 = "\n".join(_texts(bc.build_eod_card(payload)))
-    assert "在册连板" not in joined3
 
 
 def test_eod_focus_is_explicit_and_observation_never_buy(monkeypatch):
