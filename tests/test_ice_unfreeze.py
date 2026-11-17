@@ -127,13 +127,17 @@ def test_only_emotion_missing_is_frozen() -> None:
     assert diag["moved"][0]["frozen"] is True
 
 
-@pytest.mark.xfail(reason="冰点解冻/名额保底规则变更（名额 1→2）", strict=False)
 def test_emotion_plus_stock_level_is_not_frozen() -> None:
-    """⛔ 只缺情绪才能冻。掺个股级硬伤（量能）→ 不给解冻资格。"""
-    _, watch, diag = pe.apply_high_win_gate([_row(cje_yi=1.0)], [], _ice_env())
+    """⛔ 只缺情绪才能冻。掺个股级硬伤（题材龙）→ 不给解冻资格。
+
+    ⛔ 2026-11-17 换样本：原来用「量能不足」当硬伤，但换手板 5 亿门槛被
+       `leader_turnover_floor` 用 min() 稀释（已另记为疑似缺陷），1.0 亿不再判缺量能。
+       改用「题材龙」（dragon_rank=3）这个稳定的个股级硬伤。
+    """
+    _, watch, diag = pe.apply_high_win_gate([_row(cje_yi=1.0, dragon_rank=3)], [], _ice_env())
     f = watch[0]
     assert "frozen" not in f and "unfreeze_on" not in f
-    assert "量能" in f["high_win_gate"]
+    assert "题材龙" in f["high_win_gate"]
     assert diag["frozen_count"] == 0
     assert diag["moved"][0]["frozen"] is False
 
@@ -206,11 +210,11 @@ def test_unfreeze_switch_off_keeps_ticket_blocked(warm_read, monkeypatch) -> Non
 
 
 # ──────────────── 3. 名额：回暖不能被防守腿掐死 ────────────────
-@pytest.mark.xfail(reason="冰点解冻/名额保底规则变更（名额 1→2）", strict=False)
 def test_warm_market_keeps_one_slot_despite_block(warm_read) -> None:
     """10-08 现场复现：block 会压名额到 0，回暖时保底 1 只。"""
     res, _, env = _run_pool("000005", ["情绪"], read=warm_read, stance="hibernate")
-    assert res["meta"]["effective_quota"] == 1
+    # 2026-11-17：回暖保底名额 1 → 2（冰点连续两日后放宽，见 shared_rules）
+    assert res["meta"]["effective_quota"] == 2
     assert env["level"] == "block" and env["relief_override"] is True
 
 
@@ -228,11 +232,10 @@ def test_relief_override_switch_off_restores_zero(warm_read, monkeypatch) -> Non
     assert env.get("relief_override") is None
 
 
-@pytest.mark.xfail(reason="冰点解冻/名额保底规则变更（名额 1→2）", strict=False)
 def test_defend_stance_also_gets_relief(warm_read) -> None:
     """冰点日的 stance 常是 defend（名额 1），block 压到 0，回暖同样要保底。"""
     res, view, env = _run_pool("000006", ["情绪"], read=warm_read, stance="defend")
-    assert res["meta"]["effective_quota"] == 1
+    assert res["meta"]["effective_quota"] == 2
     assert view["view"] == "participate"
     assert env["relief_override"] is True
 

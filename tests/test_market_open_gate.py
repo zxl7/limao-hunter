@@ -39,8 +39,7 @@ def test_full_market_open_needs_complete_sample_and_three_signals():
     assert read["ready"] is False
 
 
-@pytest.mark.xfail(reason="开盘回暖放行名额规则变更", strict=False)
-def test_hibernate_releases_only_one_when_full_market_recovers(monkeypatch):
+def test_hibernate_releases_two_when_full_market_recovers(monkeypatch):
     # 2026-11-06 起 `POOL_CALL_EOD_PLAN=0` 默认不读预案的 stance；本用例验的是
     # 「hibernate + 竞价回暖 → 只放 1 只」这条旧机制，须显式打开预案消费。
     monkeypatch.setattr(pool_call, "POOL_CALL_EOD_PLAN", True)
@@ -54,9 +53,12 @@ def test_hibernate_releases_only_one_when_full_market_recovers(monkeypatch):
     res = pool_call.call_pool(cands, quotes, plan={"stance": "hibernate", "views": {}},
                               market_open=read, line_cores={})
     bought = [code for code, view in res["views"].items() if view["view"] == "participate"]
-    assert bought == ["000001"]
+    # 2026-11-17：回暖保底名额由「1 只」放宽到「2 只」（与 ice_unfreeze 同源），
+    # 因此两只都放行；⛔ 仍然不放第三只（不是取消名额，只是保底数变了）。
+    assert bought == ["000001", "000002"]
     assert res["meta"]["market_open_relief"] is True
-    assert res["meta"]["effective_quota"] == 1
+    assert res["meta"]["effective_quota"] == 2
+    # 文案仍是「只试这一只」（口径短语未随名额改），断言只校验关键短语
     assert "空仓日只试这一只" in res["views"]["000001"]["reason"]
 
 
