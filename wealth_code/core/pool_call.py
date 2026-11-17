@@ -298,14 +298,19 @@ POOL_CALL_SECTOR_RESONANCE = os.environ.get("POOL_CALL_SECTOR_RESONANCE", "1") !
 #    新增「首板平开确认」档：昨日首板 + 今早平开(-1%~+1.5%) + 线内成线(≥3家)
 #    + 昨日封得早或零炸板 → 允许**25% 试仓**参与（不受「低于预期」与「量能地板」一票否决）。
 #    回退：`POOL_CALL_FIRST_BOARD_FLAT=0`。
-POOL_CALL_FIRST_BOARD_FLAT = os.environ.get("POOL_CALL_FIRST_BOARD_FLAT", "0") != "0"
+POOL_CALL_FIRST_BOARD_FLAT = os.environ.get("POOL_CALL_FIRST_BOARD_FLAT", "1") != "0"
 FB_FLAT_LO = float(os.environ.get("POOL_CALL_FB_FLAT_LO", "-1.0"))
 FB_FLAT_HI = float(os.environ.get("POOL_CALL_FB_FLAT_HI", "1.5"))
 FB_FLAT_MIN_MATES = int(os.environ.get("POOL_CALL_FB_FLAT_MATES", "3") or 3)
+# 🧬 股性替代（用户 2026-11-17 选 B）：孤票首板不看线内家数，只要股性别太差
+FB_FLAT_GENE_MIN = float(os.environ.get("POOL_CALL_FB_FLAT_GENE", "20"))
 FB_FLAT_POSITION = float(os.environ.get("POOL_CALL_FB_FLAT_POSITION", "0.25"))
 RESONANCE_STRONG_GAP = float(os.environ.get("POOL_CALL_RESONANCE_GAP", "7.0"))   # 一字/大幅高开线
 RESONANCE_MIN = int(os.environ.get("POOL_CALL_RESONANCE_MIN", "2") or 2)
 RESONANCE_SECOND_CAP = float(os.environ.get("POOL_CALL_RESONANCE_CAP", "0.5"))
+# ⛔ 2026-11-17：接近跌停的开盘不是「错杀」，是崩（文投 −9.89% 被当错杀买入的教训）。
+#    下限默认 −8.5%：比它更低的直接不救。
+DEEP_LOW_GAP_FLOOR = float(os.environ.get("POOL_CALL_DEEP_LOW_FLOOR", "-8.5"))
 try:
     DEEP_LOW_OPEN_DEV = float(os.environ.get("POOL_CALL_DEEP_LOW_DEV", "-6.0"))
 except ValueError:
@@ -695,6 +700,17 @@ def quota_for(stance: Any) -> int:
 # 闽东电力(电力) 与 锡华科技(风电设备) 是**同一条风电线**，一个 6 板一个是跟风补涨，
 # 系统却把两者归到不同板块 → 池内比不出「核心 vs 跟风」）
 # ─────────────────────────────────────────────────────────────────────────────
+def _gene_score(code: str) -> float | None:
+    """读股性基因分（`cache/zt_genes/gene_<code>.json`）；缺失返回 None（⛔ 不当 0）。"""
+    try:
+        p = ROOT.parent / "cache" / "zt_genes" / f"gene_{str(code).zfill(6)}.json"
+        d = json.loads(p.read_text(encoding="utf-8"))
+        v = d.get("gene_score")
+        return float(v) if isinstance(v, (int, float)) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _lk_with_theme(it: dict[str, Any], code_theme: dict[str, str] | None) -> str:
     """行 → 线键；涨停池行没有 core_theme 时用 `code_theme`（调用方给的 code→题材）补。
 
@@ -2293,18 +2309,20 @@ def call_pool(candidates: dict[str, Any] | None,
             and _fb_boards == 1
             and isinstance(gap, (int, float))
             and FB_FLAT_LO <= float(gap) <= FB_FLAT_HI
-            and (_mates or 0) >= FB_FLAT_MIN_MATES
+            and (((_mates or 0) >= FB_FLAT_MIN_MATES) or ((_gene_score(str(code).zfill(6)) or -1) >= FB_FLAT_GENE_MIN))
             and (_fb_fbt <= "100000" or _fb_zbc == 0)
         )
         if _fb_flat:
             base["first_board_flat"] = {"gap": round(float(gap), 2), "mates": _mates,
-                                        "fbt": _fb_fbt, "zbc": _fb_zbc}
+                                        "fbt": _fb_fbt, "zbc": _fb_zbc,
+                                        "gene": _gene_score(str(code).zfill(6))}
         _deep_rescued = bool(
             zone == "below"
             and POOL_CALL_DEEP_LOW_RESCUE
             and _ac.relative_mode()
             and isinstance(_dev_val, (int, float))
             and float(_dev_val) <= DEEP_LOW_OPEN_DEV
+            and isinstance(gap, (int, float)) and float(gap) > DEEP_LOW_GAP_FLOOR
             # 🧵 只有成线的票才谈「错杀」；孤线/弱线的深低开按走弱处理
             and (not _theme_mates
                  or ((_mates or 0) >= DEEP_LOW_MIN_MATES and fam in _top_lines))
@@ -2327,6 +2345,8 @@ def call_pool(candidates: dict[str, Any] | None,
             and _ac.relative_mode()
             and isinstance(gap, (int, float))
             and float(gap) < 0
+            # 2026-11-17：接近跌停不算「低开」，别拿它当低吸机会
+            and float(gap) > DEEP_LOW_GAP_FLOOR
             and not _lo_top
             and not _deep_rescued
             and not _line_weak
@@ -2448,6 +2468,13 @@ def call_pool(candidates: dict[str, Any] | None,
                     f"近月 {_ge_gene.get('max_boards')} 板 · 涨停 "
                     f"{_ge_gene.get('zt_n')} 次，股性够格 → 量 {(_vb['ratio'] or 0) * 100:.0f}% "
                     f"按 {int((_vb.get('scale') or 0.5) * 100)}% 仓放行")
+            elif _fb_flat:
+                # 🌱 2026-11-17 用户选 B：首板平开档不看量能地板（首板竞价额天然小），
+                #    以「股性/成线」替代 → 按 25% 试仓放行（11-17 瀛通 40% 量的实例）。
+                base["position_cap"] = min(float(base.get("position_cap") or 1.0), FB_FLAT_POSITION)
+                base["first_board_flat_volume_note"] = (
+                    f"首板平开档：竞价只到计划 {(_vb['ratio'] or 0) * 100:.0f}%，"
+                    f"按股性/成线放行，仓位 {int(FB_FLAT_POSITION * 100)}%")
             else:
                 marks[code] = {**base, "view": "watch", "recheck_gate": True,
                                "reason": (f"今早开 {gap:+.2f}%、竞价只到计划 "
@@ -2940,7 +2967,8 @@ def call_pool(candidates: dict[str, Any] | None,
                                "reason": _hit["note"] + "（2026-11-12 用户口径）"}
                 continue
         # 🚫 首板只看不买（2026-11-12 用户「明明写只观察，结果被买了」）
-        if (not POOL_CALL_FIRST_BOARD_BUY
+        # 🌱 首板平开档例外（2026-11-17 用户选 B）：满足「平开 + 股性/成线」的首板可 25% 试仓
+        if (not POOL_CALL_FIRST_BOARD_BUY and not _fb_flat
                 and (str(c.get("watch_group") or "") == "首板观察"
                      or (str(c.get("boards") or "").strip() in ("1", "1.0")
                          and not c.get("new_direction_line")))):
