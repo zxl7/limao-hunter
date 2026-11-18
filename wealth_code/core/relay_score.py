@@ -662,3 +662,32 @@ def _band_of(final: float, cfg: dict[str, Any] | None = None) -> str:
     if final >= _f(bands.get("watch_min"), 50):
         return "⭐ 观察"
     return "不入池"
+
+
+def apply_auction_to_eod_score(
+    eod_score: float | None,
+    *,
+    gap: float | None,
+    expected_gap: float | None,
+    amt_yi: float | None,
+    need_yi: float | None,
+    limit_pct: float = 10.0,
+) -> dict[str, Any]:
+    """给**主链使用**的轻量版：盘后分（`quant_score.score`）× 竞价系数。
+
+    ⛔ 为什么不用 `score_relay_after_auction`：那套五维分（~20 分制表现）与主链
+       `quant_score`（~78 分制表现）**不是同一把尺子**，并在卡上会让读者以为是两个结论。
+       主链已经有排序分，这里只做「竞价赔率修正」，⛔ 不引入第三套分数。
+    """
+    auc = auction_multiplier(gap=gap, expected_gap=expected_gap,
+                             amt_yi=amt_yi, need_yi=need_yi, limit_pct=limit_pct)
+    has = isinstance(eod_score, (int, float))
+    base = float(eod_score) if has else 50.0
+    final = round(base * auc["mult"], 2)
+    return {
+        "eod_score": round(base, 2),
+        "eod_missing": not has,
+        "auction": auc,
+        "final_score": final,
+        "band": _band_of(final),
+    }

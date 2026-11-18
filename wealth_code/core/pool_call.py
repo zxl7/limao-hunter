@@ -2014,16 +2014,15 @@ def call_pool(candidates: dict[str, Any] | None,
         #      （要不要改用它排序，是另一个开关的事，先看回放）。
         try:
             from core import relay_score as _rs
-            # ⛔ 复用既有五维评分（`score_relay_candidate`），只在它外面乘一个竞价系数。
-            #    不新增指标体系：字段仍是 score/band/parts，另加 auction 明细。
-            _sc = _rs.score_relay_after_auction(
-                c,
-                {"regime": str((c.get("env") or {}).get("regime") or "")} if isinstance(c.get("env"), dict) else {},
+            # 🧮 主链用的终评分 = 盘后排序分（quant_score）× 竞价系数（只降不升）。
+            #    ⛔ 不用五维分（那是 relay_shadow 的尺子），避免卡上出现两把不同的分。
+            base["relay_score"] = _rs.apply_auction_to_eod_score(
+                c.get("score"),
                 gap=gap, expected_gap=_exp,
                 amt_yi=(q.get("auction_amount_yi") if isinstance(q, dict) else None),
                 need_yi=need,
+                limit_pct=float(_ac.limit_up_pct(bool(c.get("is_20cm")))),
             )
-            base["relay_score"] = _sc
         except Exception as _e_sc:  # noqa: BLE001
             base["relay_score_error"] = str(_e_sc)
         if _dev_env_offset:

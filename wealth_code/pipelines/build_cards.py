@@ -3074,10 +3074,14 @@ def _score_badge(it: dict) -> str:
     if not isinstance(sc, dict):
         return ""
     try:
-        final = float(sc.get("final"))
+        final = float(sc.get("final_score", sc.get("final")))
     except (TypeError, ValueError):
         return ""
     grade = str(sc.get("grade") or "")
+    if not grade:
+        # 主链口径用 band（首选/次选/观察），卡面统一成 A/B/C
+        _b = str(sc.get("band") or "")
+        grade = "A" if "首选" in _b else ("B" if "次选" in _b else ("C" if "观察" in _b else "D"))
     color = {"A": "red", "B": "orange", "C": "grey", "D": "grey"}.get(grade, "grey")
     tail = f"（{grade} 档）" if grade else ""
     return f"<font color='{color}'>🧮 {final:.0f} 分{tail}</font>"
