@@ -2008,6 +2008,24 @@ def call_pool(candidates: dict[str, Any] | None,
                              env_offset=_dev_env_offset)
                 if gap is not None else "unknown")
         base["zone"] = zone
+        # 🧮 接力终评分（2026-11-18 用户「按已有数据迭代」）：
+        #    盘后基础分 × 竞价系数（0.6~1.0，只降不升）→ 0~100 + A/B/C/D 档。
+        #    ⛔ 只写字段、供卡面与复盘排序参考；**不改变本函数既有的任何否决/名额逻辑**
+        #      （要不要改用它排序，是另一个开关的事，先看回放）。
+        try:
+            from core import relay_score as _rs
+            # ⛔ 复用既有五维评分（`score_relay_candidate`），只在它外面乘一个竞价系数。
+            #    不新增指标体系：字段仍是 score/band/parts，另加 auction 明细。
+            _sc = _rs.score_relay_after_auction(
+                c,
+                {"regime": str((c.get("env") or {}).get("regime") or "")} if isinstance(c.get("env"), dict) else {},
+                gap=gap, expected_gap=_exp,
+                amt_yi=(q.get("auction_amount_yi") if isinstance(q, dict) else None),
+                need_yi=need,
+            )
+            base["relay_score"] = _sc
+        except Exception as _e_sc:  # noqa: BLE001
+            base["relay_score_error"] = str(_e_sc)
         if _dev_env_offset:
             # 留痕：本票的 DEV 是被扣过环境偏移的（卡面/复盘要看得出这一天整体低开）
             base["dev_env_offset"] = round(_dev_env_offset, 2)

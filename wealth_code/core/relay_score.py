@@ -543,3 +543,122 @@ if __name__ == "__main__":
         },
     ):
         print(json.dumps(r, ensure_ascii=False))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 竞价阶段调整（2026-11-18 用户「按已有数据迭代」）
+#
+# 上面的五维评分是**盘后**口径：它回答「昨天收盘后，谁最值得明天接力」。
+# 但 09:25 竞价开出来之后，同一个盘后分数会对应完全不同的赔率 ——
+# 开 +9% 与开 +1% 是两笔交易。
+#
+# 本段只加一个**只降不升**的竞价系数，接在盘后分之后：
+#     终评 = 盘后分 × 竞价系数      竞价系数 ∈ [0.6, 1.0]
+# ⛔ 不加新维度（避免又一套指标体系）；系数只由三个已有事实决定：
+#    DEV 落点、量能比、开幅合理性。
+# ══════════════════════════════════════════════════════════════════════════
+
+AUCTION_MULT_MIN = 0.6
+AUCTION_MULT_MAX = 1.0
+
+
+def _auc_dev_part(gap: float | None, exp: float | None) -> tuple[float, str]:
+    """DEV 落点（0~1）。缺失 → 0.5（中性），⛔ 不判死。"""
+    if gap is None or exp is None:
+        return 0.5, "缺预期"
+    dev = float(gap) - float(exp)
+    if dev < -3.0:
+        return 0.0, f"低 {abs(dev):.1f} 点"
+    if dev > 3.0:
+        return 0.15, f"高 {dev:.1f} 点"
+    if dev >= 0:
+        return round(1.0 - (dev / 3.0) * 0.85, 3), f"高 {dev:.1f} 点"
+    return round(1.0 - (abs(dev) / 3.0) * 0.85, 3), f"低 {abs(dev):.1f} 点"
+
+
+def _auc_amt_part(amt: float | None, need: float | None) -> tuple[float, str]:
+    """量能比（0~1）。缺失 → 0.5。"""
+    if amt is None or need is None or float(need) <= 0:
+        return 0.5, "缺量能"
+    ratio = float(amt) / float(need)
+    if ratio >= 1.0:
+        return 1.0, f"{ratio * 100:.0f}%"
+    if ratio <= 0.3:
+        return 0.0, f"{ratio * 100:.0f}%"
+    return round((ratio - 0.3) / 0.7, 3), f"{ratio * 100:.0f}%"
+
+
+def _auc_gap_part(gap: float | None, limit_pct: float = 10.0) -> tuple[float, str]:
+    """开幅合理性（0~1）：离涨停没肉 / 深低开接刀，都该扣。"""
+    if gap is None:
+        return 0.5, "缺开幅"
+    g = float(gap)
+    room = float(limit_pct) - g
+    if room < 2.0:
+        return 0.0, f"离涨停 {room:.1f} 点"
+    if g < -6.0:
+        return 0.1, f"低开 {g:.1f}%"
+    if 0.0 <= g <= 5.0:
+        return 1.0, f"{g:+.1f}%"
+    if g > 5.0:
+        return round(max(0.0, 1.0 - (g - 5.0) / 5.0), 3), f"{g:+.1f}%"
+    return round(max(0.0, 1.0 - (abs(g) / 6.0) * 0.6), 3), f"{g:+.1f}%"
+
+
+def auction_multiplier(
+    *,
+    gap: float | None,
+    expected_gap: float | None,
+    amt_yi: float | None,
+    need_yi: float | None,
+    limit_pct: float = 10.0,
+) -> dict[str, Any]:
+    """竞价系数（0.6~1.0，只降不升）+ 三个分项事实。"""
+    dev, dev_note = _auc_dev_part(gap, expected_gap)
+    amt, amt_note = _auc_amt_part(amt_yi, need_yi)
+    gp, gap_note = _auc_gap_part(gap, limit_pct)
+    match = 0.5 * dev + 0.3 * amt + 0.2 * gp
+    mult = max(AUCTION_MULT_MIN, min(AUCTION_MULT_MAX, AUCTION_MULT_MIN + (AUCTION_MULT_MAX - AUCTION_MULT_MIN) * match))
+    return {
+        "mult": round(mult, 4),
+        "match": round(match, 4),
+        "parts": {"dev": round(dev, 3), "amount": round(amt, 3), "gap": round(gp, 3)},
+        "notes": {"dev": dev_note, "amount": amt_note, "gap": gap_note},
+    }
+
+
+def score_relay_after_auction(
+    cand: dict[str, Any],
+    env: dict[str, Any],
+    *,
+    gap: float | None = None,
+    expected_gap: float | None = None,
+    amt_yi: float | None = None,
+    need_yi: float | None = None,
+    cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """盘后五维分 → 叠加竞价系数。⛔ 不改原函数，只在它外面乘一个 [0.6,1] 的系数。"""
+    base = score_relay_candidate(cand, env, cfg)
+    limit_pct = 20.0 if str(cand.get("is_20cm")) in ("True", "true", "1") else 10.0
+    auc = auction_multiplier(gap=gap, expected_gap=expected_gap, amt_yi=amt_yi,
+                             need_yi=need_yi, limit_pct=limit_pct)
+    final = round(float(base.get("score") or 0.0) * auc["mult"], 2)
+    return {
+        **base,
+        "score_eod": base.get("score"),
+        "score": final,                      # ⚠️ 覆盖为「竞价后终评」，旧字段名继续可用
+        "auction": auc,
+        "band": _band_of(final, cfg),
+    }
+
+
+def _band_of(final: float, cfg: dict[str, Any] | None = None) -> str:
+    cfg = cfg or _load_config()
+    bands = cfg.get("bands") or {}
+    if final >= _f(bands.get("first_choice_min"), 80):
+        return "⭐⭐⭐ 首选接力"
+    if final >= _f(bands.get("second_choice_min"), 65):
+        return "⭐⭐ 次选接力"
+    if final >= _f(bands.get("watch_min"), 50):
+        return "⭐ 观察"
+    return "不入池"

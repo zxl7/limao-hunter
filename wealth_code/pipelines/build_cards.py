@@ -3065,6 +3065,24 @@ def _reason_line(it: dict) -> str:
     return f"<font color='grey'>📰 {_r}</font>"
 
 
+def _score_badge(it: dict) -> str:
+    """🧮 接力终评分（2026-11-18）：盘后基础分 × 竞价系数 → 分 + 档位。
+
+    ⛔ 只展示，不改任何判据；缺字段就不写（旧候选文件零感知）。
+    """
+    sc = (it or {}).get("relay_score")
+    if not isinstance(sc, dict):
+        return ""
+    try:
+        final = float(sc.get("final"))
+    except (TypeError, ValueError):
+        return ""
+    grade = str(sc.get("grade") or "")
+    color = {"A": "red", "B": "orange", "C": "grey", "D": "grey"}.get(grade, "grey")
+    tail = f"（{grade} 档）" if grade else ""
+    return f"<font color='{color}'>🧮 {final:.0f} 分{tail}</font>"
+
+
 def _resonance_line(it: dict) -> str:
     """🧲 收盘共振分（2026-11-17 用户「补一个共振得分」）。
 
@@ -3366,6 +3384,9 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
         _rln = _resonance_line(it)
         if _rln:
             blocks.append(_div("　　" + _rln))
+        _scb = _score_badge(it)
+        if _scb:
+            blocks.append(_div("　　" + _scb))
         # 历史基因不在盘后卡展示，后台证据保持不动。
         # 🔮 明早怎么开（2026-11-02）：选股卡的核心新增——把「明天大概率开在几个点、
         #    几成概率买不到」提前说清。⛔ 不是买入指令；买不买由 09:25 竞价卡裁决。
@@ -3498,6 +3519,9 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
                 _rln = _resonance_line(it)
                 if _rln:
                     blocks.append(_div("　　" + _rln))
+                _scb = _score_badge(it)
+                if _scb:
+                    blocks.append(_div("　　" + _scb))
                 # 不读取历史基因档案。
                 # 2026-10-27：降级原因必须写出来（否则读者只看到"它掉进观察池"，不知道为啥）
                 if it.get("participation_eligibility") == "conditional":
