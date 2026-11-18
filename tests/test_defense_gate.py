@@ -476,8 +476,13 @@ def _candidates():
 
 
 def test_pool_call_before_fix_reproduces_the_loss(monkeypatch):
-    """回退态（防守闸关闭）复现 10-08 真实结果 → 买襄阳 + 南华（＝当天确实亏的那两只）。"""
+    """回退态（防守闸关闭）复现 10-08 真实结果 → 买襄阳 + 南华（＝当天确实亏的那两只）。
+
+    ⛔ 2026-11-18：本用例复现的是**历史回退态**，必须同时关掉封板期望层，
+       否则 EV 会按新口径改入选名单，测的就不是"关掉防守闸会怎样"了。
+    """
     monkeypatch.setattr(pool_call, "POOL_CALL_DEFENSE_GATE", False)
+    monkeypatch.setattr(pool_call, "POOL_CALL_SEAL_EV", False)
     res = pool_call.call_pool(_candidates(), QUOTES_1008, plan=_plan(), stance="selective",
                               line_cores={}, market_open=MO_1008, sector_flow=FLOW_0930,
                               zt_series=ZT_SERIES, zt_days=ZT_DAYS)
@@ -596,7 +601,12 @@ def test_pool_call_env_defensive_caps_then_min_two_widens(monkeypatch):
 
 
 def test_pool_call_defense_subswitches_are_reversible(monkeypatch):
-    """四个子开关逐个可逆（便于定位是哪条闸在起作用·总开关回退已另锁）。"""
+    """四个子开关逐个可逆（便于定位是哪条闸在起作用·总开关回退已另锁）。
+
+    ⛔ 2026-11-18：本用例锁的是**防守闸**；封板期望层会改排序与入选，
+       会让断言从「谁被哪道闸拦住」变成「谁的期望低」，故显式关闭 EV 层。
+    """
+    monkeypatch.setattr(pool_call, "POOL_CALL_SEAL_EV", False)
     def _run():
         return pool_call.call_pool(_candidates(), QUOTES_1008, plan=_plan(), stance="selective",
                                    line_cores={}, market_open=MO_1008, sector_flow=FLOW_0930,

@@ -294,6 +294,12 @@ except ValueError:
 #   ⛔ 不是「核心买不到就推二排」，是「这条线整体在走强」。
 #   回退：`POOL_CALL_SECTOR_RESONANCE=0`。
 POOL_CALL_SECTOR_RESONANCE = os.environ.get("POOL_CALL_SECTOR_RESONANCE", "1") != "0"
+# 🎯 2026-11-18 用户「买的是当天能封住涨停的几率」→ 排序与入选改为按**封板期望**：
+#    期望 T+1 = P(封板) × 封板溢价(gap) + (1−P) × 未封损失(gap)
+#    回退：`POOL_CALL_SEAL_EV=0` → 逐字回到旧排序（身位/龙一/板数那套）。
+POOL_CALL_SEAL_EV = os.environ.get("POOL_CALL_SEAL_EV", "1") != "0"
+# 期望收益下限（%）：低于此值不买（默认 0 = 只买正期望）。
+POOL_CALL_EV_MIN = float(os.environ.get("POOL_CALL_EV_MIN", "0.0"))
 # 🌱 2026-11-17 用户：「瀛通通讯连续两天错过」——首板走「平开→再封」这段我们没有任何进场规则。
 #    新增「首板平开确认」档：昨日首板 + 今早平开(-1%~+1.5%) + 线内成线(≥3家)
 #    + 昨日封得早或零炸板 → 允许**25% 试仓**参与（不受「低于预期」与「量能地板」一票否决）。
@@ -2016,6 +2022,18 @@ def call_pool(candidates: dict[str, Any] | None,
             from core import relay_score as _rs
             # 🧮 主链用的终评分 = 盘后排序分（quant_score）× 竞价系数（只降不升）。
             #    ⛔ 不用五维分（那是 relay_shadow 的尺子），避免卡上出现两把不同的分。
+            # 🎯 封板期望（2026-11-18）：每只票都算，卡面/排序共用同一份。
+            try:
+                from core import seal_ev as _sev
+                base["seal_ev"] = _sev.evaluate(
+                    gap=gap,
+                    eod_score=(c.get("score") if isinstance(c.get("score"), (int, float))
+                               else c.get("raw_score")),
+                    mates=c.get("theme_mates_cnt"),
+                    zbc=c.get("zbc"),
+                )
+            except Exception as _e_ev:  # noqa: BLE001
+                base["seal_ev_error"] = str(_e_ev)
             base["relay_score"] = _rs.apply_auction_to_eod_score(
                 c.get("score"),
                 gap=gap, expected_gap=_exp,
@@ -3062,6 +3080,17 @@ def call_pool(candidates: dict[str, Any] | None,
             entry["status_rank"] = marks[entry["code"]]["status_rank"]
     entries.sort(key=_key, reverse=True)
 
+    # 🎯 封板期望层（2026-11-18）：在既有机械排序之上，用「能不能封住」重排。
+    #    ⛔ 不删除任何既有闸门；只做两件事：① 按 EV 降序（EV 同分再走原 `_key`）；
+    #    ② EV 低于下限 → 不买。回退开关 `POOL_CALL_SEAL_EV=0`。
+    if POOL_CALL_SEAL_EV and entries:
+        # 只在有 EV 的票里按 EV 降序；缺 EV 的保持原机械顺序垫后（⛔ 不因缺数据被踢）。
+        _old_order = {id(e): i for i, e in enumerate(entries)}
+        entries.sort(key=lambda e: (
+            -(float((e.get("seal_ev") or {}).get("ev")) if isinstance((e.get("seal_ev") or {}).get("ev"), (int, float)) else -999.0),
+            _old_order[id(e)],
+        ))
+
     # 🧠 智能评分层：p_win 只作为**最后一位 tie-break**（前面的机械键一个不动），
     #    shadow 模式只记录两套名单，⛔ 不改任何 view / 顺序。
     _ai_info: dict[str, Any] | None = None
@@ -3141,6 +3170,18 @@ def call_pool(candidates: dict[str, Any] | None,
                                       "但智能层判该档历史胜率极低 → 放弃")
                            if isinstance(e.get("gap_pct"), (int, float))
                            else "智能层判该档历史胜率极低 → 放弃"}
+            continue
+        # 🎯 封板期望下限：EV 不够就是「不值得买」，与名额无关。
+        _ev_val = (e.get("seal_ev") or {}).get("ev")
+        _ev_missing = (e.get("seal_ev") or {}).get("missing") or []
+        # ⛔ 只在**数据完整**时用期望做门槛：缺 eod/开幅时算出来的 EV 没有意义，
+        #    不能拿它当「不值得买」（否则旧候选/测试夹具会被一刀切空仓）。
+        if (POOL_CALL_SEAL_EV and not _ev_missing
+                and isinstance(_ev_val, (int, float)) and float(_ev_val) < POOL_CALL_EV_MIN):
+            marks[code] = {**e, "view": "watch",
+                           "reason": ((e.get("seal_ev") or {}).get("why", "")
+                                      + f" → 期望 {float(_ev_val):+.2f}% 低于下限 "
+                                        f"{POOL_CALL_EV_MIN:+.2f}%，不买")}
             continue
         if _unlimited or i < effective_quota:
             _open_note = "（昨涨停今早整体转强，空仓日只试这一只）" if open_relief else ""

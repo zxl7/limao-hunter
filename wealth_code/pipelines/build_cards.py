@@ -3065,6 +3065,25 @@ def _reason_line(it: dict) -> str:
     return f"<font color='grey'>📰 {_r}</font>"
 
 
+def _seal_ev_line(it: dict) -> str:
+    """🎯 封板期望行（2026-11-18）：P(封住) × 封板溢价 + (1−P) × 未封损失。
+
+    ⛔ 只展示模型结论与三项事实，不写「建议买/不买」（那是裁决行的事）。
+    """
+    ev = (it or {}).get("seal_ev")
+    if not isinstance(ev, dict):
+        return ""
+    try:
+        p_seal = float(ev.get("p_seal"))
+        val = float(ev.get("ev"))
+    except (TypeError, ValueError):
+        return ""
+    color = "red" if val > 1.0 else ("orange" if val > 0 else "grey")
+    return (f"<font color='{color}'>🎯 封板概率 {p_seal * 100:.0f}%"
+            f"｜期望 {val:+.1f}%（溢价 {float(ev.get('prem', 0)):+.1f}% / "
+            f"未封 {float(ev.get('loss', 0)):+.1f}%）</font>")
+
+
 def _score_badge(it: dict) -> str:
     """🧮 接力终评分（2026-11-18）：盘后基础分 × 竞价系数 → 分 + 档位。
 
@@ -3391,6 +3410,9 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
         _scb = _score_badge(it)
         if _scb:
             blocks.append(_div("　　" + _scb))
+        _sel = _seal_ev_line(it)
+        if _sel:
+            blocks.append(_div("　　" + _sel))
         # 历史基因不在盘后卡展示，后台证据保持不动。
         # 🔮 明早怎么开（2026-11-02）：选股卡的核心新增——把「明天大概率开在几个点、
         #    几成概率买不到」提前说清。⛔ 不是买入指令；买不买由 09:25 竞价卡裁决。
@@ -3526,6 +3548,9 @@ def build_eod_card(payload: dict[str, Any]) -> dict:
                 _scb = _score_badge(it)
                 if _scb:
                     blocks.append(_div("　　" + _scb))
+                _sel = _seal_ev_line(it)
+                if _sel:
+                    blocks.append(_div("　　" + _sel))
                 # 不读取历史基因档案。
                 # 2026-10-27：降级原因必须写出来（否则读者只看到"它掉进观察池"，不知道为啥）
                 if it.get("participation_eligibility") == "conditional":

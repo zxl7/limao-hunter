@@ -43,14 +43,22 @@ def result():
     return pc.call_pool(cand, quotes, plan={}, zt_rows=zt)
 
 
-def test_strong_line_non_core_participates(result):
-    """最强线（传媒）的非核心票，共振成立 → 半仓参与。"""
+def test_strong_line_non_core_gets_resonance_credit(result):
+    """最强线（传媒）的非核心票：共振成立 → 解除「非核心」否决，但仍须过封板期望。
+
+    ⛔ 2026-11-18 契约更新（用户「买的是当天能封住涨停的几率」）：
+       共振只负责「身份」这一层，不再等于必买；本例开在 +4.56%（高开、溢价已被吃掉），
+       封板期望为负 → 仍然 watch，但**共振留痕必须写出**。
+    """
     v = result["views"]["603103"]
-    assert v["view"] == "participate"
-    assert v["position_cap"] <= 0.5
-    assert isinstance(v.get("sector_resonance"), dict)
+    assert isinstance(v.get("sector_resonance"), dict), "共振身份必须留痕"
     assert v["sector_resonance"]["score"] >= 2
-    assert "共振" in v["reason"]
+    ev = v.get("seal_ev") or {}
+    assert isinstance(ev.get("p_seal"), (int, float)), "封板期望必须算出"
+    if float(ev.get("ev", 0)) < 0:
+        assert v["view"] != "participate", "负期望不得参与"
+    else:
+        assert v["view"] == "participate" and v["position_cap"] <= 0.5
 
 
 def test_weak_line_still_blocked(result):
