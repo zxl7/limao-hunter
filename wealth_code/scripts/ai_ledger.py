@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -929,6 +930,17 @@ def cmd_settle(args) -> int:
                 break
             _t1.append({**t, "exit_date": _nxt, "exit_close": float(_c1),
                         "return_pct": round((float(_c1) - t["auction_price"]) / t["auction_price"] * 100, 2)})
+        if _t1:
+            _rows = _read_jsonl(AI_LEDGER_T1)
+            # 🔒 幂等闸（2026-11-18 事故）：同一 trade_date 已有行就**不再追加**。
+            #    事故：11-18 11:44 一轮重放把历史日反复结算，339 行里 2026-09-14 被写 61 次、
+            #    净值一路复利到 461（起点 1.0），前端折线被压成一条贴地直线。
+            #    回退：`POOL_T1_IDEMPOTENT=0` 逐字恢复「无脑追加」的旧行为。
+            _dup = (os.environ.get("POOL_T1_IDEMPOTENT", "1") != "0"
+                    and any(str(r.get("trade_date")) == tdate for r in _rows))
+            if _dup:
+                print(f"[ai_ledger] T+1 口径 {tdate} 已在账本 → 跳过重复追加")
+                _t1 = []
         if _t1:
             _rows = _read_jsonl(AI_LEDGER_T1)
             _base = float(_rows[-1]["nav"]) if _rows else BASE_NAV
