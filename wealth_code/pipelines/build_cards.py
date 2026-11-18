@@ -2551,6 +2551,28 @@ def _ai_plan_block(raw: dict, records: list[dict],
             _slot_h = (pool_summary or {}).get("slot_policy") or {}
             _even_n_h = _slot_h.get("allocation_count")
             _even_cap_h = _slot_h.get("even_cap")
+            # ⛔ 2026-11-18：机械口径行必须服从**最终裁决**。
+            #    11-17 事故：同一张卡上并联「竞价定下买 1 只·每只 50%」与
+            #    「今天池内没有一只够条件买（AI 空仓）」——读者不知道该信哪句。
+            #    现在只要最终 buys 为空，这里就不再喊「买 N 只」。
+            _buys_now = [r for r in records if str(_oc_of(r).get("ai_view") or "") == "participate"]
+            # 计划层参与票（pool_call.meta.participate）也算「有结论」——
+            # 竞价卡渲染时 records 可能还没带上逐票 view，不能因此误判成空仓。
+            # ⚠️ `participate` 在这套 payload 里**两种形态都出现过**：名单（list）与数量（int）。
+            _p_now = (pool_summary or {}).get("participate")
+            if isinstance(_p_now, (int, float)):
+                _planned_now = [1] if _p_now > 0 else []
+            elif isinstance(_p_now, (list, tuple, set)):
+                _planned_now = [str(c) for c in _p_now]
+            else:
+                _planned_now = []
+            if not _buys_now and not _planned_now:
+                blocks.append(_div(
+                    f"　　<font color='grey'>今天池内 {int(_n)} 只，开盘竞价定下："
+                    f"<b>不买</b>（逐票原因见下）</font>"))
+                _slot_h = {}
+                _even_n_h = None
+                _even_cap_h = None
             if ice_ban:
                 # 冰点：⛔ 不写「买几只」——它和卡头「不买·空仓」直接对撞（2026-11-09 的事故）
                 blocks.append(_div(

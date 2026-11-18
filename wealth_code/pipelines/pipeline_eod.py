@@ -2671,6 +2671,19 @@ def run_eod(
             #    卡面上封板、成交、换手全是「—」。这里把当日涨停池里的真实字段并进来。
             _zt_row = next((r for r in (zt.get("ztgc") or [])
                             if str(r.get("dm") or r.get("code") or "").zfill(6) == str(_c["code"]).zfill(6)), {})
+            # ⛔ 2026-11-18：核心票走的是「finalize 之后注入」，天生绕过 `pool_admit`。
+            #    这里补一道同口径的**炸板闸**（`max_zbc` 与准入闸同源，阈值一行不碰）：
+            #    炸板次数超标的核心票照样不进池 —— 否则「炸 8 次」的票能靠核心身份进门，
+            #    与普通票的准入标准自相矛盾。
+            try:
+                from core import pool_admit as _pa_zb
+                _zbc_v = _zt_row.get("zbc")
+                if _zbc_v is not None and float(_zbc_v) > float(_pa_zb.max_zbc()):
+                    print(f"[EOD] 🏛 核心票 {_c['name']} 炸板 {_zbc_v} 次 > 上限 "
+                          f"{_pa_zb.max_zbc():.0f} → 不进池")
+                    continue
+            except Exception as _e_zb:  # noqa: BLE001
+                print(f"[EOD] 🏛 核心票炸板闸降级（不影响主链）：{_e_zb}")
             watch.append({
                 "code": _c["code"], "name": _c["name"], "boards": _b_today,
                 "boards_note": "",
@@ -2682,8 +2695,11 @@ def run_eod(
                 "core_theme": _c.get("sector"), "sector": _c.get("sector"),
                 "participation_eligibility": "relay_candidate", "buyable": True,
                 "watch_only": False, "watch_group": "板块核心观察",
+                # ⛔ 2026-11-18：文案必须与真实资格一致。原句「只看它动不动，不买」
+                #    与 `buyable=True / participation_eligibility=relay_candidate` 自相矛盾
+                #    （11-17 卡面写"只看不买"，机械层却判了买入）。
                 "watch_reason": (f"这条线的核心（{_c.get('sector')}·core {_c.get('core_score')}"
-                                 f"·参与{_c.get('join_rate')}%）：只看它动不动，不买"),
+                                 f"·参与{_c.get('join_rate')}%）：已进池，明早按竞价正常判买不买"),
                 "board_core_score": _c.get("core_score"),
                 "board_core_join": _c.get("join_rate"),
             })
